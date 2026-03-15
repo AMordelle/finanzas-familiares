@@ -108,7 +108,7 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
             <div className="rounded-md border border-amber-300 bg-white p-3 text-sm text-slate-700">
               <p>No hay cuentas disponibles todavía. Configura tus cuentas en el onboarding.</p>
               <div className="mt-3">
-                <Button asChild size="sm">
+                <Button asChild>
                   <Link href="/onboarding">Ir al onboarding</Link>
                 </Button>
               </div>

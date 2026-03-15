@@ -1,26 +1,28 @@
+import Link from 'next/link';
 import { AppShell } from '@/components/app-shell';
 import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { hasOnboardingForActiveProfile } from '@/lib/db/queries';
+import { OnboardingWizard } from '@/components/onboarding/onboarding-wizard';
 
-export default function OnboardingPage() {
-  const pasos = [
-    'Entender tu hogar y miembros',
-    'Ingresos regulares y extraordinarios',
-    'Cuentas y saldos aproximados',
-    'Deudas y dinero por cobrar',
-    'Gastos fijos y variables estimados'
-  ];
+export default async function OnboardingPage() {
+  const alreadyConfigured = await hasOnboardingForActiveProfile();
 
   return (
     <AppShell title="Onboarding inicial">
-      <Card>
-        <h2 className="text-xl font-semibold">Configuración guiada del hogar</h2>
-        <p className="mt-2 text-slate-600">Puedes usar montos aproximados, cero o registrar después.</p>
-        <ol className="mt-4 space-y-2 text-sm">
-          {pasos.map((paso, i) => (
-            <li key={paso} className="rounded-lg bg-slate-50 p-3">{i + 1}. {paso}</li>
-          ))}
-        </ol>
-      </Card>
+      {alreadyConfigured ? (
+        <Card>
+          <h2 className="text-xl font-semibold">Ya tienes un hogar configurado</h2>
+          <p className="mt-2 text-slate-600">Tu base financiera inicial ya existe. Puedes continuar al dashboard para revisar indicadores y registrar movimientos.</p>
+          <div className="mt-4">
+            <Button asChild>
+              <Link href="/dashboard">Ir al dashboard</Link>
+            </Button>
+          </div>
+        </Card>
+      ) : (
+        <OnboardingWizard />
+      )}
     </AppShell>
   );
 }
