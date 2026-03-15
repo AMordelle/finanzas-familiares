@@ -27,6 +27,11 @@ export type AccountOption = {
   type: string;
 };
 
+export type RegistrationSetupStatus = {
+  hasHousehold: boolean;
+  accounts: AccountOption[];
+};
+
 type JournalLine = {
   accountId: string | null;
   type: 'debit' | 'credit';
@@ -50,6 +55,22 @@ export async function getAccountsForRegistration(): Promise<AccountOption[]> {
     .order('name');
 
   return (data ?? []) as AccountOption[];
+}
+
+export async function getRegistrationSetupStatus(): Promise<RegistrationSetupStatus> {
+  const householdId = await getDefaultHouseholdId();
+  if (!householdId) {
+    return {
+      hasHousehold: false,
+      accounts: []
+    };
+  }
+
+  const accounts = await getAccountsForRegistration();
+  return {
+    hasHousehold: true,
+    accounts
+  };
 }
 
 function findAccountIdByName(accounts: AccountOption[], name?: string) {

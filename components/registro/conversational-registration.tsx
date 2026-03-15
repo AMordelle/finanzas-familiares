@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState, useTransition } from 'react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
@@ -9,6 +10,7 @@ import { interpretTransactionAction, saveInterpretedTransactionAction } from '@/
 
 type Props = {
   accounts: AccountOption[];
+  hasHousehold: boolean;
 };
 
 const missingFieldQuestions: Record<string, string> = {
@@ -16,7 +18,7 @@ const missingFieldQuestions: Record<string, string> = {
   destinationAccount: '¿A qué cuenta entró el dinero?'
 };
 
-export function ConversationalRegistration({ accounts }: Props) {
+export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
   const [input, setInput] = useState('');
   const [intent, setIntent] = useState<TransactionIntent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +26,23 @@ export function ConversationalRegistration({ accounts }: Props) {
   const [isPending, startTransition] = useTransition();
 
   const isReadyToConfirm = useMemo(() => intent && intent.missingFields.length === 0, [intent]);
+  const hasAccounts = accounts.length > 0;
+
+  if (!hasHousehold) {
+    return (
+      <Card>
+        <h2 className="text-xl font-semibold">Registro conversacional</h2>
+        <p className="mt-3 text-sm text-slate-700">
+          Aún no has configurado tu hogar y tus cuentas. Primero completa la configuración inicial para poder registrar movimientos.
+        </p>
+        <div className="mt-4">
+          <Button asChild>
+            <Link href="/onboarding">Ir al onboarding</Link>
+          </Button>
+        </div>
+      </Card>
+    );
+  }
 
   const handleInterpret = () => {
     setSuccessMessage(null);
@@ -85,23 +104,35 @@ export function ConversationalRegistration({ accounts }: Props) {
       {intent && intent.missingFields.length > 0 && (
         <div className="mt-6 space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
           <p className="text-sm font-medium text-amber-900">Faltan datos para completar el movimiento:</p>
+          {!hasAccounts && (
+            <div className="rounded-md border border-amber-300 bg-white p-3 text-sm text-slate-700">
+              <p>No hay cuentas disponibles todavía. Configura tus cuentas en el onboarding.</p>
+              <div className="mt-3">
+                <Button asChild size="sm">
+                  <Link href="/onboarding">Ir al onboarding</Link>
+                </Button>
+              </div>
+            </div>
+          )}
           {intent.missingFields.map((field) => (
             <label key={field} className="block text-sm text-slate-700">
               {missingFieldQuestions[field] ?? `Completa ${field}`}
-              <select
-                className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2"
-                defaultValue=""
-                onChange={(event) => handleMissingFieldChange(field as 'sourceAccount' | 'destinationAccount', event.target.value)}
-              >
-                <option value="" disabled>
-                  Selecciona una cuenta
-                </option>
-                {accounts.map((account) => (
-                  <option key={account.id} value={account.name.toLowerCase()}>
-                    {account.name}
+              {hasAccounts ? (
+                <select
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2"
+                  defaultValue=""
+                  onChange={(event) => handleMissingFieldChange(field as 'sourceAccount' | 'destinationAccount', event.target.value)}
+                >
+                  <option value="" disabled>
+                    Selecciona una cuenta
                   </option>
-                ))}
-              </select>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.name.toLowerCase()}>
+                      {account.name}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
             </label>
           ))}
         </div>
