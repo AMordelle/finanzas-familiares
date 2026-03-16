@@ -182,6 +182,20 @@ describe('onboarding persistence', () => {
     expect(fakeClient.db.financial_snapshots.length).toBe(1);
   });
 
+
+
+  it('existing household_members row retorna household id directamente', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-1', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-1', profile_id: 'profile-1', household_id: 'house-1' });
+
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));
+    const { getDefaultHouseholdId } = await import('@/lib/db/queries');
+
+    const householdId = await getDefaultHouseholdId();
+    expect(householdId).toBe('house-1');
+  });
+
   it('dashboard resuelve datos reales después de onboarding', async () => {
     const fakeClient = createFakeSupabase();
     vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));

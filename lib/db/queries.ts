@@ -54,21 +54,51 @@ function logDebug(message: string, payload?: Record<string, unknown>) {
 async function getProfileIdFromExistingMembership(client: SupabaseClientLike) {
   const { data, error } = await client
     .from('household_members')
-    .select('profile_id')
+    .select('profile_id,household_id')
+    .order('id', { ascending: true })
     .limit(1)
     .maybeSingle();
+
+  logDebug('Lookup profile desde household_members', {
+    rawResult: data ?? null,
+    error: error?.message ?? null
+  });
 
   if (error) return undefined;
   return data?.profile_id as string | undefined;
 }
 
 async function getAnyExistingProfileId(client: SupabaseClientLike) {
-  const { data, error } = await client.from('profiles').select('id').limit(1).maybeSingle();
+  const { data, error } = await client.from('profiles').select('id').order('created_at', { ascending: true }).limit(1).maybeSingle();
+  logDebug('Lookup profile desde profiles', {
+    rawResult: data ?? null,
+    error: error?.message ?? null
+  });
+
   if (error) return undefined;
   return data?.id as string | undefined;
 }
 
+async function getAuthProfileId(client: SupabaseClientLike) {
+  const auth = (client as unknown as { auth?: { getUser?: () => Promise<{ data?: { user?: { id?: string } }; error?: { message?: string } }> } }).auth;
+  if (!auth?.getUser) return undefined;
+
+  const { data, error } = await auth.getUser();
+  logDebug('Lookup profile desde auth', {
+    profileId: data?.user?.id ?? null,
+    error: error?.message ?? null
+  });
+
+  if (error || !data?.user?.id) return undefined;
+  return data.user.id;
+}
+
 async function resolveActiveProfileId(client: SupabaseClientLike) {
+  const fromAuth = await getAuthProfileId(client);
+  if (fromAuth) {
+    return { activeProfileId: fromAuth, source: 'auth' as const };
+  }
+
   const fromEnv = process.env.DEV_PROFILE_ID || process.env.NEXT_PUBLIC_DEV_PROFILE_ID;
   if (fromEnv) {
     return { activeProfileId: fromEnv, source: 'env' as const };
@@ -121,10 +151,17 @@ export async function getDefaultHouseholdId(client: SupabaseClientLike = supabas
 
   const { data: membership, error } = await client
     .from('household_members')
-    .select('household_id')
+    .select('household_id,profile_id')
     .eq('profile_id', profileId)
+    .order('id', { ascending: true })
     .limit(1)
     .maybeSingle();
+
+  logDebug('Query household_members por profile_id', {
+    profileId,
+    rawResult: membership ?? null,
+    error: error?.message ?? null
+  });
 
   if (error) {
     throw new Error(`No fue posible resolver el hogar del perfil: ${error.message}`);
