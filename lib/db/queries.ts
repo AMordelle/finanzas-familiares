@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { supabase } from '@/lib/db/supabase';
+import { supabase, supabaseAdmin } from '@/lib/db/supabase';
 import { calculateMonthlyOFH, calculateWeeklyOFH } from '@/lib/financial/engine';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
@@ -45,7 +45,7 @@ type DashboardData = {
   recommendations: string[];
 };
 
-type SupabaseClientLike = typeof supabase;
+type SupabaseClientLike = typeof supabaseAdmin;
 
 function logDebug(message: string, payload?: Record<string, unknown>) {
   console.info(`[onboarding-debug] ${message}`, payload ?? {});
@@ -94,14 +94,19 @@ async function getAuthProfileId(client: SupabaseClientLike) {
 }
 
 async function resolveActiveProfileId(client: SupabaseClientLike) {
+  const fromDevEnv = process.env.DEV_PROFILE_ID;
+  if (fromDevEnv) {
+    return { activeProfileId: fromDevEnv, source: 'env_dev_profile_id' as const };
+  }
+
+  const fromPublicDevEnv = process.env.NEXT_PUBLIC_DEV_PROFILE_ID;
+  if (fromPublicDevEnv) {
+    return { activeProfileId: fromPublicDevEnv, source: 'env_next_public_dev_profile_id' as const };
+  }
+
   const fromAuth = await getAuthProfileId(client);
   if (fromAuth) {
     return { activeProfileId: fromAuth, source: 'auth' as const };
-  }
-
-  const fromEnv = process.env.DEV_PROFILE_ID || process.env.NEXT_PUBLIC_DEV_PROFILE_ID;
-  if (fromEnv) {
-    return { activeProfileId: fromEnv, source: 'env' as const };
   }
 
   const fromMembership = await getProfileIdFromExistingMembership(client);
@@ -117,7 +122,7 @@ async function resolveActiveProfileId(client: SupabaseClientLike) {
   return { activeProfileId: DEV_FALLBACK_PROFILE_ID, source: 'fallback' as const };
 }
 
-export async function getOrCreateActiveProfileId(client: SupabaseClientLike = supabase) {
+export async function getOrCreateActiveProfileId(client: SupabaseClientLike = supabaseAdmin) {
   const { activeProfileId, source } = await resolveActiveProfileId(client);
 
   const { data: existingProfile, error: lookupError } = await client
@@ -146,7 +151,7 @@ export async function getOrCreateActiveProfileId(client: SupabaseClientLike = su
   return activeProfileId;
 }
 
-export async function getDefaultHouseholdId(client: SupabaseClientLike = supabase) {
+export async function getDefaultHouseholdId(client: SupabaseClientLike = supabaseAdmin) {
   const profileId = await getOrCreateActiveProfileId(client);
 
   const { data: membership, error } = await client
@@ -181,7 +186,7 @@ export async function hasOnboardingForActiveProfile() {
   return Boolean(householdId);
 }
 
-export async function createHouseholdOnboarding(rawInput: unknown, client: SupabaseClientLike = supabase) {
+export async function createHouseholdOnboarding(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
   const input: OnboardingPayload = onboardingPayloadSchema.parse(rawInput);
   const profileId = await getOrCreateActiveProfileId(client);
 
@@ -313,7 +318,7 @@ export async function createHouseholdOnboarding(rawInput: unknown, client: Supab
   };
 }
 
-export async function getDashboardData(client: SupabaseClientLike = supabase): Promise<DashboardData> {
+export async function getDashboardData(client: SupabaseClientLike = supabaseAdmin): Promise<DashboardData> {
   const householdId = await getDefaultHouseholdId(client);
   logDebug('Dashboard household resolution', { householdId: householdId ?? null });
 
@@ -362,7 +367,7 @@ export async function getDashboardData(client: SupabaseClientLike = supabase): P
   };
 }
 
-export async function getAccountsForRegistration(client: SupabaseClientLike = supabase): Promise<AccountOption[]> {
+export async function getAccountsForRegistration(client: SupabaseClientLike = supabaseAdmin): Promise<AccountOption[]> {
   const householdId = await getDefaultHouseholdId(client);
   if (!householdId) {
     logDebug('Cuentas lookup fallback', { reason: 'no_household' });
@@ -380,7 +385,7 @@ export async function getAccountsForRegistration(client: SupabaseClientLike = su
   return accounts;
 }
 
-export async function getRegistrationSetupStatus(client: SupabaseClientLike = supabase): Promise<RegistrationSetupStatus> {
+export async function getRegistrationSetupStatus(client: SupabaseClientLike = supabaseAdmin): Promise<RegistrationSetupStatus> {
   const householdId = await getDefaultHouseholdId(client);
   if (!householdId) {
     logDebug('Registro setup fallback', { reason: 'no_household' });
@@ -459,7 +464,7 @@ export async function saveConversationalTransaction(intent: TransactionIntent) {
   const accounts = await getAccountsForRegistration();
   const lines = buildJournalEntries(intent, accounts);
 
-  const { data: group, error: groupError } = await supabase
+  const { data: group, error: groupError } = await supabaseAdmin
     .from('transaction_groups')
     .insert({
       household_id: householdId,
@@ -481,7 +486,7 @@ export async function saveConversationalTransaction(intent: TransactionIntent) {
     amount: line.amount.toFixed(2)
   }));
 
-  const { error: txError } = await supabase.from('transactions').insert(transactionsPayload);
+  const { error: txError } = await supabaseAdmin.from('transactions').insert(transactionsPayload);
 
   if (txError) {
     throw new Error(txError.message);
@@ -491,7 +496,7 @@ export async function saveConversationalTransaction(intent: TransactionIntent) {
 }
 
 export async function recalculateIndicators(householdId: string) {
-  const { data } = await supabase
+  const { data } = await supabaseAdmin
     .from('transactions')
     .select('type,category,amount,transaction_groups!inner(household_id)')
     .eq('transaction_groups.household_id', householdId);
@@ -516,7 +521,7 @@ export async function recalculateIndicators(householdId: string) {
 
   const weeklyOFH = calculateWeeklyOFH(monthlyOFH);
 
-  await supabase.from('financial_snapshots').insert({
+  await supabaseAdmin.from('financial_snapshots').insert({
     household_id: householdId,
     period_type: 'conversacional',
     payload: JSON.stringify({ totalIncome, totalExpenses, monthlyOFH, weeklyOFH })

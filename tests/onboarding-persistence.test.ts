@@ -155,9 +155,27 @@ describe('onboarding persistence', () => {
     vi.resetModules();
   });
 
+  it('usa DEV_PROFILE_ID de forma consistente en desarrollo', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'perfil-env', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-env', profile_id: 'perfil-env', household_id: 'hogar-env' });
+
+    process.env.DEV_PROFILE_ID = 'perfil-env';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getOrCreateActiveProfileId, getDefaultHouseholdId } = await import('@/lib/db/queries');
+
+    const profileId = await getOrCreateActiveProfileId();
+    const householdId = await getDefaultHouseholdId();
+
+    expect(profileId).toBe('perfil-env');
+    expect(householdId).toBe('hogar-env');
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
   it('retorna resumen inicial tras guardar onboarding exitosamente', async () => {
     const fakeClient = createFakeSupabase();
-    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
     const { createHouseholdOnboarding } = await import('@/lib/db/queries');
 
     const result = await createHouseholdOnboarding(payload);
@@ -170,7 +188,7 @@ describe('onboarding persistence', () => {
 
   it('crea hogar + cuentas + snapshot', async () => {
     const fakeClient = createFakeSupabase();
-    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
 
     const { createHouseholdOnboarding } = await import('@/lib/db/queries');
     const result = await createHouseholdOnboarding(payload);
@@ -189,7 +207,7 @@ describe('onboarding persistence', () => {
     fakeClient.db.profiles.push({ id: 'profile-1', created_at: new Date().toISOString() });
     fakeClient.db.household_members.push({ id: 'hm-1', profile_id: 'profile-1', household_id: 'house-1' });
 
-    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
     const { getDefaultHouseholdId } = await import('@/lib/db/queries');
 
     const householdId = await getDefaultHouseholdId();
@@ -198,7 +216,7 @@ describe('onboarding persistence', () => {
 
   it('dashboard resuelve datos reales después de onboarding', async () => {
     const fakeClient = createFakeSupabase();
-    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
 
     const { createHouseholdOnboarding, getDashboardData } = await import('@/lib/db/queries');
     await createHouseholdOnboarding(payload);
@@ -210,7 +228,7 @@ describe('onboarding persistence', () => {
 
   it('cuentas resuelve cuentas reales después de onboarding', async () => {
     const fakeClient = createFakeSupabase();
-    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
 
     const { createHouseholdOnboarding, getAccountsForRegistration } = await import('@/lib/db/queries');
     await createHouseholdOnboarding(payload);
@@ -221,7 +239,7 @@ describe('onboarding persistence', () => {
 
   it('registro setup deja de estar bloqueado después de onboarding', async () => {
     const fakeClient = createFakeSupabase();
-    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
 
     const { createHouseholdOnboarding, getRegistrationSetupStatus } = await import('@/lib/db/queries');
     await createHouseholdOnboarding(payload);
