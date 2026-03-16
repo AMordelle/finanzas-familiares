@@ -27,12 +27,9 @@ const periodicidades = ['semanal', 'quincenal', 'mensual', 'bimestral', 'trimest
 export function OnboardingWizard() {
   const [step, setStep] = useState(1);
   const [form, setForm] = useState<OnboardingPayload>(emptyPayload);
-  const [summary, setSummary] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
-
-  const totalSteps = 10;
 
   const title = useMemo(() => {
     const map: Record<number, string> = {
@@ -80,36 +77,13 @@ export function OnboardingWizard() {
     startTransition(async () => {
       try {
         const parsed = onboardingPayloadSchema.parse(form);
-        const result = await submitOnboardingAction(parsed);
-        setSummary(result.indicators);
-        setStep(10);
+        await submitOnboardingAction(parsed);
+        router.push('/dashboard');
       } catch (err) {
         setError(err instanceof Error ? err.message : 'No fue posible guardar el onboarding.');
       }
     });
   };
-
-  if (step === 10 && summary) {
-    return (
-      <Card>
-        <p className="text-sm font-medium text-teal-700">Onboarding completado</p>
-        <h2 className="mt-2 text-2xl font-semibold">Tu diagnóstico financiero inicial</h2>
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <p>OFH mensual: <strong>${summary.monthlyOFH.toLocaleString('es-MX')}</strong></p>
-          <p>Objetivo semanal: <strong>${summary.weeklyOFH.toLocaleString('es-MX')}</strong></p>
-          <p>Ingreso regular mensual: <strong>${summary.regularIncomeMonthly.toLocaleString('es-MX')}</strong></p>
-          <p>Ingreso promedio anual mensualizado: <strong>${summary.annualAverageMonthlyIncome.toLocaleString('es-MX')}</strong></p>
-          <p>Dinero disponible: <strong>${summary.availableMoney.toLocaleString('es-MX')}</strong></p>
-          <p>MRF inmediato: <strong>{summary.immediateMRF}</strong></p>
-          <p>MRF ampliado: <strong>{summary.extendedMRF}</strong></p>
-          <p>Diagnóstico inicial: <strong>{summary.diagnoses[0]}</strong></p>
-        </div>
-        <div className="mt-6">
-          <Button onClick={() => router.push('/dashboard')}>Ir al dashboard</Button>
-        </div>
-      </Card>
-    );
-  }
 
   return (
     <Card>

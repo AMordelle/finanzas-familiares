@@ -1,9 +1,10 @@
-import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { supabase } from '@/lib/db/supabase';
 import { calculateMonthlyOFH, calculateWeeklyOFH } from '@/lib/financial/engine';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
+
+const DEV_FALLBACK_PROFILE_ID = '00000000-0000-4000-8000-000000000001';
 
 export const onboardingSchema = onboardingPayloadSchema;
 
@@ -44,56 +45,84 @@ type DashboardData = {
   recommendations: string[];
 };
 
-async function getOrCreateActiveProfileId() {
-  const configured = process.env.DEV_PROFILE_ID;
-  if (configured) return configured;
+type SupabaseClientLike = typeof supabase;
 
-  const { data: firstProfile } = await supabase.from('profiles').select('id').limit(1).maybeSingle();
-  if (firstProfile?.id) return firstProfile.id as string;
-
-  const id = randomUUID();
-  const { error } = await supabase.from('profiles').insert({
-    id,
-    full_name: 'Usuario local'
-  });
-
-  if (error) throw new Error(error.message);
-  return id;
+function logDebug(message: string, payload?: Record<string, unknown>) {
+  console.info(`[onboarding-debug] ${message}`, payload ?? {});
 }
 
-async function getDefaultHouseholdId() {
-  const profileId = await getOrCreateActiveProfileId();
+function getActiveProfileSeedId() {
+  return process.env.DEV_PROFILE_ID || process.env.NEXT_PUBLIC_DEV_PROFILE_ID || DEV_FALLBACK_PROFILE_ID;
+}
 
-  const { data: membership } = await supabase
+export async function getOrCreateActiveProfileId(client: SupabaseClientLike = supabase) {
+  const activeProfileId = getActiveProfileSeedId();
+
+  const { data: existingProfile, error: lookupError } = await client
+    .from('profiles')
+    .select('id')
+    .eq('id', activeProfileId)
+    .limit(1)
+    .maybeSingle();
+
+  if (lookupError) {
+    throw new Error(`No fue posible resolver el perfil activo: ${lookupError.message}`);
+  }
+
+  if (!existingProfile?.id) {
+    const { error: upsertError } = await client.from('profiles').upsert({
+      id: activeProfileId,
+      full_name: 'Usuario local'
+    });
+
+    if (upsertError) {
+      throw new Error(`No fue posible crear el perfil activo: ${upsertError.message}`);
+    }
+  }
+
+  logDebug('Perfil activo resuelto', { activeProfileId });
+  return activeProfileId;
+}
+
+export async function getDefaultHouseholdId(client: SupabaseClientLike = supabase) {
+  const profileId = await getOrCreateActiveProfileId(client);
+
+  const { data: membership, error } = await client
     .from('household_members')
     .select('household_id')
     .eq('profile_id', profileId)
     .limit(1)
     .maybeSingle();
 
-  if (membership?.household_id) return membership.household_id as string;
+  if (error) {
+    throw new Error(`No fue posible resolver el hogar del perfil: ${error.message}`);
+  }
 
-  const { data } = await supabase.from('households').select('id').limit(1).maybeSingle();
-  return data?.id as string | undefined;
+  const householdId = membership?.household_id as string | undefined;
+  logDebug('Hogar por perfil resuelto', { profileId, householdId: householdId ?? null });
+  return householdId;
 }
 
 export async function hasOnboardingForActiveProfile() {
-  const profileId = await getOrCreateActiveProfileId();
-  const { data } = await supabase
-    .from('household_members')
-    .select('id')
-    .eq('profile_id', profileId)
-    .limit(1)
-    .maybeSingle();
-
-  return Boolean(data?.id);
+  const householdId = await getDefaultHouseholdId();
+  return Boolean(householdId);
 }
 
-export async function createHouseholdOnboarding(rawInput: unknown) {
+export async function createHouseholdOnboarding(rawInput: unknown, client: SupabaseClientLike = supabase) {
   const input: OnboardingPayload = onboardingPayloadSchema.parse(rawInput);
-  const profileId = await getOrCreateActiveProfileId();
+  const profileId = await getOrCreateActiveProfileId(client);
 
-  const { data: household, error: householdError } = await supabase
+  const existingHouseholdId = await getDefaultHouseholdId(client);
+  if (existingHouseholdId) {
+    logDebug('Onboarding omitido porque ya existe hogar para perfil', { profileId, existingHouseholdId });
+    const indicators = buildInitialIndicators(input);
+    return {
+      householdId: existingHouseholdId,
+      indicators
+    };
+  }
+
+  const { data: household, error: householdError } = await client
     .from('households')
     .insert({ name: input.householdName })
     .select('id')
@@ -105,11 +134,15 @@ export async function createHouseholdOnboarding(rawInput: unknown) {
 
   const householdId = household.id as string;
 
-  await supabase.from('household_members').insert({
+  const { error: membershipError } = await client.from('household_members').insert({
     household_id: householdId,
     profile_id: profileId,
     role: 'owner'
   });
+
+  if (membershipError) {
+    throw new Error(`No fue posible vincular el perfil al hogar: ${membershipError.message}`);
+  }
 
   const accountPayload = [
     ...input.operationalAccounts.map((item) => ({ household_id: householdId, name: item.nombre, type: 'operativa', balance: (item.saldoInicial ?? 0).toFixed(2) })),
@@ -119,7 +152,7 @@ export async function createHouseholdOnboarding(rawInput: unknown) {
   ];
 
   if (accountPayload.length > 0) {
-    const { error } = await supabase.from('accounts').insert(accountPayload);
+    const { error } = await client.from('accounts').insert(accountPayload);
     if (error) throw new Error(error.message);
   }
 
@@ -129,7 +162,7 @@ export async function createHouseholdOnboarding(rawInput: unknown) {
   ];
 
   if (incomePayload.length > 0) {
-    const { error } = await supabase.from('income_sources').insert(incomePayload);
+    const { error } = await client.from('income_sources').insert(incomePayload);
     if (error) throw new Error(error.message);
   }
 
@@ -151,12 +184,12 @@ export async function createHouseholdOnboarding(rawInput: unknown) {
   ];
 
   if (obligationsPayload.length > 0) {
-    const { error } = await supabase.from('obligations').insert(obligationsPayload);
+    const { error } = await client.from('obligations').insert(obligationsPayload);
     if (error) throw new Error(error.message);
   }
 
   if (input.variableSpending.length > 0) {
-    const { error } = await supabase.from('variable_spending_profiles').insert(
+    const { error } = await client.from('variable_spending_profiles').insert(
       input.variableSpending.map((item) => ({
         household_id: householdId,
         category: item.nombre,
@@ -168,7 +201,7 @@ export async function createHouseholdOnboarding(rawInput: unknown) {
   }
 
   if (input.receivables.length > 0) {
-    const { error } = await supabase.from('receivables').insert(
+    const { error } = await client.from('receivables').insert(
       input.receivables.map((item) => ({
         household_id: householdId,
         counterparty: item.contraparte || item.nombre,
@@ -182,13 +215,24 @@ export async function createHouseholdOnboarding(rawInput: unknown) {
   }
 
   const indicators = buildInitialIndicators(input);
-  const { error: snapshotError } = await supabase.from('financial_snapshots').insert({
-    household_id: householdId,
-    period_type: 'onboarding_inicial',
-    payload: JSON.stringify(indicators)
-  });
+  const { data: snapshot, error: snapshotError } = await client
+    .from('financial_snapshots')
+    .insert({
+      household_id: householdId,
+      period_type: 'onboarding_inicial',
+      payload: JSON.stringify(indicators)
+    })
+    .select('id')
+    .single();
 
   if (snapshotError) throw new Error(snapshotError.message);
+
+  logDebug('Onboarding persistido correctamente', {
+    profileId,
+    householdId,
+    insertedAccounts: accountPayload.length,
+    snapshotId: snapshot?.id ?? null
+  });
 
   return {
     householdId,
@@ -196,8 +240,10 @@ export async function createHouseholdOnboarding(rawInput: unknown) {
   };
 }
 
-export async function getDashboardData(): Promise<DashboardData> {
-  const householdId = await getDefaultHouseholdId();
+export async function getDashboardData(client: SupabaseClientLike = supabase): Promise<DashboardData> {
+  const householdId = await getDefaultHouseholdId(client);
+  logDebug('Dashboard household resolution', { householdId: householdId ?? null });
+
   if (!householdId) {
     return {
       hasHousehold: false,
@@ -209,7 +255,7 @@ export async function getDashboardData(): Promise<DashboardData> {
     };
   }
 
-  const { data } = await supabase
+  const { data } = await client
     .from('financial_snapshots')
     .select('payload')
     .eq('household_id', householdId)
@@ -239,11 +285,11 @@ export async function getDashboardData(): Promise<DashboardData> {
   };
 }
 
-export async function getAccountsForRegistration(): Promise<AccountOption[]> {
-  const householdId = await getDefaultHouseholdId();
+export async function getAccountsForRegistration(client: SupabaseClientLike = supabase): Promise<AccountOption[]> {
+  const householdId = await getDefaultHouseholdId(client);
   if (!householdId) return [];
 
-  const { data } = await supabase
+  const { data } = await client
     .from('accounts')
     .select('id,name,type')
     .eq('household_id', householdId)
@@ -252,8 +298,8 @@ export async function getAccountsForRegistration(): Promise<AccountOption[]> {
   return (data ?? []) as AccountOption[];
 }
 
-export async function getRegistrationSetupStatus(): Promise<RegistrationSetupStatus> {
-  const householdId = await getDefaultHouseholdId();
+export async function getRegistrationSetupStatus(client: SupabaseClientLike = supabase): Promise<RegistrationSetupStatus> {
+  const householdId = await getDefaultHouseholdId(client);
   if (!householdId) {
     return {
       hasHousehold: false,
@@ -261,7 +307,7 @@ export async function getRegistrationSetupStatus(): Promise<RegistrationSetupSta
     };
   }
 
-  const accounts = await getAccountsForRegistration();
+  const accounts = await getAccountsForRegistration(client);
   return {
     hasHousehold: true,
     accounts
