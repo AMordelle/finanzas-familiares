@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 class FakeQueryBuilder {
   private action: 'select' | 'insert' | 'upsert' = 'select';
   private filters: Array<{ field: string; value: unknown }> = [];
+  private inFilters: Array<{ field: string; values: unknown[] }> = [];
   private limitValue: number | null = null;
   private orderBy: { field: string; ascending: boolean } | null = null;
   private selected = '*';
@@ -29,6 +30,11 @@ class FakeQueryBuilder {
 
   eq(field: string, value: unknown) {
     this.filters.push({ field, value });
+    return this;
+  }
+
+  in(field: string, values: unknown[]) {
+    this.inFilters.push({ field, values });
     return this;
   }
 
@@ -88,6 +94,10 @@ class FakeQueryBuilder {
       selectedRows = selectedRows.filter((row) => row[filter.field] === filter.value);
     }
 
+    for (const filter of this.inFilters) {
+      selectedRows = selectedRows.filter((row) => filter.values.includes(row[filter.field]));
+    }
+
     if (this.orderBy) {
       selectedRows.sort((a, b) => {
         const av = a[this.orderBy!.field];
@@ -126,7 +136,9 @@ function createFakeSupabase() {
     obligations: [],
     variable_spending_profiles: [],
     receivables: [],
-    financial_snapshots: []
+    financial_snapshots: [],
+    transaction_groups: [],
+    transactions: []
   };
 
   return {
@@ -248,4 +260,72 @@ describe('onboarding persistence', () => {
     expect(setup.hasHousehold).toBe(true);
     expect(setup.accounts.length).toBeGreaterThan(0);
   });
+
+  it('snapshot generado tras recálculo incluye availableMoney', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-x', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-x', profile_id: 'profile-x', household_id: 'house-x' });
+    fakeClient.db.accounts.push({ id: 'acc-1', household_id: 'house-x', name: 'Efectivo', type: 'operativa', balance: '1500' });
+
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { recalculateIndicators } = await import('@/lib/db/queries');
+
+    await recalculateIndicators('house-x');
+
+    const snapshot = fakeClient.db.financial_snapshots[0];
+    const payload = JSON.parse(snapshot.payload);
+    expect(payload.availableMoney).toBe(1500);
+    expect(payload.monthlyOFH).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(payload.diagnoses)).toBe(true);
+    expect(Array.isArray(payload.recommendations)).toBe(true);
+  });
+
+  it('dashboard renderiza seguro con payload parcial sin availableMoney', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-p', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-p', profile_id: 'profile-p', household_id: 'house-p' });
+    fakeClient.db.financial_snapshots.push({
+      id: 'snap-p',
+      household_id: 'house-p',
+      payload: JSON.stringify({ monthlyOFH: 1234 }),
+      created_at: new Date().toISOString()
+    });
+
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getDashboardData } = await import('@/lib/db/queries');
+
+    const dashboard = await getDashboardData();
+    expect(dashboard.monthlyOFH).toBe(1234);
+    expect(dashboard.availableMoney).toBe(0);
+    expect(dashboard.recommendations.length).toBeGreaterThan(0);
+  });
+
+  it('dashboard lee snapshot actualizado después de guardar movimiento', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-m', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-m', profile_id: 'profile-m', household_id: 'house-m' });
+    fakeClient.db.accounts.push({ id: 'acc-m', household_id: 'house-m', name: 'Efectivo', type: 'operativa', balance: '2100' });
+
+    process.env.DEV_PROFILE_ID = 'profile-m';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { saveConversationalTransaction, getDashboardData } = await import('@/lib/db/queries');
+
+    await saveConversationalTransaction({
+      action: 'gasto',
+      amount: 300,
+      category: 'comida',
+      description: 'Gasto comida',
+      sourceAccount: 'efectivo',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok'
+    });
+
+    const dashboard = await getDashboardData();
+    expect(dashboard.hasHousehold).toBe(true);
+    expect(dashboard.availableMoney).toBe(2100);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
 });

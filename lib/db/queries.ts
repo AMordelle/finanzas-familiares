@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { supabase, supabaseAdmin } from '@/lib/db/supabase';
-import { calculateMonthlyOFH, calculateWeeklyOFH } from '@/lib/financial/engine';
+import { buildRecommendations, buildTopDiagnoses, calculateAvailableMoney, calculateMonthlyOFH, calculateWeeklyOFH } from '@/lib/financial/engine';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
 
@@ -318,6 +318,31 @@ export async function createHouseholdOnboarding(rawInput: unknown, client: Supab
   };
 }
 
+
+function toFiniteNumber(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
+  const payload = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : (rawPayload as Record<string, unknown>);
+
+  const monthlyOFH = toFiniteNumber(payload?.monthlyOFH, 0);
+  const weeklyOFH = toFiniteNumber(payload?.weeklyOFH, calculateWeeklyOFH(monthlyOFH));
+  const availableMoney = toFiniteNumber(payload?.availableMoney, 0);
+  const diagnoses = Array.isArray(payload?.diagnoses) ? payload.diagnoses.filter((x: unknown): x is string => typeof x === 'string') : [];
+  const recommendations = Array.isArray(payload?.recommendations) ? payload.recommendations.filter((x: unknown): x is string => typeof x === 'string') : [];
+
+  return {
+    hasHousehold: true,
+    monthlyOFH,
+    weeklyOFH,
+    availableMoney,
+    diagnoses: diagnoses.length ? diagnoses : ['Sin diagnósticos disponibles por el momento.'],
+    recommendations: recommendations.length ? recommendations : ['Aún no hay recomendaciones; registra movimientos para enriquecer el análisis.']
+  };
+}
+
 export async function getDashboardData(client: SupabaseClientLike = supabaseAdmin): Promise<DashboardData> {
   const householdId = await getDefaultHouseholdId(client);
   logDebug('Dashboard household resolution', { householdId: householdId ?? null });
@@ -356,15 +381,8 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
     };
   }
 
-  const payload = JSON.parse(data.payload as string) as ReturnType<typeof buildInitialIndicators>;
-  return {
-    hasHousehold: true,
-    monthlyOFH: payload.monthlyOFH,
-    weeklyOFH: payload.weeklyOFH,
-    availableMoney: payload.availableMoney,
-    diagnoses: payload.diagnoses,
-    recommendations: payload.recommendations
-  };
+  const parsed = normalizeSnapshotPayload(data.payload);
+  return parsed;
 }
 
 export async function getAccountsForRegistration(client: SupabaseClientLike = supabaseAdmin): Promise<AccountOption[]> {
@@ -496,12 +514,18 @@ export async function saveConversationalTransaction(intent: TransactionIntent) {
 }
 
 export async function recalculateIndicators(householdId: string) {
-  const { data } = await supabaseAdmin
-    .from('transactions')
-    .select('type,category,amount,transaction_groups!inner(household_id)')
-    .eq('transaction_groups.household_id', householdId);
+  const { data: groups } = await supabaseAdmin.from('transaction_groups').select('id').eq('household_id', householdId);
+  const groupIds = (groups ?? []).map((group) => group.id as string);
 
-  const parsed = (data ?? []) as Array<{ type: string; category: string; amount: string }>;
+  let parsed: Array<{ type: string; category: string; amount: string }> = [];
+  if (groupIds.length > 0) {
+    const { data: transactionsData } = await supabaseAdmin
+      .from('transactions')
+      .select('type,category,amount')
+      .in('group_id', groupIds);
+
+    parsed = (transactionsData ?? []) as Array<{ type: string; category: string; amount: string }>;
+  }
 
   const totalExpenses = parsed
     .filter((item) => item.type === 'debit' && item.category !== 'entrada_cuenta')
@@ -511,19 +535,60 @@ export async function recalculateIndicators(householdId: string) {
     .filter((item) => item.type === 'credit' && item.category.startsWith('ingreso'))
     .reduce((acc, item) => acc + Number(item.amount), 0);
 
-  const monthlyOFH = calculateMonthlyOFH({
+  const { data: accounts } = await supabaseAdmin
+    .from('accounts')
+    .select('type,balance')
+    .eq('household_id', householdId);
+
+  const accountList = (accounts ?? []) as Array<{ type: string; balance: string }>;
+  const operativeMoney = accountList
+    .filter((item) => item.type === 'operativa')
+    .reduce((acc, item) => acc + Number(item.balance), 0);
+  const liquidFunds = accountList
+    .filter((item) => item.type === 'fondo')
+    .reduce((acc, item) => acc + Number(item.balance), 0);
+  const liquidInvestments = accountList
+    .filter((item) => item.type === 'inversion')
+    .reduce((acc, item) => acc + Number(item.balance), 0);
+  const debtBalance = accountList
+    .filter((item) => item.type === 'deuda')
+    .reduce((acc, item) => acc + Number(item.balance), 0);
+
+  const financialInput = {
     fixedExpenses: totalExpenses,
     avgVariableExpenses: 0,
     debtPayments: 0,
     periodicExpensesMonthlyEquivalent: 0,
-    safetyMarginPct: 10
-  });
+    safetyMarginPct: 10,
+    regularIncomeMonthly: totalIncome,
+    annualExtraIncome: 0,
+    operativeMoney,
+    liquidFunds,
+    liquidInvestments,
+    debtBalance,
+    totalFixedExpenses: totalExpenses,
+    variableSeries: [],
+    reservesUsageLastMonth: 0
+  };
 
+  const monthlyOFH = calculateMonthlyOFH(financialInput);
   const weeklyOFH = calculateWeeklyOFH(monthlyOFH);
+  const availableMoney = calculateAvailableMoney(operativeMoney);
+  const diagnoses = buildTopDiagnoses(financialInput);
+  const recommendations = buildRecommendations(diagnoses);
 
   await supabaseAdmin.from('financial_snapshots').insert({
     household_id: householdId,
     period_type: 'conversacional',
-    payload: JSON.stringify({ totalIncome, totalExpenses, monthlyOFH, weeklyOFH })
+    payload: JSON.stringify({
+      monthlyOFH,
+      weeklyOFH,
+      availableMoney,
+      diagnoses,
+      recommendations,
+      financialInput,
+      totals: { totalIncome, totalExpenses }
+    })
   });
 }
+
