@@ -1,15 +1,12 @@
 import { z } from 'zod';
-import { supabase } from '@/lib/db/supabase';
-import { calculateMonthlyOFH, calculateWeeklyOFH } from '@/lib/financial/engine';
+import { supabase, supabaseAdmin } from '@/lib/db/supabase';
+import { buildRecommendations, buildTopDiagnoses, calculateAvailableMoney, calculateMonthlyOFH, calculateWeeklyOFH } from '@/lib/financial/engine';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
+import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
 
-export const onboardingSchema = z.object({
-  householdName: z.string().min(2),
-  regularIncome: z.number().nonnegative(),
-  extraIncomeAnnual: z.number().nonnegative(),
-  fixedExpenses: z.number().nonnegative(),
-  variableExpenses: z.number().nonnegative()
-});
+const DEV_FALLBACK_PROFILE_ID = '00000000-0000-4000-8000-000000000001';
+
+export const onboardingSchema = onboardingPayloadSchema;
 
 export const simulationSchema = z.object({
   strategy: z.enum(['pagar_deuda', 'fortalecer_fondo', 'guardar_efectivo', 'mixta', 'apartar_meta']),
@@ -39,34 +36,385 @@ type JournalLine = {
   amount: number;
 };
 
-async function getDefaultHouseholdId() {
-  const { data } = await supabase.from('households').select('id').limit(1).maybeSingle();
+type DashboardData = {
+  hasHousehold: boolean;
+  monthlyOFH: number;
+  weeklyOFH: number;
+  availableMoney: number;
+  diagnoses: string[];
+  recommendations: string[];
+};
+
+type SupabaseClientLike = typeof supabaseAdmin;
+
+function logDebug(message: string, payload?: Record<string, unknown>) {
+  console.info(`[onboarding-debug] ${message}`, payload ?? {});
+}
+
+async function getProfileIdFromExistingMembership(client: SupabaseClientLike) {
+  const { data, error } = await client
+    .from('household_members')
+    .select('profile_id,household_id')
+    .order('id', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  logDebug('Lookup profile desde household_members', {
+    rawResult: data ?? null,
+    error: error?.message ?? null
+  });
+
+  if (error) return undefined;
+  return data?.profile_id as string | undefined;
+}
+
+async function getAnyExistingProfileId(client: SupabaseClientLike) {
+  const { data, error } = await client.from('profiles').select('id').order('created_at', { ascending: true }).limit(1).maybeSingle();
+  logDebug('Lookup profile desde profiles', {
+    rawResult: data ?? null,
+    error: error?.message ?? null
+  });
+
+  if (error) return undefined;
   return data?.id as string | undefined;
 }
 
-export async function getAccountsForRegistration(): Promise<AccountOption[]> {
-  const householdId = await getDefaultHouseholdId();
-  if (!householdId) return [];
+async function getAuthProfileId(client: SupabaseClientLike) {
+  const auth = (client as unknown as { auth?: { getUser?: () => Promise<{ data?: { user?: { id?: string } }; error?: { message?: string } }> } }).auth;
+  if (!auth?.getUser) return undefined;
 
-  const { data } = await supabase
+  const { data, error } = await auth.getUser();
+  logDebug('Lookup profile desde auth', {
+    profileId: data?.user?.id ?? null,
+    error: error?.message ?? null
+  });
+
+  if (error || !data?.user?.id) return undefined;
+  return data.user.id;
+}
+
+async function resolveActiveProfileId(client: SupabaseClientLike) {
+  const fromDevEnv = process.env.DEV_PROFILE_ID;
+  if (fromDevEnv) {
+    return { activeProfileId: fromDevEnv, source: 'env_dev_profile_id' as const };
+  }
+
+  const fromPublicDevEnv = process.env.NEXT_PUBLIC_DEV_PROFILE_ID;
+  if (fromPublicDevEnv) {
+    return { activeProfileId: fromPublicDevEnv, source: 'env_next_public_dev_profile_id' as const };
+  }
+
+  const fromAuth = await getAuthProfileId(client);
+  if (fromAuth) {
+    return { activeProfileId: fromAuth, source: 'auth' as const };
+  }
+
+  const fromMembership = await getProfileIdFromExistingMembership(client);
+  if (fromMembership) {
+    return { activeProfileId: fromMembership, source: 'membership' as const };
+  }
+
+  const existingProfile = await getAnyExistingProfileId(client);
+  if (existingProfile) {
+    return { activeProfileId: existingProfile, source: 'profiles' as const };
+  }
+
+  return { activeProfileId: DEV_FALLBACK_PROFILE_ID, source: 'fallback' as const };
+}
+
+export async function getOrCreateActiveProfileId(client: SupabaseClientLike = supabaseAdmin) {
+  const { activeProfileId, source } = await resolveActiveProfileId(client);
+
+  const { data: existingProfile, error: lookupError } = await client
+    .from('profiles')
+    .select('id')
+    .eq('id', activeProfileId)
+    .limit(1)
+    .maybeSingle();
+
+  if (lookupError) {
+    throw new Error(`No fue posible resolver el perfil activo: ${lookupError.message}`);
+  }
+
+  if (!existingProfile?.id) {
+    const { error: upsertError } = await client.from('profiles').upsert({
+      id: activeProfileId,
+      full_name: 'Usuario local'
+    });
+
+    if (upsertError) {
+      throw new Error(`No fue posible crear el perfil activo: ${upsertError.message}`);
+    }
+  }
+
+  logDebug('Perfil activo resuelto', { activeProfileId, source });
+  return activeProfileId;
+}
+
+export async function getDefaultHouseholdId(client: SupabaseClientLike = supabaseAdmin) {
+  const profileId = await getOrCreateActiveProfileId(client);
+
+  const { data: membership, error } = await client
+    .from('household_members')
+    .select('household_id,profile_id')
+    .eq('profile_id', profileId)
+    .order('id', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  logDebug('Query household_members por profile_id', {
+    profileId,
+    rawResult: membership ?? null,
+    error: error?.message ?? null
+  });
+
+  if (error) {
+    throw new Error(`No fue posible resolver el hogar del perfil: ${error.message}`);
+  }
+
+  const householdId = membership?.household_id as string | undefined;
+  logDebug('Hogar por perfil resuelto', {
+    profileId,
+    householdId: householdId ?? null,
+    readMode: householdId ? 'db_result' : 'fallback_empty'
+  });
+  return householdId;
+}
+
+export async function hasOnboardingForActiveProfile() {
+  const householdId = await getDefaultHouseholdId();
+  return Boolean(householdId);
+}
+
+export async function createHouseholdOnboarding(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input: OnboardingPayload = onboardingPayloadSchema.parse(rawInput);
+  const profileId = await getOrCreateActiveProfileId(client);
+
+  const existingHouseholdId = await getDefaultHouseholdId(client);
+  if (existingHouseholdId) {
+    logDebug('Onboarding omitido porque ya existe hogar para perfil', { profileId, existingHouseholdId });
+    const indicators = buildInitialIndicators(input);
+    return {
+      householdId: existingHouseholdId,
+      indicators
+    };
+  }
+
+  const { data: household, error: householdError } = await client
+    .from('households')
+    .insert({ name: input.householdName })
+    .select('id')
+    .single();
+
+  if (householdError || !household?.id) {
+    throw new Error(householdError?.message ?? 'No fue posible crear el hogar.');
+  }
+
+  const householdId = household.id as string;
+
+  const { error: membershipError } = await client.from('household_members').insert({
+    household_id: householdId,
+    profile_id: profileId,
+    role: 'owner'
+  });
+
+  if (membershipError) {
+    throw new Error(`No fue posible vincular el perfil al hogar: ${membershipError.message}`);
+  }
+
+  const accountPayload = [
+    ...input.operationalAccounts.map((item) => ({ household_id: householdId, name: item.nombre, type: 'operativa', balance: (item.saldoInicial ?? 0).toFixed(2) })),
+    ...input.fundAccounts.map((item) => ({ household_id: householdId, name: item.nombre, type: 'fondo', balance: (item.saldoInicial ?? 0).toFixed(2) })),
+    ...input.debtAccounts.map((item) => ({ household_id: householdId, name: item.nombre, type: 'deuda', balance: (item.saldoInicial ?? 0).toFixed(2) })),
+    ...input.receivables.map((item) => ({ household_id: householdId, name: item.nombre, type: 'por_cobrar', balance: item.monto.toFixed(2) }))
+  ];
+
+  if (accountPayload.length > 0) {
+    const { error } = await client.from('accounts').insert(accountPayload);
+    if (error) throw new Error(error.message);
+  }
+
+  const incomePayload = [
+    ...input.regularIncomes.map((item) => ({ household_id: householdId, name: `${item.nombre} (${item.periodicidad ?? 'mensual'})`, amount: item.monto.toFixed(2), recurring: true })),
+    ...input.extraordinaryIncomes.map((item) => ({ household_id: householdId, name: `${item.nombre}${item.mesEsperado ? ` (mes ${item.mesEsperado})` : ''}`, amount: item.monto.toFixed(2), recurring: false }))
+  ];
+
+  if (incomePayload.length > 0) {
+    const { error } = await client.from('income_sources').insert(incomePayload);
+    if (error) throw new Error(error.message);
+  }
+
+  const obligationsPayload = [
+    ...input.fixedExpenses.map((item) => ({
+      household_id: householdId,
+      name: item.nombre,
+      amount: item.monto.toFixed(2),
+      due_day: null as number | null
+    })),
+    ...input.debtAccounts
+      .filter((item) => (item.pagoPeriodico ?? 0) > 0)
+      .map((item) => ({
+        household_id: householdId,
+        name: `Pago ${item.nombre}`,
+        amount: (item.pagoPeriodico ?? 0).toFixed(2),
+        due_day: item.diaPago ?? null
+      }))
+  ];
+
+  if (obligationsPayload.length > 0) {
+    const { error } = await client.from('obligations').insert(obligationsPayload);
+    if (error) throw new Error(error.message);
+  }
+
+  if (input.variableSpending.length > 0) {
+    const { error } = await client.from('variable_spending_profiles').insert(
+      input.variableSpending.map((item) => ({
+        household_id: householdId,
+        category: item.nombre,
+        monthly_estimate: item.monto.toFixed(2)
+      }))
+    );
+
+    if (error) throw new Error(error.message);
+  }
+
+  if (input.receivables.length > 0) {
+    const { error } = await client.from('receivables').insert(
+      input.receivables.map((item) => ({
+        household_id: householdId,
+        counterparty: item.contraparte || item.nombre,
+        original_amount: item.monto.toFixed(2),
+        pending_amount: item.monto.toFixed(2),
+        status: 'activo'
+      }))
+    );
+
+    if (error) throw new Error(error.message);
+  }
+
+  const indicators = buildInitialIndicators(input);
+  const { data: snapshot, error: snapshotError } = await client
+    .from('financial_snapshots')
+    .insert({
+      household_id: householdId,
+      period_type: 'onboarding_inicial',
+      payload: JSON.stringify(indicators)
+    })
+    .select('id')
+    .single();
+
+  if (snapshotError) throw new Error(snapshotError.message);
+
+  logDebug('Onboarding persistido correctamente', {
+    profileId,
+    householdId,
+    insertedAccounts: accountPayload.length,
+    snapshotId: snapshot?.id ?? null
+  });
+
+  return {
+    householdId,
+    indicators
+  };
+}
+
+
+function toFiniteNumber(value: unknown, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
+  const payload = typeof rawPayload === 'string' ? JSON.parse(rawPayload) : (rawPayload as Record<string, unknown>);
+
+  const monthlyOFH = toFiniteNumber(payload?.monthlyOFH, 0);
+  const weeklyOFH = toFiniteNumber(payload?.weeklyOFH, calculateWeeklyOFH(monthlyOFH));
+  const availableMoney = toFiniteNumber(payload?.availableMoney, 0);
+  const diagnoses = Array.isArray(payload?.diagnoses) ? payload.diagnoses.filter((x: unknown): x is string => typeof x === 'string') : [];
+  const recommendations = Array.isArray(payload?.recommendations) ? payload.recommendations.filter((x: unknown): x is string => typeof x === 'string') : [];
+
+  return {
+    hasHousehold: true,
+    monthlyOFH,
+    weeklyOFH,
+    availableMoney,
+    diagnoses: diagnoses.length ? diagnoses : ['Sin diagnósticos disponibles por el momento.'],
+    recommendations: recommendations.length ? recommendations : ['Aún no hay recomendaciones; registra movimientos para enriquecer el análisis.']
+  };
+}
+
+export async function getDashboardData(client: SupabaseClientLike = supabaseAdmin): Promise<DashboardData> {
+  const householdId = await getDefaultHouseholdId(client);
+  logDebug('Dashboard household resolution', { householdId: householdId ?? null });
+
+  if (!householdId) {
+    logDebug('Dashboard fallback', { reason: 'no_household' });
+    return {
+      hasHousehold: false,
+      monthlyOFH: 0,
+      weeklyOFH: 0,
+      availableMoney: 0,
+      diagnoses: ['Completa tu onboarding para obtener diagnóstico.'],
+      recommendations: ['Configura hogar, cuentas e ingresos iniciales para activar recomendaciones.']
+    };
+  }
+
+  const { data } = await client
+    .from('financial_snapshots')
+    .select('payload')
+    .eq('household_id', householdId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  logDebug('Dashboard snapshot lookup', { householdId, snapshotFound: Boolean(data?.payload) });
+
+  if (!data?.payload) {
+    logDebug('Dashboard fallback', { reason: 'no_snapshot', householdId });
+    return {
+      hasHousehold: true,
+      monthlyOFH: 0,
+      weeklyOFH: 0,
+      availableMoney: 0,
+      diagnoses: ['Sin snapshot financiero inicial todavía.'],
+      recommendations: ['Finaliza onboarding para generar indicadores automáticos.']
+    };
+  }
+
+  const parsed = normalizeSnapshotPayload(data.payload);
+  return parsed;
+}
+
+export async function getAccountsForRegistration(client: SupabaseClientLike = supabaseAdmin): Promise<AccountOption[]> {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) {
+    logDebug('Cuentas lookup fallback', { reason: 'no_household' });
+    return [];
+  }
+
+  const { data } = await client
     .from('accounts')
     .select('id,name,type')
     .eq('household_id', householdId)
     .order('name');
 
-  return (data ?? []) as AccountOption[];
+  const accounts = (data ?? []) as AccountOption[];
+  logDebug('Cuentas lookup', { householdId, accountCount: accounts.length, readMode: 'db_result' });
+  return accounts;
 }
 
-export async function getRegistrationSetupStatus(): Promise<RegistrationSetupStatus> {
-  const householdId = await getDefaultHouseholdId();
+export async function getRegistrationSetupStatus(client: SupabaseClientLike = supabaseAdmin): Promise<RegistrationSetupStatus> {
+  const householdId = await getDefaultHouseholdId(client);
   if (!householdId) {
+    logDebug('Registro setup fallback', { reason: 'no_household' });
     return {
       hasHousehold: false,
       accounts: []
     };
   }
 
-  const accounts = await getAccountsForRegistration();
+  const accounts = await getAccountsForRegistration(client);
+  logDebug('Registro setup', { householdId, accountCount: accounts.length, readMode: 'db_result' });
   return {
     hasHousehold: true,
     accounts
@@ -134,7 +482,7 @@ export async function saveConversationalTransaction(intent: TransactionIntent) {
   const accounts = await getAccountsForRegistration();
   const lines = buildJournalEntries(intent, accounts);
 
-  const { data: group, error: groupError } = await supabase
+  const { data: group, error: groupError } = await supabaseAdmin
     .from('transaction_groups')
     .insert({
       household_id: householdId,
@@ -156,7 +504,7 @@ export async function saveConversationalTransaction(intent: TransactionIntent) {
     amount: line.amount.toFixed(2)
   }));
 
-  const { error: txError } = await supabase.from('transactions').insert(transactionsPayload);
+  const { error: txError } = await supabaseAdmin.from('transactions').insert(transactionsPayload);
 
   if (txError) {
     throw new Error(txError.message);
@@ -166,12 +514,18 @@ export async function saveConversationalTransaction(intent: TransactionIntent) {
 }
 
 export async function recalculateIndicators(householdId: string) {
-  const { data } = await supabase
-    .from('transactions')
-    .select('type,category,amount,transaction_groups!inner(household_id)')
-    .eq('transaction_groups.household_id', householdId);
+  const { data: groups } = await supabaseAdmin.from('transaction_groups').select('id').eq('household_id', householdId);
+  const groupIds = (groups ?? []).map((group) => group.id as string);
 
-  const parsed = (data ?? []) as Array<{ type: string; category: string; amount: string }>;
+  let parsed: Array<{ type: string; category: string; amount: string }> = [];
+  if (groupIds.length > 0) {
+    const { data: transactionsData } = await supabaseAdmin
+      .from('transactions')
+      .select('type,category,amount')
+      .in('group_id', groupIds);
+
+    parsed = (transactionsData ?? []) as Array<{ type: string; category: string; amount: string }>;
+  }
 
   const totalExpenses = parsed
     .filter((item) => item.type === 'debit' && item.category !== 'entrada_cuenta')
@@ -181,19 +535,60 @@ export async function recalculateIndicators(householdId: string) {
     .filter((item) => item.type === 'credit' && item.category.startsWith('ingreso'))
     .reduce((acc, item) => acc + Number(item.amount), 0);
 
-  const monthlyOFH = calculateMonthlyOFH({
+  const { data: accounts } = await supabaseAdmin
+    .from('accounts')
+    .select('type,balance')
+    .eq('household_id', householdId);
+
+  const accountList = (accounts ?? []) as Array<{ type: string; balance: string }>;
+  const operativeMoney = accountList
+    .filter((item) => item.type === 'operativa')
+    .reduce((acc, item) => acc + Number(item.balance), 0);
+  const liquidFunds = accountList
+    .filter((item) => item.type === 'fondo')
+    .reduce((acc, item) => acc + Number(item.balance), 0);
+  const liquidInvestments = accountList
+    .filter((item) => item.type === 'inversion')
+    .reduce((acc, item) => acc + Number(item.balance), 0);
+  const debtBalance = accountList
+    .filter((item) => item.type === 'deuda')
+    .reduce((acc, item) => acc + Number(item.balance), 0);
+
+  const financialInput = {
     fixedExpenses: totalExpenses,
     avgVariableExpenses: 0,
     debtPayments: 0,
     periodicExpensesMonthlyEquivalent: 0,
-    safetyMarginPct: 10
-  });
+    safetyMarginPct: 10,
+    regularIncomeMonthly: totalIncome,
+    annualExtraIncome: 0,
+    operativeMoney,
+    liquidFunds,
+    liquidInvestments,
+    debtBalance,
+    totalFixedExpenses: totalExpenses,
+    variableSeries: [],
+    reservesUsageLastMonth: 0
+  };
 
+  const monthlyOFH = calculateMonthlyOFH(financialInput);
   const weeklyOFH = calculateWeeklyOFH(monthlyOFH);
+  const availableMoney = calculateAvailableMoney(operativeMoney);
+  const diagnoses = buildTopDiagnoses(financialInput);
+  const recommendations = buildRecommendations(diagnoses);
 
-  await supabase.from('financial_snapshots').insert({
+  await supabaseAdmin.from('financial_snapshots').insert({
     household_id: householdId,
     period_type: 'conversacional',
-    payload: JSON.stringify({ totalIncome, totalExpenses, monthlyOFH, weeklyOFH })
+    payload: JSON.stringify({
+      monthlyOFH,
+      weeklyOFH,
+      availableMoney,
+      diagnoses,
+      recommendations,
+      financialInput,
+      totals: { totalIncome, totalExpenses }
+    })
   });
 }
+
