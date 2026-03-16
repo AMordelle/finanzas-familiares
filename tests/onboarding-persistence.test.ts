@@ -328,4 +328,56 @@ describe('onboarding persistence', () => {
     delete process.env.DEV_PROFILE_ID;
   });
 
+
+  it('movimientos devuelve historial real en orden cronológico inverso', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-h', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-h', profile_id: 'profile-h', household_id: 'house-h' });
+    fakeClient.db.accounts.push(
+      { id: 'acc-efectivo', household_id: 'house-h', name: 'Efectivo', type: 'operativa', balance: '1000' },
+      { id: 'acc-banco', household_id: 'house-h', name: 'Banco', type: 'operativa', balance: '2000' }
+    );
+    fakeClient.db.transaction_groups.push(
+      { id: 'g-antiguo', household_id: 'house-h', note: 'Gasto supermercado', created_at: '2024-01-01T10:00:00.000Z' },
+      { id: 'g-reciente', household_id: 'house-h', note: 'Transferencia interna', created_at: '2024-02-01T10:00:00.000Z' }
+    );
+    fakeClient.db.transactions.push(
+      { id: 't1', group_id: 'g-antiguo', account_id: null, type: 'debit', category: 'comida', amount: '350.00', happened_at: '2024-01-01T10:00:00.000Z' },
+      { id: 't2', group_id: 'g-antiguo', account_id: 'acc-efectivo', type: 'credit', category: 'salida_cuenta', amount: '350.00', happened_at: '2024-01-01T10:00:00.000Z' },
+      { id: 't3', group_id: 'g-reciente', account_id: 'acc-banco', type: 'debit', category: 'transferencia', amount: '500.00', happened_at: '2024-02-01T10:00:00.000Z' },
+      { id: 't4', group_id: 'g-reciente', account_id: 'acc-efectivo', type: 'credit', category: 'transferencia', amount: '500.00', happened_at: '2024-02-01T10:00:00.000Z' }
+    );
+
+    process.env.DEV_PROFILE_ID = 'profile-h';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getMovementsHistory } = await import('@/lib/db/queries');
+
+    const result = await getMovementsHistory();
+    expect(result.hasHousehold).toBe(true);
+    expect(result.movements.length).toBe(2);
+    expect(result.movements[0]?.id).toBe('g-reciente');
+    expect(result.movements[0]?.tipoMovimiento).toBe('Transferencia');
+    expect(result.movements[0]?.cuentaOrigen).toBe('Efectivo');
+    expect(result.movements[0]?.cuentaDestino).toBe('Banco');
+    expect(result.movements[1]?.tipoMovimiento).toBe('Gasto');
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('movimientos devuelve estado vacío amigable cuando no hay registros', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-empty', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-empty', profile_id: 'profile-empty', household_id: 'house-empty' });
+
+    process.env.DEV_PROFILE_ID = 'profile-empty';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getMovementsHistory } = await import('@/lib/db/queries');
+
+    const result = await getMovementsHistory();
+    expect(result.hasHousehold).toBe(true);
+    expect(result.movements).toEqual([]);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
 });

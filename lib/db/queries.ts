@@ -29,6 +29,21 @@ export type RegistrationSetupStatus = {
   accounts: AccountOption[];
 };
 
+export type MovementHistoryItem = {
+  id: string;
+  fecha: string;
+  tipoMovimiento: string;
+  descripcion: string;
+  monto: number;
+  cuentaOrigen: string | null;
+  cuentaDestino: string | null;
+};
+
+export type MovementsHistoryData = {
+  hasHousehold: boolean;
+  movements: MovementHistoryItem[];
+};
+
 type JournalLine = {
   accountId: string | null;
   type: 'debit' | 'credit';
@@ -421,6 +436,96 @@ export async function getRegistrationSetupStatus(client: SupabaseClientLike = su
   };
 }
 
+function inferMovementType(lines: Array<{ type: string; category: string }>) {
+  const has = (type: string, category: string) => lines.some((line) => line.type === type && line.category === category);
+
+  if (has('debit', 'deuda')) return 'Pago de deuda';
+  if (has('debit', 'por_cobrar')) return 'Préstamo otorgado';
+  if (has('credit', 'por_cobrar')) return 'Pago recibido';
+  if (has('debit', 'ahorro_meta')) return 'Aporte a objetivo';
+  if (has('debit', 'entrada_cuenta')) return 'Ingreso';
+  if (has('credit', 'salida_cuenta')) return 'Gasto';
+
+  const debitLine = lines.find((line) => line.type === 'debit');
+  const creditLine = lines.find((line) => line.type === 'credit');
+  if (debitLine?.category && creditLine?.category && debitLine.category === creditLine.category) {
+    return 'Transferencia';
+  }
+
+  return 'Movimiento';
+}
+
+export async function getMovementsHistory(client: SupabaseClientLike = supabaseAdmin): Promise<MovementsHistoryData> {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) {
+    return {
+      hasHousehold: false,
+      movements: []
+    };
+  }
+
+  const { data: groupsData } = await client
+    .from('transaction_groups')
+    .select('id,note,created_at')
+    .eq('household_id', householdId)
+    .order('created_at', { ascending: false });
+
+  const groups = (groupsData ?? []) as Array<{ id: string; note?: string | null; created_at: string }>;
+  if (!groups.length) {
+    return {
+      hasHousehold: true,
+      movements: []
+    };
+  }
+
+  const groupIds = groups.map((group) => group.id);
+  const { data: txData } = await client
+    .from('transactions')
+    .select('id,group_id,account_id,type,category,amount,happened_at')
+    .in('group_id', groupIds);
+
+  const transactions = (txData ?? []) as Array<{
+    id: string;
+    group_id: string;
+    account_id: string | null;
+    type: string;
+    category: string;
+    amount: string;
+    happened_at?: string;
+  }>;
+
+  const accountIds = Array.from(new Set(transactions.map((tx) => tx.account_id).filter((id): id is string => Boolean(id))));
+  const { data: accountsData } = accountIds.length
+    ? await client.from('accounts').select('id,name').in('id', accountIds)
+    : { data: [] as Array<{ id: string; name: string }> };
+
+  const accountById = new Map((accountsData ?? []).map((account: { id: string; name: string }) => [account.id, account.name]));
+
+  const movements = groups.map<MovementHistoryItem>((group) => {
+    const lines = transactions.filter((tx) => tx.group_id === group.id);
+    const debitLine = lines.find((tx) => tx.type === 'debit');
+    const creditLine = lines.find((tx) => tx.type === 'credit');
+    const happenedAt = lines.find((tx) => Boolean(tx.happened_at))?.happened_at ?? group.created_at;
+
+    return {
+      id: group.id,
+      fecha: happenedAt,
+      tipoMovimiento: inferMovementType(lines),
+      descripcion: group.note?.trim() ? group.note : 'Movimiento sin descripción',
+      monto: Number(debitLine?.amount ?? creditLine?.amount ?? 0),
+      cuentaOrigen: creditLine?.account_id ? accountById.get(creditLine.account_id) ?? null : null,
+      cuentaDestino: debitLine?.account_id ? accountById.get(debitLine.account_id) ?? null : null
+    };
+  });
+
+  movements.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
+
+  return {
+    hasHousehold: true,
+    movements
+  };
+}
+
 function findAccountIdByName(accounts: AccountOption[], name?: string) {
   if (!name) return null;
   const normalized = name.toLowerCase().trim();
@@ -591,4 +696,3 @@ export async function recalculateIndicators(householdId: string) {
     })
   });
 }
-
