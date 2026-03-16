@@ -14,8 +14,9 @@ export default function SimulacionPage() {
   return (
     <AppShell title="Simulador financiero">
       <Card>
-        <h2 className="font-semibold">Escenarios</h2>
-        <p className="mt-2 text-sm text-slate-600">Pagar deuda, fortalecer fondo, guardar efectivo, estrategia mixta y apartar meta.</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Modo demostración</p>
+        <h2 className="mt-2 font-semibold">Escenarios</h2>
+        <p className="mt-2 text-sm text-slate-600">Esta sección todavía usa datos de ejemplo y no refleja datos persistidos del hogar.</p>
         <p className="mt-4">{mensaje}</p>
       </Card>
     </AppShell>

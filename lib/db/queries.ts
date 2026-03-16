@@ -51,12 +51,44 @@ function logDebug(message: string, payload?: Record<string, unknown>) {
   console.info(`[onboarding-debug] ${message}`, payload ?? {});
 }
 
-function getActiveProfileSeedId() {
-  return process.env.DEV_PROFILE_ID || process.env.NEXT_PUBLIC_DEV_PROFILE_ID || DEV_FALLBACK_PROFILE_ID;
+async function getProfileIdFromExistingMembership(client: SupabaseClientLike) {
+  const { data, error } = await client
+    .from('household_members')
+    .select('profile_id')
+    .limit(1)
+    .maybeSingle();
+
+  if (error) return undefined;
+  return data?.profile_id as string | undefined;
+}
+
+async function getAnyExistingProfileId(client: SupabaseClientLike) {
+  const { data, error } = await client.from('profiles').select('id').limit(1).maybeSingle();
+  if (error) return undefined;
+  return data?.id as string | undefined;
+}
+
+async function resolveActiveProfileId(client: SupabaseClientLike) {
+  const fromEnv = process.env.DEV_PROFILE_ID || process.env.NEXT_PUBLIC_DEV_PROFILE_ID;
+  if (fromEnv) {
+    return { activeProfileId: fromEnv, source: 'env' as const };
+  }
+
+  const fromMembership = await getProfileIdFromExistingMembership(client);
+  if (fromMembership) {
+    return { activeProfileId: fromMembership, source: 'membership' as const };
+  }
+
+  const existingProfile = await getAnyExistingProfileId(client);
+  if (existingProfile) {
+    return { activeProfileId: existingProfile, source: 'profiles' as const };
+  }
+
+  return { activeProfileId: DEV_FALLBACK_PROFILE_ID, source: 'fallback' as const };
 }
 
 export async function getOrCreateActiveProfileId(client: SupabaseClientLike = supabase) {
-  const activeProfileId = getActiveProfileSeedId();
+  const { activeProfileId, source } = await resolveActiveProfileId(client);
 
   const { data: existingProfile, error: lookupError } = await client
     .from('profiles')
@@ -80,7 +112,7 @@ export async function getOrCreateActiveProfileId(client: SupabaseClientLike = su
     }
   }
 
-  logDebug('Perfil activo resuelto', { activeProfileId });
+  logDebug('Perfil activo resuelto', { activeProfileId, source });
   return activeProfileId;
 }
 
@@ -99,7 +131,11 @@ export async function getDefaultHouseholdId(client: SupabaseClientLike = supabas
   }
 
   const householdId = membership?.household_id as string | undefined;
-  logDebug('Hogar por perfil resuelto', { profileId, householdId: householdId ?? null });
+  logDebug('Hogar por perfil resuelto', {
+    profileId,
+    householdId: householdId ?? null,
+    readMode: householdId ? 'db_result' : 'fallback_empty'
+  });
   return householdId;
 }
 
@@ -245,6 +281,7 @@ export async function getDashboardData(client: SupabaseClientLike = supabase): P
   logDebug('Dashboard household resolution', { householdId: householdId ?? null });
 
   if (!householdId) {
+    logDebug('Dashboard fallback', { reason: 'no_household' });
     return {
       hasHousehold: false,
       monthlyOFH: 0,
@@ -263,7 +300,10 @@ export async function getDashboardData(client: SupabaseClientLike = supabase): P
     .limit(1)
     .maybeSingle();
 
+  logDebug('Dashboard snapshot lookup', { householdId, snapshotFound: Boolean(data?.payload) });
+
   if (!data?.payload) {
+    logDebug('Dashboard fallback', { reason: 'no_snapshot', householdId });
     return {
       hasHousehold: true,
       monthlyOFH: 0,
@@ -287,7 +327,10 @@ export async function getDashboardData(client: SupabaseClientLike = supabase): P
 
 export async function getAccountsForRegistration(client: SupabaseClientLike = supabase): Promise<AccountOption[]> {
   const householdId = await getDefaultHouseholdId(client);
-  if (!householdId) return [];
+  if (!householdId) {
+    logDebug('Cuentas lookup fallback', { reason: 'no_household' });
+    return [];
+  }
 
   const { data } = await client
     .from('accounts')
@@ -295,12 +338,15 @@ export async function getAccountsForRegistration(client: SupabaseClientLike = su
     .eq('household_id', householdId)
     .order('name');
 
-  return (data ?? []) as AccountOption[];
+  const accounts = (data ?? []) as AccountOption[];
+  logDebug('Cuentas lookup', { householdId, accountCount: accounts.length, readMode: 'db_result' });
+  return accounts;
 }
 
 export async function getRegistrationSetupStatus(client: SupabaseClientLike = supabase): Promise<RegistrationSetupStatus> {
   const householdId = await getDefaultHouseholdId(client);
   if (!householdId) {
+    logDebug('Registro setup fallback', { reason: 'no_household' });
     return {
       hasHousehold: false,
       accounts: []
@@ -308,6 +354,7 @@ export async function getRegistrationSetupStatus(client: SupabaseClientLike = su
   }
 
   const accounts = await getAccountsForRegistration(client);
+  logDebug('Registro setup', { householdId, accountCount: accounts.length, readMode: 'db_result' });
   return {
     hasHousehold: true,
     accounts

@@ -137,9 +137,35 @@ function createFakeSupabase() {
   };
 }
 
+const payload = {
+  householdName: 'Hogar prueba',
+  householdType: 'solo',
+  regularIncomes: [{ nombre: 'Sueldo', monto: 20000, periodicidad: 'mensual' }],
+  extraordinaryIncomes: [],
+  operationalAccounts: [{ nombre: 'Banco', saldoInicial: 900 }],
+  fundAccounts: [{ nombre: 'Fondo', saldoInicial: 1200 }],
+  debtAccounts: [{ nombre: 'Tarjeta', saldoInicial: 3000, pagoPeriodico: 500, diaPago: 10 }],
+  receivables: [{ nombre: 'Cliente', contraparte: 'Cliente', monto: 1500 }],
+  fixedExpenses: [{ nombre: 'Renta', monto: 7000, periodicidad: 'mensual' }],
+  variableSpending: [{ nombre: 'Comida', monto: 2500 }]
+};
+
 describe('onboarding persistence', () => {
   beforeEach(() => {
     vi.resetModules();
+  });
+
+  it('retorna resumen inicial tras guardar onboarding exitosamente', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));
+    const { createHouseholdOnboarding } = await import('@/lib/db/queries');
+
+    const result = await createHouseholdOnboarding(payload);
+
+    expect(result.indicators.monthlyOFH).toBeGreaterThan(0);
+    expect(result.indicators.weeklyOFH).toBeGreaterThan(0);
+    expect(result.indicators.regularIncomeMonthly).toBeGreaterThan(0);
+    expect(result.indicators.diagnoses.length).toBeGreaterThan(0);
   });
 
   it('crea hogar + cuentas + snapshot', async () => {
@@ -147,19 +173,7 @@ describe('onboarding persistence', () => {
     vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));
 
     const { createHouseholdOnboarding } = await import('@/lib/db/queries');
-
-    const result = await createHouseholdOnboarding({
-      householdName: 'Hogar prueba',
-      householdType: 'solo',
-      regularIncomes: [{ nombre: 'Sueldo', monto: 20000, periodicidad: 'mensual' }],
-      extraordinaryIncomes: [],
-      operationalAccounts: [{ nombre: 'Efectivo', saldoInicial: 500 }],
-      fundAccounts: [{ nombre: 'Fondo', saldoInicial: 1200 }],
-      debtAccounts: [{ nombre: 'Tarjeta', saldoInicial: 3000, pagoPeriodico: 500, diaPago: 10 }],
-      receivables: [{ nombre: 'Cliente', contraparte: 'Cliente', monto: 1500 }],
-      fixedExpenses: [{ nombre: 'Renta', monto: 7000, periodicidad: 'mensual' }],
-      variableSpending: [{ nombre: 'Comida', monto: 2500 }]
-    });
+    const result = await createHouseholdOnboarding(payload);
 
     expect(result.householdId).toBeTruthy();
     expect(fakeClient.db.households.length).toBe(1);
@@ -168,40 +182,37 @@ describe('onboarding persistence', () => {
     expect(fakeClient.db.financial_snapshots.length).toBe(1);
   });
 
-  it('resuelve mismo hogar para dashboard/cuentas/registro tras onboarding', async () => {
+  it('dashboard resuelve datos reales después de onboarding', async () => {
     const fakeClient = createFakeSupabase();
     vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));
 
-    const {
-      createHouseholdOnboarding,
-      getAccountsForRegistration,
-      getDashboardData,
-      getDefaultHouseholdId,
-      getRegistrationSetupStatus
-    } = await import('@/lib/db/queries');
+    const { createHouseholdOnboarding, getDashboardData } = await import('@/lib/db/queries');
+    await createHouseholdOnboarding(payload);
 
-    await createHouseholdOnboarding({
-      householdName: 'Hogar prueba',
-      householdType: 'solo',
-      regularIncomes: [{ nombre: 'Sueldo', monto: 20000, periodicidad: 'mensual' }],
-      extraordinaryIncomes: [],
-      operationalAccounts: [{ nombre: 'Banco', saldoInicial: 900 }],
-      fundAccounts: [],
-      debtAccounts: [],
-      receivables: [],
-      fixedExpenses: [{ nombre: 'Renta', monto: 7000, periodicidad: 'mensual' }],
-      variableSpending: [{ nombre: 'Comida', monto: 2500 }]
-    });
-
-    const householdId = await getDefaultHouseholdId();
     const dashboard = await getDashboardData();
-    const accounts = await getAccountsForRegistration();
-    const setup = await getRegistrationSetupStatus();
-
-    expect(householdId).toBeTruthy();
     expect(dashboard.hasHousehold).toBe(true);
     expect(dashboard.monthlyOFH).toBeGreaterThan(0);
+  });
+
+  it('cuentas resuelve cuentas reales después de onboarding', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));
+
+    const { createHouseholdOnboarding, getAccountsForRegistration } = await import('@/lib/db/queries');
+    await createHouseholdOnboarding(payload);
+
+    const accounts = await getAccountsForRegistration();
     expect(accounts.length).toBeGreaterThan(0);
+  });
+
+  it('registro setup deja de estar bloqueado después de onboarding', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient }));
+
+    const { createHouseholdOnboarding, getRegistrationSetupStatus } = await import('@/lib/db/queries');
+    await createHouseholdOnboarding(payload);
+
+    const setup = await getRegistrationSetupStatus();
     expect(setup.hasHousehold).toBe(true);
     expect(setup.accounts.length).toBeGreaterThan(0);
   });
