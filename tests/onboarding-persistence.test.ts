@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 class FakeQueryBuilder {
-  private action: 'select' | 'insert' | 'upsert' = 'select';
+  private action: 'select' | 'insert' | 'upsert' | 'update' = 'select';
   private filters: Array<{ field: string; value: unknown }> = [];
   private inFilters: Array<{ field: string; values: unknown[] }> = [];
   private limitValue: number | null = null;
@@ -24,6 +24,12 @@ class FakeQueryBuilder {
 
   upsert(payload: any) {
     this.action = 'upsert';
+    this.payload = payload;
+    return this;
+  }
+
+  update(payload: any) {
+    this.action = 'update';
     this.payload = payload;
     return this;
   }
@@ -68,8 +74,8 @@ class FakeQueryBuilder {
     const rows = this.db[this.table] ?? [];
 
     if (this.action === 'insert') {
-      const inserted = (Array.isArray(this.payload) ? this.payload : [this.payload]).map((item) => ({
-        id: item.id ?? `${this.table}-${rows.length + 1}`,
+      const inserted = (Array.isArray(this.payload) ? this.payload : [this.payload]).map((item, index) => ({
+        id: item.id ?? `${this.table}-${rows.length + index + 1}`,
         created_at: item.created_at ?? new Date().toISOString(),
         ...item
       }));
@@ -87,6 +93,14 @@ class FakeQueryBuilder {
       }
       this.db[this.table] = rows;
       return { data: this.pickColumns([item]), error: null };
+    }
+
+    if (this.action === 'update') {
+      const matches = (row: Record<string, unknown>) => this.filters.every((filter) => row[filter.field] === filter.value);
+      const updatedRows = rows.map((row) => (matches(row) ? { ...row, ...this.payload } : row));
+      this.db[this.table] = updatedRows;
+      const changed = updatedRows.filter((row) => matches(row));
+      return { data: this.pickColumns(changed), error: null };
     }
 
     let selectedRows = [...rows];
@@ -323,7 +337,7 @@ describe('onboarding persistence', () => {
 
     const dashboard = await getDashboardData();
     expect(dashboard.hasHousehold).toBe(true);
-    expect(dashboard.availableMoney).toBe(2100);
+    expect(dashboard.availableMoney).toBe(1800);
 
     delete process.env.DEV_PROFILE_ID;
   });
@@ -376,6 +390,115 @@ describe('onboarding persistence', () => {
     const result = await getMovementsHistory();
     expect(result.hasHousehold).toBe(true);
     expect(result.movements).toEqual([]);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+
+  it('actualiza saldos y conserva OFH de configuración tras gasto e ingreso', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createHouseholdOnboarding, saveConversationalTransaction } = await import('@/lib/db/queries');
+
+    process.env.DEV_PROFILE_ID = 'profile-balance';
+
+    await createHouseholdOnboarding({
+      householdName: 'Caso controlado',
+      householdType: 'familia',
+      regularIncomes: [{ nombre: 'Sueldo', monto: 10000, periodicidad: 'mensual' }],
+      extraordinaryIncomes: [],
+      operationalAccounts: [
+        { nombre: 'efectivo', saldoInicial: 1000 },
+        { nombre: 'banco', saldoInicial: 4000 }
+      ],
+      fundAccounts: [],
+      debtAccounts: [],
+      receivables: [],
+      fixedExpenses: [{ nombre: 'Servicios', monto: 500, periodicidad: 'mensual' }],
+      variableSpending: [{ nombre: 'Gasto variable', monto: 3000 }]
+    });
+
+    await saveConversationalTransaction({
+      action: 'gasto',
+      amount: 600,
+      category: 'alimentos',
+      description: 'Gasto en efectivo',
+      sourceAccount: 'efectivo',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok'
+    });
+
+    const efectivo = fakeClient.db.accounts.find((acc) => acc.name === 'efectivo');
+    expect(Number(efectivo.balance)).toBe(400);
+
+    const firstSnapshot = JSON.parse(fakeClient.db.financial_snapshots.at(-1).payload);
+    expect(firstSnapshot.monthlyOFH).toBe(3850);
+    expect(firstSnapshot.availableMoney).toBe(4400);
+
+    await saveConversationalTransaction({
+      action: 'ingreso',
+      amount: 2000,
+      category: 'ingreso_general',
+      description: 'Ingreso a banco',
+      sourceAccount: undefined,
+      destinationAccount: 'banco',
+      missingFields: [],
+      humanConfirmation: 'ok'
+    });
+
+    const banco = fakeClient.db.accounts.find((acc) => acc.name === 'banco');
+    expect(Number(banco.balance)).toBe(6000);
+
+    const secondSnapshot = JSON.parse(fakeClient.db.financial_snapshots.at(-1).payload);
+    expect(secondSnapshot.monthlyOFH).toBe(3850);
+    expect(secondSnapshot.availableMoney).toBe(6400);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('snapshot post-transacción mantiene estructura financiera completa', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-snapshot', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-snapshot', profile_id: 'profile-snapshot', household_id: 'house-snapshot' });
+    fakeClient.db.accounts.push(
+      { id: 'acc-op', household_id: 'house-snapshot', name: 'Caja', type: 'operativa', balance: '5000' },
+      { id: 'acc-debt', household_id: 'house-snapshot', name: 'Tarjeta Oro', type: 'deuda', balance: '1000' },
+      { id: 'acc-fondo', household_id: 'house-snapshot', name: 'Fondo', type: 'fondo', balance: '2000' }
+    );
+    fakeClient.db.income_sources.push({ id: 'inc-1', household_id: 'house-snapshot', name: 'Sueldo (mensual)', amount: '10000', recurring: true });
+    fakeClient.db.obligations.push({ id: 'ob-1', household_id: 'house-snapshot', name: 'Renta', amount: '2000' });
+    fakeClient.db.variable_spending_profiles.push({ id: 'var-1', household_id: 'house-snapshot', category: 'Comida', monthly_estimate: '1500' });
+
+    process.env.DEV_PROFILE_ID = 'profile-snapshot';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { saveConversationalTransaction } = await import('@/lib/db/queries');
+
+    await saveConversationalTransaction({
+      action: 'gasto',
+      amount: 300,
+      category: 'gasto_variable',
+      description: 'Compra',
+      sourceAccount: 'caja',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok'
+    });
+
+    const snapshot = JSON.parse(fakeClient.db.financial_snapshots.at(-1).payload);
+
+    expect(snapshot.monthlyOFH).toBeGreaterThan(0);
+    expect(snapshot.weeklyOFH).toBeGreaterThan(0);
+    expect(snapshot.regularIncomeMonthly).toBe(10000);
+    expect(snapshot.annualAverageMonthlyIncome).toBe(10000);
+    expect(snapshot.immediateMRF).toBeGreaterThan(0);
+    expect(snapshot.extendedMRF).toBeGreaterThan(0);
+    expect(snapshot.availableMoney).toBe(4700);
+    expect(Array.isArray(snapshot.diagnoses)).toBe(true);
+    expect(Array.isArray(snapshot.recommendations)).toBe(true);
+    expect(snapshot.financialInput.fixedExpenses).toBe(2000);
+    expect(snapshot.financialInput.avgVariableExpenses).toBe(1500);
+    expect(snapshot.totals.totalExpenses).toBeGreaterThan(0);
 
     delete process.env.DEV_PROFILE_ID;
   });
