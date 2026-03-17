@@ -1,7 +1,8 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useMemo, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
@@ -24,6 +25,8 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const router = useRouter();
+  const isSavingRef = useRef(false);
 
   const isReadyToConfirm = useMemo(() => intent && intent.missingFields.length === 0, [intent]);
   const hasAccounts = accounts.length > 0;
@@ -68,17 +71,21 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
   };
 
   const handleSave = () => {
-    if (!intent || intent.missingFields.length > 0) return;
+    if (!intent || intent.missingFields.length > 0 || isSavingRef.current) return;
 
     setError(null);
+    isSavingRef.current = true;
     startTransition(async () => {
       try {
-        await saveInterpretedTransactionAction(intent);
+        const result = await saveInterpretedTransactionAction(intent);
         setInput('');
         setIntent(null);
-        setSuccessMessage('Movimiento registrado correctamente.');
+        setSuccessMessage(result.message);
+        router.refresh();
       } catch (err) {
         setError(err instanceof Error ? err.message : 'No se pudo guardar el movimiento.');
+      } finally {
+        isSavingRef.current = false;
       }
     });
   };
@@ -97,7 +104,7 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
 
       <div className="mt-4">
         <Button onClick={handleInterpret} disabled={isPending || !input.trim()}>
-          Interpretar movimiento
+          {isPending ? 'Interpretando...' : 'Interpretar movimiento'}
         </Button>
       </div>
 
@@ -151,7 +158,7 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
           </ul>
           <p className="mt-3 text-sm font-medium text-slate-900">{intent.humanConfirmation}</p>
           <div className="mt-4 flex gap-2">
-            <Button onClick={handleSave} disabled={isPending}>Confirmar</Button>
+            <Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Confirmar'}</Button>
             <Button variant="outline" onClick={() => setIntent(null)} disabled={isPending}>Cancelar</Button>
           </div>
         </div>

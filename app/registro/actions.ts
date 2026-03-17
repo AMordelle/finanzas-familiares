@@ -16,5 +16,12 @@ export async function saveInterpretedTransactionAction(payload: unknown) {
   const intent = transactionIntentSchema.parse(payload);
   await saveConversationalTransaction(intent);
   revalidatePath('/dashboard');
+  revalidatePath('/movimientos');
+  revalidatePath('/cuentas');
   revalidatePath('/registro');
+
+  return {
+    success: true,
+    message: 'Movimiento registrado correctamente.'
+  };
 }
