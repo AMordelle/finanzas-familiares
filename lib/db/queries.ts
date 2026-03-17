@@ -1,6 +1,16 @@
 import { z } from 'zod';
 import { supabase, supabaseAdmin } from '@/lib/db/supabase';
-import { buildRecommendations, buildTopDiagnoses, calculateAvailableMoney, calculateMonthlyOFH, calculateWeeklyOFH } from '@/lib/financial/engine';
+import {
+  buildRecommendations,
+  buildTopDiagnoses,
+  calculateAnnualAverageIncome,
+  calculateAvailableMoney,
+  calculateExtendedMRF,
+  calculateImmediateMRF,
+  calculateMonthlyOFH,
+  calculateRegularIncome,
+  calculateWeeklyOFH
+} from '@/lib/financial/engine';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
 
@@ -49,6 +59,11 @@ type JournalLine = {
   type: 'debit' | 'credit';
   category: string;
   amount: number;
+};
+
+type AccountState = AccountOption & {
+  householdId: string;
+  balance: number;
 };
 
 type DashboardData = {
@@ -533,6 +548,121 @@ function findAccountIdByName(accounts: AccountOption[], name?: string) {
   return account?.id ?? null;
 }
 
+function toMonthlyAmount(amount: number, periodicity = 'mensual') {
+  const periodicityFactor: Record<string, number> = {
+    semanal: 52 / 12,
+    quincenal: 2,
+    mensual: 1,
+    bimestral: 0.5,
+    trimestral: 1 / 3,
+    anual: 1 / 12
+  };
+
+  return amount * (periodicityFactor[periodicity] ?? 1);
+}
+
+function inferPeriodicityFromIncomeName(name: string) {
+  const match = name.match(/\((semanal|quincenal|mensual|bimestral|trimestral|anual)\)/i);
+  return match?.[1]?.toLowerCase() ?? 'mensual';
+}
+
+function applyDelta(deltaByAccountId: Map<string, number>, accountId: string | null | undefined, delta: number) {
+  if (!accountId || delta === 0) return;
+  deltaByAccountId.set(accountId, (deltaByAccountId.get(accountId) ?? 0) + delta);
+}
+
+function buildAccountBalanceDeltas(intent: TransactionIntent, source?: AccountState, destination?: AccountState) {
+  const deltaByAccountId = new Map<string, number>();
+
+  switch (intent.action) {
+    case 'gasto':
+      if (source?.type === 'deuda') {
+        applyDelta(deltaByAccountId, source.id, intent.amount);
+      } else {
+        applyDelta(deltaByAccountId, source?.id, -intent.amount);
+      }
+      break;
+    case 'ingreso':
+      applyDelta(deltaByAccountId, destination?.id, intent.amount);
+      break;
+    case 'transferencia':
+      applyDelta(deltaByAccountId, source?.id, -intent.amount);
+      applyDelta(deltaByAccountId, destination?.id, intent.amount);
+      break;
+    case 'pago_deuda':
+      if (source && source.type !== 'deuda') {
+        applyDelta(deltaByAccountId, source.id, -intent.amount);
+      }
+      if (destination?.type === 'deuda') {
+        applyDelta(deltaByAccountId, destination.id, -intent.amount);
+      } else if (source?.type === 'deuda') {
+        applyDelta(deltaByAccountId, source.id, -intent.amount);
+      }
+      break;
+    case 'prestamo_otorgado':
+      applyDelta(deltaByAccountId, source?.id, -intent.amount);
+      if (destination?.type === 'por_cobrar') {
+        applyDelta(deltaByAccountId, destination.id, intent.amount);
+      }
+      break;
+    case 'pago_recibido':
+      applyDelta(deltaByAccountId, destination?.id, intent.amount);
+      if (source?.type === 'por_cobrar') {
+        applyDelta(deltaByAccountId, source.id, -intent.amount);
+      }
+      break;
+    case 'objetivo_aporte':
+      applyDelta(deltaByAccountId, source?.id, -intent.amount);
+      applyDelta(deltaByAccountId, destination?.id, intent.amount);
+      break;
+    default:
+      break;
+  }
+
+  return deltaByAccountId;
+}
+
+async function getHouseholdAccounts(householdId: string) {
+  const { data, error } = await supabaseAdmin
+    .from('accounts')
+    .select('id,name,type,balance,household_id')
+    .eq('household_id', householdId);
+
+  if (error) {
+    throw new Error(`No fue posible leer cuentas del hogar: ${error.message}`);
+  }
+
+  return ((data ?? []) as Array<{ id: string; name: string; type: string; balance: string; household_id: string }>).map((row) => ({
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    householdId: row.household_id,
+    balance: Number(row.balance)
+  }));
+}
+
+async function applyAccountBalanceUpdates(householdId: string, intent: TransactionIntent) {
+  const accounts = await getHouseholdAccounts(householdId);
+  const source = accounts.find((account) => findAccountIdByName(accounts, intent.sourceAccount) === account.id);
+  const destination = accounts.find((account) => findAccountIdByName(accounts, intent.destinationAccount) === account.id);
+  const deltas = buildAccountBalanceDeltas(intent, source, destination);
+
+  for (const [accountId, delta] of deltas.entries()) {
+    const account = accounts.find((item) => item.id === accountId);
+    if (!account) continue;
+
+    const { error } = await supabaseAdmin
+      .from('accounts')
+      .update({ balance: (account.balance + delta).toFixed(2) })
+      .eq('id', account.id)
+      .eq('household_id', householdId);
+
+    if (error) {
+      throw new Error(`No fue posible actualizar saldo de la cuenta ${account.name}: ${error.message}`);
+    }
+  }
+}
+
 function buildJournalEntries(intent: TransactionIntent, accounts: AccountOption[]): JournalLine[] {
   const sourceId = findAccountIdByName(accounts, intent.sourceAccount);
   const destinationId = findAccountIdByName(accounts, intent.destinationAccount);
@@ -615,22 +745,17 @@ export async function saveConversationalTransaction(intent: TransactionIntent) {
     throw new Error(txError.message);
   }
 
+  await applyAccountBalanceUpdates(householdId, intent);
   await recalculateIndicators(householdId);
 }
 
 export async function recalculateIndicators(householdId: string) {
   const { data: groups } = await supabaseAdmin.from('transaction_groups').select('id').eq('household_id', householdId);
   const groupIds = (groups ?? []).map((group) => group.id as string);
-
-  let parsed: Array<{ type: string; category: string; amount: string }> = [];
-  if (groupIds.length > 0) {
-    const { data: transactionsData } = await supabaseAdmin
-      .from('transactions')
-      .select('type,category,amount')
-      .in('group_id', groupIds);
-
-    parsed = (transactionsData ?? []) as Array<{ type: string; category: string; amount: string }>;
-  }
+  const { data: transactionsData } = groupIds.length
+    ? await supabaseAdmin.from('transactions').select('type,category,amount').in('group_id', groupIds)
+    : { data: [] as Array<{ type: string; category: string; amount: string }> };
+  const parsed = (transactionsData ?? []) as Array<{ type: string; category: string; amount: string }>;
 
   const totalExpenses = parsed
     .filter((item) => item.type === 'debit' && item.category !== 'entrada_cuenta')
@@ -640,44 +765,85 @@ export async function recalculateIndicators(householdId: string) {
     .filter((item) => item.type === 'credit' && item.category.startsWith('ingreso'))
     .reduce((acc, item) => acc + Number(item.amount), 0);
 
-  const { data: accounts } = await supabaseAdmin
-    .from('accounts')
-    .select('type,balance')
-    .eq('household_id', householdId);
-
-  const accountList = (accounts ?? []) as Array<{ type: string; balance: string }>;
+  const accountList = await getHouseholdAccounts(householdId);
   const operativeMoney = accountList
     .filter((item) => item.type === 'operativa')
-    .reduce((acc, item) => acc + Number(item.balance), 0);
+    .reduce((acc, item) => acc + item.balance, 0);
   const liquidFunds = accountList
     .filter((item) => item.type === 'fondo')
-    .reduce((acc, item) => acc + Number(item.balance), 0);
+    .reduce((acc, item) => acc + item.balance, 0);
   const liquidInvestments = accountList
     .filter((item) => item.type === 'inversion')
-    .reduce((acc, item) => acc + Number(item.balance), 0);
+    .reduce((acc, item) => acc + item.balance, 0);
   const debtBalance = accountList
     .filter((item) => item.type === 'deuda')
-    .reduce((acc, item) => acc + Number(item.balance), 0);
+    .reduce((acc, item) => acc + item.balance, 0);
+
+  const { data: incomeSources } = await supabaseAdmin
+    .from('income_sources')
+    .select('name,amount,recurring')
+    .eq('household_id', householdId);
+
+  const incomes = (incomeSources ?? []) as Array<{ name: string; amount: string; recurring: boolean }>;
+  const regularIncomeMonthly = calculateRegularIncome(
+    incomes
+      .filter((item) => item.recurring)
+      .reduce((acc, item) => acc + toMonthlyAmount(Number(item.amount), inferPeriodicityFromIncomeName(item.name)), 0)
+  );
+  const annualExtraIncome = incomes
+    .filter((item) => !item.recurring)
+    .reduce((acc, item) => acc + Number(item.amount), 0);
+
+  const { data: obligations } = await supabaseAdmin
+    .from('obligations')
+    .select('name,amount')
+    .eq('household_id', householdId);
+  const obligationsList = (obligations ?? []) as Array<{ name: string; amount: string }>;
+  const debtPayments = obligationsList
+    .filter((item) => item.name.toLowerCase().startsWith('pago '))
+    .reduce((acc, item) => acc + Number(item.amount), 0);
+  const fixedExpenses = obligationsList
+    .filter((item) => !item.name.toLowerCase().startsWith('pago '))
+    .reduce((acc, item) => acc + Number(item.amount), 0);
+
+  const { data: variableProfiles } = await supabaseAdmin
+    .from('variable_spending_profiles')
+    .select('monthly_estimate')
+    .eq('household_id', householdId);
+  const variableSeries = ((variableProfiles ?? []) as Array<{ monthly_estimate: string }>).map((item) => Number(item.monthly_estimate));
+  const avgVariableExpenses = variableSeries.reduce((acc, value) => acc + value, 0);
+
+  const { data: receivables } = await supabaseAdmin
+    .from('receivables')
+    .select('pending_amount,status')
+    .eq('household_id', householdId);
+  const receivablesOutstanding = ((receivables ?? []) as Array<{ pending_amount: string; status: string }>)
+    .filter((item) => item.status !== 'cerrado')
+    .reduce((acc, item) => acc + Number(item.pending_amount), 0);
 
   const financialInput = {
-    fixedExpenses: totalExpenses,
-    avgVariableExpenses: 0,
-    debtPayments: 0,
+    fixedExpenses,
+    avgVariableExpenses,
+    debtPayments,
     periodicExpensesMonthlyEquivalent: 0,
     safetyMarginPct: 10,
-    regularIncomeMonthly: totalIncome,
-    annualExtraIncome: 0,
+    regularIncomeMonthly,
+    annualExtraIncome,
     operativeMoney,
     liquidFunds,
     liquidInvestments,
     debtBalance,
-    totalFixedExpenses: totalExpenses,
-    variableSeries: [],
-    reservesUsageLastMonth: 0
+    totalFixedExpenses: fixedExpenses,
+    variableSeries,
+    reservesUsageLastMonth: 0,
+    receivablesOutstanding
   };
 
   const monthlyOFH = calculateMonthlyOFH(financialInput);
   const weeklyOFH = calculateWeeklyOFH(monthlyOFH);
+  const annualAverageMonthlyIncome = calculateAnnualAverageIncome(regularIncomeMonthly, annualExtraIncome);
+  const immediateMRF = calculateImmediateMRF(monthlyOFH, operativeMoney, liquidFunds);
+  const extendedMRF = calculateExtendedMRF(monthlyOFH, operativeMoney, liquidFunds, liquidInvestments);
   const availableMoney = calculateAvailableMoney(operativeMoney);
   const diagnoses = buildTopDiagnoses(financialInput);
   const recommendations = buildRecommendations(diagnoses);
@@ -688,11 +854,15 @@ export async function recalculateIndicators(householdId: string) {
     payload: JSON.stringify({
       monthlyOFH,
       weeklyOFH,
+      regularIncomeMonthly,
+      annualAverageMonthlyIncome,
+      immediateMRF,
+      extendedMRF,
       availableMoney,
       diagnoses,
       recommendations,
       financialInput,
-      totals: { totalIncome, totalExpenses }
+      totals: { totalIncome, totalExpenses, receivablesOutstanding }
     })
   });
 }
