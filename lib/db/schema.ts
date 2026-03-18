@@ -1,7 +1,19 @@
 import { relations } from 'drizzle-orm';
 import { boolean, integer, numeric, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
-export const accountTypeEnum = pgEnum('account_type', ['operativa', 'fondo', 'inversion', 'deuda', 'por_cobrar']);
+export const accountTypeEnum = pgEnum('account_type', [
+  'operativa',
+  'fondo',
+  'inversion',
+  'deuda',
+  'por_cobrar',
+  'operational_cash',
+  'savings_fund',
+  'investment',
+  'credit_card',
+  'loan',
+  'receivable'
+]);
 
 export const profiles = pgTable('profiles', {
   id: uuid('id').primaryKey(),
@@ -27,7 +39,11 @@ export const accounts = pgTable('accounts', {
   householdId: uuid('household_id').references(() => households.id).notNull(),
   name: text('name').notNull(),
   type: accountTypeEnum('type').notNull(),
-  balance: numeric('balance', { precision: 14, scale: 2 }).notNull().default('0')
+  balance: numeric('balance', { precision: 14, scale: 2 }).notNull().default('0'),
+  periodicPayment: numeric('periodic_payment', { precision: 14, scale: 2 }),
+  paymentDay: integer('payment_day'),
+  counterparty: text('counterparty'),
+  isActive: boolean('is_active').notNull().default(true)
 });
 
 export const incomeSources = pgTable('income_sources', {
