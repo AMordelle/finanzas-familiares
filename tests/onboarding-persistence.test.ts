@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 class FakeQueryBuilder {
-  private action: 'select' | 'insert' | 'upsert' | 'update' = 'select';
+  private action: 'select' | 'insert' | 'upsert' | 'update' | 'delete' = 'select';
   private filters: Array<{ field: string; value: unknown }> = [];
   private inFilters: Array<{ field: string; values: unknown[] }> = [];
   private limitValue: number | null = null;
@@ -31,6 +31,11 @@ class FakeQueryBuilder {
   update(payload: any) {
     this.action = 'update';
     this.payload = payload;
+    return this;
+  }
+
+  delete() {
+    this.action = 'delete';
     return this;
   }
 
@@ -101,6 +106,13 @@ class FakeQueryBuilder {
       this.db[this.table] = updatedRows;
       const changed = updatedRows.filter((row) => matches(row));
       return { data: this.pickColumns(changed), error: null };
+    }
+
+    if (this.action === 'delete') {
+      const matches = (row: Record<string, unknown>) => this.filters.every((filter) => row[filter.field] === filter.value);
+      const deletedRows = rows.filter((row) => matches(row));
+      this.db[this.table] = rows.filter((row) => !matches(row));
+      return { data: this.pickColumns(deletedRows), error: null };
     }
 
     let selectedRows = [...rows];
@@ -499,6 +511,202 @@ describe('onboarding persistence', () => {
     expect(snapshot.financialInput.fixedExpenses).toBe(2000);
     expect(snapshot.financialInput.avgVariableExpenses).toBe(1500);
     expect(snapshot.totals.totalExpenses).toBeGreaterThan(0);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('eliminar gasto en efectivo revierte balances y snapshot sin alterar OFH', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createHouseholdOnboarding, saveConversationalTransaction, deleteMovement } = await import('@/lib/db/queries');
+
+    process.env.DEV_PROFILE_ID = 'profile-delete-expense';
+
+    await createHouseholdOnboarding({
+      householdName: 'Caso A',
+      householdType: 'familia',
+      regularIncomes: [{ nombre: 'Sueldo', monto: 10000, periodicidad: 'mensual' }],
+      extraordinaryIncomes: [],
+      operationalAccounts: [{ nombre: 'efectivo', saldoInicial: 1000 }, { nombre: 'banco', saldoInicial: 4000 }],
+      fundAccounts: [],
+      debtAccounts: [],
+      receivables: [],
+      fixedExpenses: [{ nombre: 'Servicios', monto: 500, periodicidad: 'mensual' }],
+      variableSpending: [{ nombre: 'Gasto variable', monto: 3000 }]
+    });
+
+    await saveConversationalTransaction({
+      action: 'gasto',
+      amount: 600,
+      category: 'alimentos',
+      description: 'Gasto efectivo',
+      sourceAccount: 'efectivo',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok'
+    });
+
+    const snapshotAfterSave = JSON.parse(fakeClient.db.financial_snapshots.at(-1).payload);
+    expect(snapshotAfterSave.availableMoney).toBe(4400);
+
+    const movementId = fakeClient.db.transaction_groups.at(-1).id;
+    await deleteMovement({ movementId });
+
+    const efectivo = fakeClient.db.accounts.find((acc) => acc.name === 'efectivo');
+    expect(Number(efectivo.balance)).toBe(1000);
+
+    const snapshotAfterDelete = JSON.parse(fakeClient.db.financial_snapshots.at(-1).payload);
+    expect(snapshotAfterDelete.availableMoney).toBe(5000);
+    expect(snapshotAfterDelete.monthlyOFH).toBe(snapshotAfterSave.monthlyOFH);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('editar monto de gasto en efectivo corrige balances y snapshot', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createHouseholdOnboarding, saveConversationalTransaction, updateMovement } = await import('@/lib/db/queries');
+
+    process.env.DEV_PROFILE_ID = 'profile-edit-expense';
+
+    await createHouseholdOnboarding({
+      householdName: 'Caso B',
+      householdType: 'familia',
+      regularIncomes: [{ nombre: 'Sueldo', monto: 10000, periodicidad: 'mensual' }],
+      extraordinaryIncomes: [],
+      operationalAccounts: [{ nombre: 'efectivo', saldoInicial: 1000 }, { nombre: 'banco', saldoInicial: 4000 }],
+      fundAccounts: [],
+      debtAccounts: [],
+      receivables: [],
+      fixedExpenses: [{ nombre: 'Servicios', monto: 500, periodicidad: 'mensual' }],
+      variableSpending: [{ nombre: 'Gasto variable', monto: 3000 }]
+    });
+
+    await saveConversationalTransaction({
+      action: 'gasto',
+      amount: 600,
+      category: 'alimentos',
+      description: 'Gasto efectivo',
+      sourceAccount: 'efectivo',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok'
+    });
+
+    const movementId = fakeClient.db.transaction_groups.at(-1).id;
+    const efectivoId = fakeClient.db.accounts.find((acc) => acc.name === 'efectivo').id;
+    await updateMovement({
+      movementId,
+      description: 'Gasto corregido',
+      amount: 300,
+      sourceAccountId: efectivoId,
+      destinationAccountId: null
+    });
+
+    const efectivo = fakeClient.db.accounts.find((acc) => acc.name === 'efectivo');
+    expect(Number(efectivo.balance)).toBe(700);
+
+    const snapshot = JSON.parse(fakeClient.db.financial_snapshots.at(-1).payload);
+    expect(snapshot.availableMoney).toBe(4700);
+    expect(snapshot.monthlyOFH).toBeGreaterThan(0);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('eliminar ingreso corrige banco y mantiene OFH estable', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createHouseholdOnboarding, saveConversationalTransaction, deleteMovement } = await import('@/lib/db/queries');
+
+    process.env.DEV_PROFILE_ID = 'profile-delete-income';
+
+    await createHouseholdOnboarding({
+      householdName: 'Caso C',
+      householdType: 'familia',
+      regularIncomes: [{ nombre: 'Sueldo', monto: 10000, periodicidad: 'mensual' }],
+      extraordinaryIncomes: [],
+      operationalAccounts: [{ nombre: 'efectivo', saldoInicial: 1000 }, { nombre: 'banco', saldoInicial: 4000 }],
+      fundAccounts: [],
+      debtAccounts: [],
+      receivables: [],
+      fixedExpenses: [{ nombre: 'Servicios', monto: 500, periodicidad: 'mensual' }],
+      variableSpending: [{ nombre: 'Gasto variable', monto: 3000 }]
+    });
+
+    await saveConversationalTransaction({
+      action: 'ingreso',
+      amount: 2000,
+      category: 'ingreso_general',
+      description: 'Ingreso banco',
+      sourceAccount: undefined,
+      destinationAccount: 'banco',
+      missingFields: [],
+      humanConfirmation: 'ok'
+    });
+
+    const snapshotAfterSave = JSON.parse(fakeClient.db.financial_snapshots.at(-1).payload);
+    const banco = fakeClient.db.accounts.find((acc) => acc.name === 'banco');
+    expect(Number(banco.balance)).toBe(6000);
+
+    const movementId = fakeClient.db.transaction_groups.at(-1).id;
+    await deleteMovement({ movementId });
+
+    const bancoAfterDelete = fakeClient.db.accounts.find((acc) => acc.name === 'banco');
+    expect(Number(bancoAfterDelete.balance)).toBe(4000);
+    const snapshotAfterDelete = JSON.parse(fakeClient.db.financial_snapshots.at(-1).payload);
+    expect(snapshotAfterDelete.availableMoney).toBe(5000);
+    expect(snapshotAfterDelete.monthlyOFH).toBe(snapshotAfterSave.monthlyOFH);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('dashboard mantiene valores numéricos seguros después de editar y eliminar', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createHouseholdOnboarding, saveConversationalTransaction, updateMovement, deleteMovement, getDashboardData } = await import('@/lib/db/queries');
+
+    process.env.DEV_PROFILE_ID = 'profile-dashboard-safe';
+
+    await createHouseholdOnboarding({
+      householdName: 'Caso D',
+      householdType: 'familia',
+      regularIncomes: [{ nombre: 'Sueldo', monto: 10000, periodicidad: 'mensual' }],
+      extraordinaryIncomes: [],
+      operationalAccounts: [{ nombre: 'efectivo', saldoInicial: 1000 }, { nombre: 'banco', saldoInicial: 4000 }],
+      fundAccounts: [],
+      debtAccounts: [],
+      receivables: [],
+      fixedExpenses: [{ nombre: 'Servicios', monto: 500, periodicidad: 'mensual' }],
+      variableSpending: [{ nombre: 'Gasto variable', monto: 3000 }]
+    });
+
+    await saveConversationalTransaction({
+      action: 'gasto',
+      amount: 600,
+      category: 'alimentos',
+      description: 'Gasto efectivo',
+      sourceAccount: 'efectivo',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok'
+    });
+
+    const movementId = fakeClient.db.transaction_groups.at(-1).id;
+    const efectivoId = fakeClient.db.accounts.find((acc) => acc.name === 'efectivo').id;
+    await updateMovement({
+      movementId,
+      description: 'Gasto corregido',
+      amount: 300,
+      sourceAccountId: efectivoId,
+      destinationAccountId: null
+    });
+
+    await deleteMovement({ movementId });
+    const dashboard = await getDashboardData();
+
+    expect(Number.isFinite(dashboard.monthlyOFH)).toBe(true);
+    expect(Number.isFinite(dashboard.weeklyOFH)).toBe(true);
+    expect(Number.isFinite(dashboard.availableMoney)).toBe(true);
 
     delete process.env.DEV_PROFILE_ID;
   });

@@ -28,6 +28,18 @@ export const conversationalPayloadSchema = z.object({
   confirmed: z.boolean().default(false)
 });
 
+export const movementEditSchema = z.object({
+  movementId: z.string().min(1),
+  description: z.string().trim().min(1, 'La descripción es obligatoria.'),
+  amount: z.coerce.number().positive('El monto debe ser mayor a 0.'),
+  sourceAccountId: z.string().min(1).nullable().optional(),
+  destinationAccountId: z.string().min(1).nullable().optional()
+});
+
+export const movementDeleteSchema = z.object({
+  movementId: z.string().min(1)
+});
+
 export type AccountOption = {
   id: string;
   name: string;
@@ -47,6 +59,8 @@ export type MovementHistoryItem = {
   monto: number;
   cuentaOrigen: string | null;
   cuentaDestino: string | null;
+  puedeEditar: boolean;
+  motivoNoEditable: string | null;
 };
 
 export type MovementsHistoryData = {
@@ -59,6 +73,15 @@ type JournalLine = {
   type: 'debit' | 'credit';
   category: string;
   amount: number;
+};
+
+type SupportedMovementAction = TransactionIntent['action'];
+
+type StoredMovementDescriptor = {
+  action: SupportedMovementAction;
+  amount: number;
+  sourceAccountId: string | null;
+  destinationAccountId: string | null;
 };
 
 type AccountState = AccountOption & {
@@ -470,6 +493,25 @@ function inferMovementType(lines: Array<{ type: string; category: string }>) {
   return 'Movimiento';
 }
 
+function inferMovementAction(lines: Array<{ type: string; category: string }>): SupportedMovementAction | null {
+  const has = (type: string, category: string) => lines.some((line) => line.type === type && line.category === category);
+
+  if (has('debit', 'deuda')) return 'pago_deuda';
+  if (has('debit', 'por_cobrar')) return 'prestamo_otorgado';
+  if (has('credit', 'por_cobrar')) return 'pago_recibido';
+  if (has('debit', 'ahorro_meta')) return 'objetivo_aporte';
+  if (has('debit', 'entrada_cuenta')) return 'ingreso';
+  if (has('credit', 'salida_cuenta')) return 'gasto';
+
+  const debitLine = lines.find((line) => line.type === 'debit');
+  const creditLine = lines.find((line) => line.type === 'credit');
+  if (debitLine?.category && creditLine?.category && debitLine.category === creditLine.category) {
+    return 'transferencia';
+  }
+
+  return null;
+}
+
 export async function getMovementsHistory(client: SupabaseClientLike = supabaseAdmin): Promise<MovementsHistoryData> {
   const householdId = await getDefaultHouseholdId(client);
   if (!householdId) {
@@ -529,7 +571,9 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
       descripcion: group.note?.trim() ? group.note : 'Movimiento sin descripción',
       monto: Number(debitLine?.amount ?? creditLine?.amount ?? 0),
       cuentaOrigen: creditLine?.account_id ? accountById.get(creditLine.account_id) ?? null : null,
-      cuentaDestino: debitLine?.account_id ? accountById.get(debitLine.account_id) ?? null : null
+      cuentaDestino: debitLine?.account_id ? accountById.get(debitLine.account_id) ?? null : null,
+      puedeEditar: Boolean(inferMovementAction(lines)),
+      motivoNoEditable: inferMovementAction(lines) ? null : 'Este tipo de movimiento aún no se puede editar de forma segura.'
     };
   });
 
@@ -641,15 +685,59 @@ async function getHouseholdAccounts(householdId: string) {
   }));
 }
 
-async function applyAccountBalanceUpdates(householdId: string, intent: TransactionIntent) {
+function resolveStoredMovementDescriptor(lines: Array<{ type: string; category: string; account_id: string | null; amount: string }>): StoredMovementDescriptor | null {
+  const action = inferMovementAction(lines);
+  if (!action) return null;
+
+  const debitLine = lines.find((line) => line.type === 'debit');
+  const creditLine = lines.find((line) => line.type === 'credit');
+  const amount = Number(debitLine?.amount ?? creditLine?.amount ?? 0);
+
+  return {
+    action,
+    amount,
+    sourceAccountId: creditLine?.account_id ?? null,
+    destinationAccountId: debitLine?.account_id ?? null
+  };
+}
+
+function buildBalanceDeltasFromStoredMovement(
+  movement: StoredMovementDescriptor,
+  accounts: AccountState[],
+  multiplier: 1 | -1
+) {
+  const source = movement.sourceAccountId ? accounts.find((account) => account.id === movement.sourceAccountId) : undefined;
+  const destination = movement.destinationAccountId ? accounts.find((account) => account.id === movement.destinationAccountId) : undefined;
+
+  const deltas = buildAccountBalanceDeltas(
+    {
+      action: movement.action,
+      amount: movement.amount,
+      category: movement.action,
+      description: 'movimiento',
+      sourceAccount: source?.name,
+      destinationAccount: destination?.name,
+      missingFields: [],
+      humanConfirmation: 'movimiento'
+    },
+    source,
+    destination
+  );
+
+  for (const [accountId, delta] of deltas.entries()) {
+    deltas.set(accountId, delta * multiplier);
+  }
+
+  return deltas;
+}
+
+async function persistAccountDeltas(householdId: string, deltas: Map<string, number>) {
+  if (!deltas.size) return;
   const accounts = await getHouseholdAccounts(householdId);
-  const source = accounts.find((account) => findAccountIdByName(accounts, intent.sourceAccount) === account.id);
-  const destination = accounts.find((account) => findAccountIdByName(accounts, intent.destinationAccount) === account.id);
-  const deltas = buildAccountBalanceDeltas(intent, source, destination);
 
   for (const [accountId, delta] of deltas.entries()) {
     const account = accounts.find((item) => item.id === accountId);
-    if (!account) continue;
+    if (!account || delta === 0) continue;
 
     const { error } = await supabaseAdmin
       .from('accounts')
@@ -661,6 +749,14 @@ async function applyAccountBalanceUpdates(householdId: string, intent: Transacti
       throw new Error(`No fue posible actualizar saldo de la cuenta ${account.name}: ${error.message}`);
     }
   }
+}
+
+async function applyAccountBalanceUpdates(householdId: string, intent: TransactionIntent) {
+  const accounts = await getHouseholdAccounts(householdId);
+  const source = accounts.find((account) => findAccountIdByName(accounts, intent.sourceAccount) === account.id);
+  const destination = accounts.find((account) => findAccountIdByName(accounts, intent.destinationAccount) === account.id);
+  const deltas = buildAccountBalanceDeltas(intent, source, destination);
+  await persistAccountDeltas(householdId, deltas);
 }
 
 function buildJournalEntries(intent: TransactionIntent, accounts: AccountOption[]): JournalLine[] {
@@ -746,6 +842,157 @@ export async function saveConversationalTransaction(intent: TransactionIntent) {
   }
 
   await applyAccountBalanceUpdates(householdId, intent);
+  await recalculateIndicators(householdId);
+}
+
+async function getStoredMovementForEdition(householdId: string, movementId: string) {
+  const { data: group, error: groupError } = await supabaseAdmin
+    .from('transaction_groups')
+    .select('id,note')
+    .eq('id', movementId)
+    .eq('household_id', householdId)
+    .maybeSingle();
+
+  if (groupError) {
+    throw new Error(`No fue posible leer el movimiento: ${groupError.message}`);
+  }
+
+  if (!group?.id) {
+    throw new Error('No se encontró el movimiento solicitado.');
+  }
+
+  const { data: txData, error: txError } = await supabaseAdmin
+    .from('transactions')
+    .select('id,group_id,account_id,type,category,amount')
+    .eq('group_id', group.id);
+
+  if (txError) {
+    throw new Error(`No fue posible leer las transacciones del movimiento: ${txError.message}`);
+  }
+
+  const lines = (txData ?? []) as Array<{
+    id: string;
+    group_id: string;
+    account_id: string | null;
+    type: string;
+    category: string;
+    amount: string;
+  }>;
+
+  if (!lines.length) {
+    throw new Error('El movimiento no tiene transacciones asociadas.');
+  }
+
+  const descriptor = resolveStoredMovementDescriptor(lines);
+  if (!descriptor) {
+    throw new Error('Este movimiento aún no se puede editar de forma segura.');
+  }
+
+  return { group, lines, descriptor };
+}
+
+export async function updateMovement(rawInput: unknown) {
+  const householdId = await getDefaultHouseholdId();
+  if (!householdId) {
+    throw new Error('No existe un hogar configurado para editar movimientos.');
+  }
+
+  const input = movementEditSchema.parse(rawInput);
+  const { group, lines, descriptor: previousMovement } = await getStoredMovementForEdition(householdId, input.movementId);
+
+  const sourceAccountId = input.sourceAccountId ?? previousMovement.sourceAccountId;
+  const destinationAccountId = input.destinationAccountId ?? previousMovement.destinationAccountId;
+  const nextMovement: StoredMovementDescriptor = {
+    action: previousMovement.action,
+    amount: input.amount,
+    sourceAccountId,
+    destinationAccountId
+  };
+
+  if (previousMovement.action === 'transferencia' && (!sourceAccountId || !destinationAccountId)) {
+    throw new Error('La transferencia requiere cuenta origen y destino.');
+  }
+
+  if (previousMovement.action === 'ingreso' && !destinationAccountId) {
+    throw new Error('El ingreso requiere una cuenta destino.');
+  }
+
+  if (['gasto', 'pago_deuda', 'prestamo_otorgado', 'objetivo_aporte'].includes(previousMovement.action) && !sourceAccountId) {
+    throw new Error('Este movimiento requiere cuenta origen.');
+  }
+
+  const accounts = await getHouseholdAccounts(householdId);
+  const reverseDeltas = buildBalanceDeltasFromStoredMovement(previousMovement, accounts, -1);
+  await persistAccountDeltas(householdId, reverseDeltas);
+
+  const updates = lines.map((line) => {
+    const nextAccountId =
+      line.type === 'credit' && line.account_id
+        ? sourceAccountId
+        : line.type === 'debit' && line.account_id
+          ? destinationAccountId
+          : line.account_id;
+
+    return supabaseAdmin
+      .from('transactions')
+      .update({
+        account_id: nextAccountId ?? null,
+        amount: input.amount.toFixed(2)
+      })
+      .eq('id', line.id)
+      .eq('group_id', group.id);
+  });
+
+  await Promise.all(
+    updates.map(async (query) => {
+      const { error } = await query;
+      if (error) throw new Error(`No fue posible actualizar transacciones del movimiento: ${error.message}`);
+    })
+  );
+
+  const { error: groupUpdateError } = await supabaseAdmin
+    .from('transaction_groups')
+    .update({ note: input.description })
+    .eq('id', group.id)
+    .eq('household_id', householdId);
+
+  if (groupUpdateError) {
+    throw new Error(`No fue posible actualizar la descripción del movimiento: ${groupUpdateError.message}`);
+  }
+
+  const applyDeltas = buildBalanceDeltasFromStoredMovement(nextMovement, accounts, 1);
+  await persistAccountDeltas(householdId, applyDeltas);
+  await recalculateIndicators(householdId);
+}
+
+export async function deleteMovement(rawInput: unknown) {
+  const householdId = await getDefaultHouseholdId();
+  if (!householdId) {
+    throw new Error('No existe un hogar configurado para eliminar movimientos.');
+  }
+
+  const input = movementDeleteSchema.parse(rawInput);
+  const { group, descriptor } = await getStoredMovementForEdition(householdId, input.movementId);
+  const accounts = await getHouseholdAccounts(householdId);
+
+  const reverseDeltas = buildBalanceDeltasFromStoredMovement(descriptor, accounts, -1);
+  await persistAccountDeltas(householdId, reverseDeltas);
+
+  const { error: txDeleteError } = await supabaseAdmin.from('transactions').delete().eq('group_id', group.id);
+  if (txDeleteError) {
+    throw new Error(`No fue posible eliminar transacciones del movimiento: ${txDeleteError.message}`);
+  }
+
+  const { error: groupDeleteError } = await supabaseAdmin
+    .from('transaction_groups')
+    .delete()
+    .eq('id', group.id)
+    .eq('household_id', householdId);
+
+  if (groupDeleteError) {
+    throw new Error(`No fue posible eliminar el movimiento: ${groupDeleteError.message}`);
+  }
+
   await recalculateIndicators(householdId);
 }
 
