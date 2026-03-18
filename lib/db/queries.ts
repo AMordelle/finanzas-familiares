@@ -963,8 +963,11 @@ function buildJournalEntries(intent: TransactionIntent, accounts: AccountOption[
         { accountId: sourceId, type: 'credit', category: intent.category, amount: intent.amount }
       ];
     case 'pago_deuda':
+      if (!sourceId || !destinationId) {
+        throw new Error('El pago de deuda requiere cuenta origen y cuenta destino.');
+      }
       return [
-        { accountId: null, type: 'debit', category: 'deuda', amount: intent.amount },
+        { accountId: destinationId, type: 'debit', category: 'deuda', amount: intent.amount },
         { accountId: sourceId, type: 'credit', category: 'salida_cuenta', amount: intent.amount }
       ];
     case 'prestamo_otorgado':

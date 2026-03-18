@@ -753,7 +753,7 @@ describe('onboarding persistence', () => {
   it('pago a tarjeta se interpreta como pago_deuda y reduce banco + deuda', async () => {
     const fakeClient = createFakeSupabase();
     vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
-    const { createHouseholdOnboarding, saveConversationalTransaction, getMovementsHistory } = await import('@/lib/db/queries');
+    const { createHouseholdOnboarding, saveConversationalTransaction, getDashboardData, getMovementsHistory } = await import('@/lib/db/queries');
     const { interpretTransaction } = await import('@/lib/ai/transactionInterpreter');
 
     process.env.DEV_PROFILE_ID = 'profile-credit-payment';
@@ -780,14 +780,24 @@ describe('onboarding persistence', () => {
 
     const banco = fakeClient.db.accounts.find((acc) => acc.name === 'Banco');
     const tdc = fakeClient.db.accounts.find((acc) => acc.name === 'TDC BBVA');
+    const groupId = fakeClient.db.transaction_groups.at(-1)?.id;
+    const transactions = fakeClient.db.transactions.filter((tx) => tx.group_id === groupId);
     const history = await getMovementsHistory();
+    const dashboard = await getDashboardData();
 
     expect(intent.action).toBe('pago_deuda');
     expect(intent.category).toBe('pago_deuda');
     expect(intent.humanConfirmation).toContain('Registrar pago de deuda de $500');
+    expect(transactions).toHaveLength(2);
+    expect(transactions.every((tx) => Boolean(tx.account_id))).toBe(true);
+    expect(transactions.find((tx) => tx.type === 'credit')?.account_id).toBe(banco.id);
+    expect(transactions.find((tx) => tx.type === 'debit')?.account_id).toBe(tdc.id);
     expect(Number(banco.balance)).toBe(3500);
     expect(Number(tdc.balance)).toBe(1500);
     expect(history.movements[0]?.tipoMovimiento).toBe('Pago de deuda');
+    expect(history.movements[0]?.cuentaOrigen).toBe('Banco');
+    expect(history.movements[0]?.cuentaDestino).toBe('TDC BBVA');
+    expect(dashboard.availableMoney).toBe(3500);
 
     delete process.env.DEV_PROFILE_ID;
   });
