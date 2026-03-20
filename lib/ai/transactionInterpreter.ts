@@ -1,36 +1,62 @@
 import { z } from 'zod';
 
+const normalizedActions = [
+  'income',
+  'expense_cash_like',
+  'expense_debt_account',
+  'debt_payment',
+  'transfer_between_own_accounts',
+  'debt_transfer',
+  'savings_contribution',
+  'savings_withdrawal',
+  'receivable_created',
+  'receivable_payment',
+  'manual_adjustment'
+] as const;
+
+const legacyActions = ['gasto', 'ingreso', 'transferencia', 'pago_deuda', 'prestamo_otorgado', 'pago_recibido', 'objetivo_aporte'] as const;
+
+const actionSchema = z.enum([...normalizedActions, ...legacyActions]);
+
 export const transactionIntentSchema = z.object({
-  action: z.enum([
-    'gasto',
-    'ingreso',
-    'transferencia',
-    'pago_deuda',
-    'prestamo_otorgado',
-    'pago_recibido',
-    'objetivo_aporte'
-  ]),
+  action: actionSchema,
   amount: z.number().positive(),
   description: z.string().min(1),
   category: z.string().min(1),
   sourceAccount: z.string().optional(),
   destinationAccount: z.string().optional(),
+  sourceAccountId: z.string().nullable().optional(),
+  sourceAccountName: z.string().nullable().optional(),
+  sourceAccountType: z.string().nullable().optional(),
+  destinationAccountId: z.string().nullable().optional(),
+  destinationAccountName: z.string().nullable().optional(),
+  destinationAccountType: z.string().nullable().optional(),
   missingFields: z.array(z.string()).default([]),
+  confidence: z.number().min(0).max(1).default(0.6),
   humanConfirmation: z.string().min(1)
 });
 
 export type TransactionIntent = z.infer<typeof transactionIntentSchema>;
 
 export type InterpreterAccountContext = {
+  id?: string;
   name: string;
   type: string;
+  aliases?: string[];
 };
 
-function parseAmount(input: string) {
-  const normalized = input.replace(/,/g, '');
-  const match = normalized.match(/(\d+(?:\.\d+)?)/);
-  return Number(match?.[1] ?? 0);
-}
+type IntentAction = (typeof normalizedActions)[number];
+
+type InterpreterResult = {
+  action: IntentAction;
+  amount: number | null;
+  description: string | null;
+  category: string | null;
+  source?: InterpreterAccountContext;
+  destination?: InterpreterAccountContext;
+  missingFields: string[];
+  confidence: number;
+};
 
 function normalize(input: string) {
   return input
@@ -40,186 +66,269 @@ function normalize(input: string) {
     .trim();
 }
 
-function isDebtType(type: string) {
-  return ['deuda', 'credit_card', 'loan'].includes(type);
+function parseAmount(input: string) {
+  const normalized = input.replace(/,/g, '');
+  const match = normalized.match(/(\d+(?:\.\d+)?)/);
+  return Number(match?.[1] ?? 0) || null;
 }
 
-function isPaymentExpression(input: string) {
-  return /(pague|pago|abone|abono)/i.test(normalize(input));
+function tokenize(input: string) {
+  return normalize(input).split(/\s+/).filter(Boolean);
 }
 
-function extractMentionedAccounts(input: string, accounts: InterpreterAccountContext[]) {
-  const normalizedInput = normalize(input);
-  return accounts.filter((account) => normalizedInput.includes(normalize(account.name)));
+function isDebtType(type?: string) {
+  return ['deuda', 'credit_card', 'loan'].includes(type ?? '');
 }
 
-function findBestAccountMatch(fragment: string, accounts: InterpreterAccountContext[]) {
-  const normalizedFragment = normalize(fragment);
-  const direct = accounts.find((account) => normalizedFragment.includes(normalize(account.name)) || normalize(account.name).includes(normalizedFragment));
-  if (direct) return direct;
+function isOperationalType(type?: string) {
+  return ['operativa', 'operational_cash'].includes(type ?? '');
+}
 
-  const fragmentTokens = normalizedFragment.split(/\s+/).filter(Boolean);
-  if (!fragmentTokens.length) return undefined;
+function isSavingsType(type?: string) {
+  return ['fondo', 'savings_fund'].includes(type ?? '');
+}
 
-  const ranked = accounts
+function isInvestmentType(type?: string) {
+  return ['inversion', 'investment'].includes(type ?? '');
+}
+
+function isReceivableType(type?: string) {
+  return ['por_cobrar', 'receivable'].includes(type ?? '');
+}
+
+function accountTokens(account: InterpreterAccountContext) {
+  const aliasTokens = (account.aliases ?? []).flatMap((alias) => tokenize(alias));
+  return Array.from(new Set([...tokenize(account.name), ...aliasTokens]));
+}
+
+function rankAccountMatches(input: string, accounts: InterpreterAccountContext[]) {
+  const text = normalize(input);
+  const textTokens = tokenize(input);
+
+  return accounts
     .map((account) => {
-      const accountTokens = normalize(account.name).split(/\s+/).filter(Boolean);
-      const overlap = fragmentTokens.filter((token) => accountTokens.includes(token)).length;
-      return { account, overlap };
-    });
-  const best = ranked.sort((a, b) => b.overlap - a.overlap)[0];
-
-  return best && best.overlap > 0 ? best.account : undefined;
+      const name = normalize(account.name);
+      const aliases = (account.aliases ?? []).map((alias) => normalize(alias));
+      const tokens = accountTokens(account);
+      const tokenOverlap = textTokens.filter((token) => tokens.includes(token)).length;
+      const exactName = text.includes(name) ? 2 : 0;
+      const aliasMatch = aliases.some((alias) => alias && text.includes(alias)) ? 2 : 0;
+      return {
+        account,
+        score: tokenOverlap + exactName + aliasMatch
+      };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
 }
 
-function findAccountByHint(input: string, accounts: InterpreterAccountContext[], hints: string[]) {
-  const normalizedInput = normalize(input);
-  const matchedHint = hints.find((hint) => normalizedInput.includes(hint));
-  if (!matchedHint) return undefined;
-
-  const sortedByNameLength = [...accounts].sort((a, b) => b.name.length - a.name.length);
-  return sortedByNameLength.find((account) => normalizedInput.includes(normalize(account.name)));
+function pickUnambiguousMatch(input: string, accounts: InterpreterAccountContext[]) {
+  const ranked = rankAccountMatches(input, accounts);
+  if (!ranked.length) return { match: undefined, ambiguous: false };
+  if (ranked.length === 1) return { match: ranked[0].account, ambiguous: false };
+  if (ranked[0].score === ranked[1].score) return { match: undefined, ambiguous: true };
+  return { match: ranked[0].account, ambiguous: false };
 }
 
-function extractDebtAccount(input: string, accounts: InterpreterAccountContext[]) {
-  const mentions = extractMentionedAccounts(input, accounts);
-  const debtMention = mentions.find((account) => isDebtType(account.type));
-  if (debtMention) return debtMention;
+function extractAccountAfter(input: string, marker: string, accounts: InterpreterAccountContext[]) {
+  const text = normalize(input);
+  const expression = new RegExp(`(?:^|\\s)${marker}\\s+([\\w\\s]+?)(?:\\s+(?:desde|con|hacia)\\s+|$)`, 'i');
+  const match = text.match(expression)?.[1]?.trim();
+  if (!match) return { match: undefined as InterpreterAccountContext | undefined, ambiguous: false };
+  const fragment = match.replace(/^(la|el|al)\\s+/, '').trim();
+  return pickUnambiguousMatch(fragment, accounts);
+}
 
-  const debtPhrase = normalize(input).match(/(?:a|hacia|de)\s+(?:la\s+|el\s+)?(tarjeta|tdc|prestamo)\s*([\w\s]*)/i);
-  if (debtPhrase) {
-    const hintFragment = `${debtPhrase[1]} ${debtPhrase[2]}`.trim();
-    const matched = findBestAccountMatch(hintFragment, accounts);
-    return {
-      name: matched?.name ?? findAccountByHint(input, accounts, ['tarjeta', 'tdc', 'prestamo'])?.name ?? 'tarjeta',
-      type: 'credit_card'
-    };
+function extractAccountBefore(input: string, marker: string, accounts: InterpreterAccountContext[]) {
+  const text = normalize(input);
+  const expression = new RegExp(`^([\\w\\s]+?)\\s+${marker}\\s+`, 'i');
+  const match = text.match(expression)?.[1]?.trim();
+  if (!match) return { match: undefined as InterpreterAccountContext | undefined, ambiguous: false };
+  return pickUnambiguousMatch(match, accounts);
+}
+
+function detectIntentByWords(input: string): IntentAction | 'ambiguous' {
+  const text = normalize(input);
+
+  if (/ajusta|corrige saldo|corregir saldo/.test(text)) return 'manual_adjustment';
+  if (/prest(e|é)|me deben|gasto compartido/.test(text)) return 'receivable_created';
+  if (/me pago|me pago|me abono|me abon(o|ó)|recupere|recuper(e|é)/.test(text)) return 'receivable_payment';
+  if (/apart(e|é)|guarde|guard(e|é)|fondo|ahorro|objetivo/.test(text)) return 'savings_contribution';
+  if (/retire|retir(e|é)|saque|saqu(e|é)/.test(text) && /fondo|ahorro|inversion/.test(text)) return 'savings_withdrawal';
+  if (/transferi|transfer(e|í)|pase|pas(e|é)|movi|mov(i|í)/.test(text)) return 'transfer_between_own_accounts';
+  if (/recibi|recib(i|í)|me pagaron|ingrese|ingres(e|é)|depositaron/.test(text)) return 'income';
+  if (/gaste|gast(e|é)|compre|compr(e|é)/.test(text)) return 'expense_cash_like';
+  if (/pague|pague|abone|abon(e|é)/.test(text)) return 'ambiguous';
+
+  return 'expense_cash_like';
+}
+
+function detectDescription(input: string) {
+  const trimmed = input.trim();
+  return trimmed ? trimmed.charAt(0).toUpperCase() + trimmed.slice(1) : null;
+}
+
+function buildHumanConfirmation(result: InterpreterResult) {
+  const amount = (result.amount ?? 0).toLocaleString('es-MX');
+  const sourceName = result.source?.name;
+  const destinationName = result.destination?.name;
+  const description = result.description ? ` en ${result.description.toLowerCase()}` : '';
+
+  switch (result.action) {
+    case 'income':
+      return `Registrar ingreso de $${amount} hacia ${destinationName ?? 'cuenta destino'}.`;
+    case 'expense_cash_like':
+      return `Registrar gasto de $${amount}${description} desde ${sourceName ?? 'cuenta origen'}.`;
+    case 'expense_debt_account':
+      return `Registrar gasto de $${amount}${description} usando ${sourceName ?? 'cuenta de deuda'}.`;
+    case 'debt_payment':
+      return `Registrar pago de deuda de $${amount} desde ${sourceName ?? 'cuenta origen'} hacia ${destinationName ?? 'cuenta de deuda'}.`;
+    case 'debt_transfer':
+      return `Registrar traslado de deuda de $${amount} desde ${sourceName ?? 'deuda origen'} hacia ${destinationName ?? 'deuda destino'}.`;
+    case 'transfer_between_own_accounts':
+      return `Registrar transferencia de $${amount} desde ${sourceName ?? 'cuenta origen'} hacia ${destinationName ?? 'cuenta destino'}.`;
+    case 'savings_contribution':
+      return `Registrar aporte de ahorro de $${amount} desde ${sourceName ?? 'cuenta origen'} hacia ${destinationName ?? 'fondo de ahorro'}.`;
+    case 'savings_withdrawal':
+      return `Registrar retiro de ahorro de $${amount} desde ${sourceName ?? 'fondo'} hacia ${destinationName ?? 'cuenta operativa'}.`;
+    case 'receivable_created':
+      return `Registrar préstamo por cobrar de $${amount} desde ${sourceName ?? 'cuenta origen'} hacia ${destinationName ?? 'por cobrar'}.`;
+    case 'receivable_payment':
+      return `Registrar pago recibido de $${amount} hacia ${destinationName ?? 'cuenta destino'} por una deuda por cobrar.`;
+    case 'manual_adjustment':
+      return `Confirmar ajuste manual por $${amount} en ${destinationName ?? sourceName ?? 'la cuenta seleccionada'}.`;
+    default:
+      return `Registrar movimiento de $${amount}.`;
   }
-
-  return undefined;
 }
 
-function extractSourceAccount(input: string, accounts: InterpreterAccountContext[]) {
-  const normalizedInput = normalize(input);
+function resolveAction(input: string, amount: number | null, accounts: InterpreterAccountContext[]): InterpreterResult {
+  const byWords = detectIntentByWords(input);
+  const text = normalize(input);
+  const from = extractAccountAfter(input, 'desde', accounts);
+  const to = extractAccountAfter(input, 'a', accounts);
+  const withRef = extractAccountAfter(input, 'con', accounts);
+  const beforeWith = extractAccountBefore(input, 'con', accounts);
+  const directMention = pickUnambiguousMatch(input, accounts);
 
-  const fromRegex = /(?:desde|de)\s+([\w\sáéíóúñ]+)/i;
-  const fromMatch = normalizedInput.match(fromRegex)?.[1]?.trim();
-  if (fromMatch) {
-    const accountFromPhrase = findBestAccountMatch(fromMatch, accounts);
-    if (accountFromPhrase) return accountFromPhrase;
-  }
-
-  const withRegex = /con\s+([\w\sáéíóúñ]+)/i;
-  const withMatch = normalizedInput.match(withRegex)?.[1]?.trim();
-  if (withMatch) {
-    const accountWith = findBestAccountMatch(withMatch, accounts);
-    if (accountWith) return accountWith;
-  }
-
-  if (/efectivo/i.test(normalizedInput)) {
-    const cash = accounts.find((account) => normalize(account.name).includes('efectivo'));
-    return cash ?? { name: 'efectivo', type: 'operational_cash' };
-  }
-
-  const firstMentioned = extractMentionedAccounts(input, accounts)[0];
-  return firstMentioned;
-}
-
-function detectAction(input: string, destinationAccount?: InterpreterAccountContext): TransactionIntent['action'] {
-  if (/apart[eé]|meta|boda|objetivo/i.test(input)) return 'objetivo_aporte';
-  if (/me pag[oó]|pago recibido|me deposit[oó]/i.test(input)) return 'pago_recibido';
-  if (/prest[eé]|prestamo|pr[eé]stamo/i.test(input)) return 'prestamo_otorgado';
-
-  if (isPaymentExpression(input) || destinationAccount?.type) {
-    if (destinationAccount && isDebtType(destinationAccount.type)) return 'pago_deuda';
-    if (/pagu[eé].*(tarjeta|deuda|pr[eé]stamo)|ab[oó]n[ée]/i.test(input)) return 'pago_deuda';
-  }
-
-  if (/transfer[ií]|traspas[eé]|mov[ií].*entre cuentas/i.test(input)) return 'transferencia';
-  if (/recib[ií]|ingres[oó]|depositaron|tiempo extra|n[oó]mina/i.test(input)) return 'ingreso';
-  return 'gasto';
-}
-
-function detectCategory(action: TransactionIntent['action'], input: string) {
-  if (action === 'gasto' && /gasolina/i.test(input)) return 'transporte';
-  if (action === 'gasto' && /super|s[uú]per|mercado/i.test(input)) return 'alimentos';
-  if (action === 'ingreso' && /tiempo extra/i.test(input)) return 'ingreso_extra';
-  if (action === 'pago_deuda') return 'pago_deuda';
-  if (action === 'prestamo_otorgado') return 'prestamo_otorgado';
-  if (action === 'pago_recibido') return 'cobro_prestamo';
-  if (action === 'objetivo_aporte') return 'ahorro_meta';
-  if (action === 'transferencia') return 'transferencia';
-  return action === 'ingreso' ? 'ingreso_general' : 'gasto_variable';
-}
-
-function detectDescription(input: string, action: TransactionIntent['action']) {
-  const clean = input.trim();
-  if (clean.length > 0) return clean.charAt(0).toUpperCase() + clean.slice(1);
-  return action;
-}
-
-function buildMissingFields(action: TransactionIntent['action'], sourceAccount?: string, destinationAccount?: string) {
+  let source = from.match;
+  let destination = to.match;
+  let action: IntentAction = byWords === 'ambiguous' ? 'expense_cash_like' : byWords;
   const missingFields: string[] = [];
+  let confidence = 0.78;
 
-  if (['gasto', 'pago_deuda', 'prestamo_otorgado', 'objetivo_aporte', 'transferencia'].includes(action) && !sourceAccount) {
+  if (action === 'income' && !destination) {
+    destination = directMention.match;
+  }
+
+  if (action === 'expense_cash_like' && withRef.match && isDebtType(withRef.match.type)) {
+    source = withRef.match;
+    action = 'expense_debt_account';
+  }
+
+  if (byWords === 'ambiguous') {
+    if (/tarjeta|tdc|prestamo|hipoteca|deuda/.test(text) || (destination && isDebtType(destination.type))) {
+      action = 'debt_payment';
+      source = source ?? withRef.match ?? (directMention.match && !isDebtType(directMention.match.type) ? directMention.match : undefined);
+      destination = destination ?? (directMention.match && isDebtType(directMention.match.type) ? directMention.match : undefined);
+    } else {
+      action = 'expense_cash_like';
+      source = source ?? withRef.match ?? directMention.match;
+      missingFields.push('movementTarget');
+    }
+  }
+
+  if (withRef.match && beforeWith.match && isDebtType(withRef.match.type) && isDebtType(beforeWith.match.type)) {
+    action = 'debt_transfer';
+    source = withRef.match;
+    destination = beforeWith.match;
+  }
+
+  if (/con/.test(text) && withRef.match) {
+    source = source ?? withRef.match;
+  }
+
+  if (action === 'transfer_between_own_accounts') {
+    source = source ?? directMention.match;
+    if (!destination && from.match && directMention.match && from.match.name !== directMention.match.name) {
+      destination = directMention.match;
+    }
+  }
+
+  if (source && destination && isDebtType(source.type) && isDebtType(destination.type)) {
+    action = 'debt_transfer';
+  }
+
+  if (action === 'savings_contribution' && destination && !isSavingsType(destination.type)) {
+    if (directMention.match && isSavingsType(directMention.match.type)) {
+      destination = directMention.match;
+    }
+  }
+
+  if (action === 'savings_withdrawal' && source && !isSavingsType(source.type) && !isInvestmentType(source.type)) {
+    const savingMention = rankAccountMatches(input, accounts).find((item) => isSavingsType(item.account.type) || isInvestmentType(item.account.type));
+    source = savingMention?.account;
+  }
+
+  if (action === 'receivable_created' && !destination) {
+    destination = accounts.find((account) => isReceivableType(account.type));
+  }
+
+  if (action === 'receivable_payment' && !destination) {
+    destination = accounts.find((account) => isOperationalType(account.type));
+  }
+
+  if (!amount) {
+    missingFields.push('amount');
+    confidence -= 0.2;
+  }
+
+  if (action === 'income' && !destination) missingFields.push('destinationAccount');
+  if (['expense_cash_like', 'expense_debt_account', 'savings_contribution', 'receivable_created'].includes(action) && !source) {
+    missingFields.push('sourceAccount');
+  }
+  if (['debt_payment', 'transfer_between_own_accounts', 'debt_transfer', 'savings_contribution', 'savings_withdrawal'].includes(action) && !destination) {
+    missingFields.push('destinationAccount');
+  }
+  if (['debt_payment', 'transfer_between_own_accounts', 'debt_transfer', 'savings_withdrawal'].includes(action) && !source) {
     missingFields.push('sourceAccount');
   }
 
-  if (['transferencia', 'ingreso', 'pago_recibido', 'objetivo_aporte', 'pago_deuda'].includes(action) && !destinationAccount) {
-    missingFields.push('destinationAccount');
+  if (from.ambiguous || to.ambiguous || withRef.ambiguous || directMention.ambiguous) {
+    confidence -= 0.25;
+    missingFields.push('accountConfirmation');
   }
 
-  return missingFields;
-}
-
-function buildHumanConfirmation(intent: Omit<TransactionIntent, 'humanConfirmation'>) {
-  const amount = intent.amount.toLocaleString('es-MX');
-  const origen = intent.sourceAccount ? ` desde ${intent.sourceAccount}` : '';
-  const destino = intent.destinationAccount ? ` hacia ${intent.destinationAccount}` : '';
-
-  if (intent.action === 'pago_deuda') {
-    return `Registrar pago de deuda de $${amount}${origen}${destino}.`;
-  }
-
-  return `Registrar ${intent.action.replace('_', ' ')} de $${amount} en ${intent.category}${origen}${destino}.`;
+  return {
+    action,
+    amount,
+    description: detectDescription(input),
+    category: action,
+    source,
+    destination,
+    missingFields: Array.from(new Set(missingFields)),
+    confidence: Math.max(0.2, Math.min(0.98, confidence))
+  };
 }
 
 export async function interpretTransaction(text: string, accounts: InterpreterAccountContext[] = []): Promise<TransactionIntent> {
-  const debtAccount = extractDebtAccount(text, accounts);
-  const sourceAccountRef = extractSourceAccount(text, accounts);
-  const action = detectAction(text, debtAccount);
-  const amount = parseAmount(text);
-
-  const sourceAccount = sourceAccountRef?.name?.toLowerCase();
-  const destinationAccount =
-    action === 'ingreso'
-      ? 'efectivo'
-      : action === 'objetivo_aporte'
-        ? 'meta'
-        : action === 'pago_deuda'
-          ? debtAccount?.name?.toLowerCase()
-          : undefined;
-
-  const description = detectDescription(text, action);
-  const category = detectCategory(action, text);
-  const missingFields = buildMissingFields(action, sourceAccount, destinationAccount);
+  const result = resolveAction(text, parseAmount(text), accounts);
 
   return transactionIntentSchema.parse({
-    action,
-    amount: amount || 1,
-    description,
-    category,
-    sourceAccount,
-    destinationAccount,
-    missingFields,
-    humanConfirmation: buildHumanConfirmation({
-      action,
-      amount: amount || 1,
-      description,
-      category,
-      sourceAccount,
-      destinationAccount,
-      missingFields
-    })
+    action: result.action,
+    amount: result.amount ?? 1,
+    description: result.description ?? text,
+    category: result.category ?? result.action,
+    sourceAccount: result.source?.name,
+    destinationAccount: result.destination?.name,
+    sourceAccountId: result.source?.id ?? null,
+    sourceAccountName: result.source?.name ?? null,
+    sourceAccountType: result.source?.type ?? null,
+    destinationAccountId: result.destination?.id ?? null,
+    destinationAccountName: result.destination?.name ?? null,
+    destinationAccountType: result.destination?.type ?? null,
+    missingFields: result.missingFields,
+    confidence: result.confidence,
+    humanConfirmation: buildHumanConfirmation(result)
   });
 }

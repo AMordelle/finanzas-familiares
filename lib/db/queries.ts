@@ -657,17 +657,17 @@ function inferMovementType(lines: Array<{ type: string; category: string }>) {
 function inferMovementAction(lines: Array<{ type: string; category: string }>): SupportedMovementAction | null {
   const has = (type: string, category: string) => lines.some((line) => line.type === type && line.category === category);
 
-  if (has('debit', 'deuda')) return 'pago_deuda';
-  if (has('debit', 'por_cobrar')) return 'prestamo_otorgado';
-  if (has('credit', 'por_cobrar')) return 'pago_recibido';
-  if (has('debit', 'ahorro_meta')) return 'objetivo_aporte';
-  if (has('debit', 'entrada_cuenta')) return 'ingreso';
-  if (has('credit', 'salida_cuenta')) return 'gasto';
+  if (has('debit', 'deuda')) return 'debt_payment';
+  if (has('debit', 'por_cobrar')) return 'receivable_created';
+  if (has('credit', 'por_cobrar')) return 'receivable_payment';
+  if (has('debit', 'ahorro_meta')) return 'savings_contribution';
+  if (has('debit', 'entrada_cuenta')) return 'income';
+  if (has('credit', 'salida_cuenta')) return 'expense_cash_like';
 
   const debitLine = lines.find((line) => line.type === 'debit');
   const creditLine = lines.find((line) => line.type === 'credit');
   if (debitLine?.category && creditLine?.category && debitLine.category === creditLine.category) {
-    return 'transferencia';
+    return 'transfer_between_own_accounts';
   }
 
   return null;
@@ -801,6 +801,8 @@ function buildAccountBalanceDeltas(intent: TransactionIntent, source?: AccountSt
 
   switch (intent.action) {
     case 'gasto':
+    case 'expense_cash_like':
+    case 'expense_debt_account':
       if (source && isDebtType(source.type)) {
         applyDelta(deltaByAccountId, source.id, intent.amount);
       } else {
@@ -808,13 +810,17 @@ function buildAccountBalanceDeltas(intent: TransactionIntent, source?: AccountSt
       }
       break;
     case 'ingreso':
+    case 'income':
       applyDelta(deltaByAccountId, destination?.id, intent.amount);
       break;
     case 'transferencia':
+    case 'transfer_between_own_accounts':
+    case 'savings_withdrawal':
       applyDelta(deltaByAccountId, source?.id, -intent.amount);
       applyDelta(deltaByAccountId, destination?.id, intent.amount);
       break;
     case 'pago_deuda':
+    case 'debt_payment':
       if (source && !isDebtType(source.type)) {
         applyDelta(deltaByAccountId, source.id, -intent.amount);
       }
@@ -824,19 +830,26 @@ function buildAccountBalanceDeltas(intent: TransactionIntent, source?: AccountSt
         applyDelta(deltaByAccountId, source.id, -intent.amount);
       }
       break;
+    case 'debt_transfer':
+      applyDelta(deltaByAccountId, source?.id, intent.amount);
+      applyDelta(deltaByAccountId, destination?.id, -intent.amount);
+      break;
     case 'prestamo_otorgado':
+    case 'receivable_created':
       applyDelta(deltaByAccountId, source?.id, -intent.amount);
       if (destination && isReceivableType(destination.type)) {
         applyDelta(deltaByAccountId, destination.id, intent.amount);
       }
       break;
     case 'pago_recibido':
+    case 'receivable_payment':
       applyDelta(deltaByAccountId, destination?.id, intent.amount);
       if (source && isReceivableType(source.type)) {
         applyDelta(deltaByAccountId, source.id, -intent.amount);
       }
       break;
     case 'objetivo_aporte':
+    case 'savings_contribution':
       applyDelta(deltaByAccountId, source?.id, -intent.amount);
       applyDelta(deltaByAccountId, destination?.id, intent.amount);
       break;
@@ -948,21 +961,27 @@ function buildJournalEntries(intent: TransactionIntent, accounts: AccountOption[
 
   switch (intent.action) {
     case 'gasto':
+    case 'expense_cash_like':
+    case 'expense_debt_account':
       return [
         { accountId: null, type: 'debit', category: intent.category, amount: intent.amount },
         { accountId: sourceId, type: 'credit', category: 'salida_cuenta', amount: intent.amount }
       ];
     case 'ingreso':
+    case 'income':
       return [
         { accountId: destinationId, type: 'debit', category: 'entrada_cuenta', amount: intent.amount },
         { accountId: null, type: 'credit', category: intent.category, amount: intent.amount }
       ];
     case 'transferencia':
+    case 'transfer_between_own_accounts':
+    case 'savings_withdrawal':
       return [
         { accountId: destinationId, type: 'debit', category: intent.category, amount: intent.amount },
         { accountId: sourceId, type: 'credit', category: intent.category, amount: intent.amount }
       ];
     case 'pago_deuda':
+    case 'debt_payment':
       if (!sourceId || !destinationId) {
         throw new Error('El pago de deuda requiere cuenta origen y cuenta destino.');
       }
@@ -970,17 +989,28 @@ function buildJournalEntries(intent: TransactionIntent, accounts: AccountOption[
         { accountId: destinationId, type: 'debit', category: 'deuda', amount: intent.amount },
         { accountId: sourceId, type: 'credit', category: 'salida_cuenta', amount: intent.amount }
       ];
+    case 'debt_transfer':
+      if (!sourceId || !destinationId) {
+        throw new Error('El traslado de deuda requiere cuenta origen y cuenta destino.');
+      }
+      return [
+        { accountId: destinationId, type: 'debit', category: 'deuda', amount: intent.amount },
+        { accountId: sourceId, type: 'credit', category: 'deuda', amount: intent.amount }
+      ];
     case 'prestamo_otorgado':
+    case 'receivable_created':
       return [
         { accountId: null, type: 'debit', category: 'por_cobrar', amount: intent.amount },
         { accountId: sourceId, type: 'credit', category: 'salida_cuenta', amount: intent.amount }
       ];
     case 'pago_recibido':
+    case 'receivable_payment':
       return [
         { accountId: destinationId, type: 'debit', category: 'entrada_cuenta', amount: intent.amount },
         { accountId: null, type: 'credit', category: 'por_cobrar', amount: intent.amount }
       ];
     case 'objetivo_aporte':
+    case 'savings_contribution':
       return [
         { accountId: destinationId, type: 'debit', category: 'ahorro_meta', amount: intent.amount },
         { accountId: sourceId, type: 'credit', category: 'salida_cuenta', amount: intent.amount }
@@ -1095,15 +1125,20 @@ export async function updateMovement(rawInput: unknown) {
     destinationAccountId
   };
 
-  if (previousMovement.action === 'transferencia' && (!sourceAccountId || !destinationAccountId)) {
+  if (['transferencia', 'transfer_between_own_accounts', 'debt_transfer', 'savings_withdrawal'].includes(previousMovement.action) && (!sourceAccountId || !destinationAccountId)) {
     throw new Error('La transferencia requiere cuenta origen y destino.');
   }
 
-  if (previousMovement.action === 'ingreso' && !destinationAccountId) {
+  if (['ingreso', 'income'].includes(previousMovement.action) && !destinationAccountId) {
     throw new Error('El ingreso requiere una cuenta destino.');
   }
 
-  if (['gasto', 'pago_deuda', 'prestamo_otorgado', 'objetivo_aporte'].includes(previousMovement.action) && !sourceAccountId) {
+  if (
+    ['gasto', 'expense_cash_like', 'expense_debt_account', 'pago_deuda', 'debt_payment', 'prestamo_otorgado', 'receivable_created', 'objetivo_aporte', 'savings_contribution'].includes(
+      previousMovement.action
+    ) &&
+    !sourceAccountId
+  ) {
     throw new Error('Este movimiento requiere cuenta origen.');
   }
 
