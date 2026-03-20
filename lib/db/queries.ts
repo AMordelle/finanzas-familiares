@@ -40,10 +40,42 @@ export const movementDeleteSchema = z.object({
   movementId: z.string().min(1)
 });
 
+const accountTypeValues = ['operativa', 'fondo', 'inversion', 'deuda', 'por_cobrar', 'operational_cash', 'savings_fund', 'investment', 'credit_card', 'loan', 'receivable'] as const;
+
+const managedAccountTypeValues = ['operational_cash', 'savings_fund', 'investment', 'credit_card', 'loan', 'receivable'] as const;
+
+export const accountTypeSchema = z.enum(managedAccountTypeValues);
+
+export const accountUpsertSchema = z.object({
+  accountId: z.string().uuid().optional(),
+  name: z.string().trim().min(1, 'El nombre es obligatorio.'),
+  type: accountTypeSchema,
+  balance: z.coerce.number().min(0, 'El saldo o monto debe ser mayor o igual a 0.'),
+  periodicPayment: z.coerce.number().min(0, 'El pago periódico debe ser mayor o igual a 0.').nullable().optional(),
+  paymentDay: z.coerce.number().int().min(1).max(31).nullable().optional(),
+  counterparty: z.string().trim().nullable().optional()
+});
+
+export const accountDeactivateSchema = z.object({
+  accountId: z.string().uuid()
+});
+
+export const accountUpdateSchema = accountUpsertSchema.extend({
+  accountId: z.string().uuid()
+});
+
 export type AccountOption = {
   id: string;
   name: string;
   type: string;
+};
+
+export type ManagedAccount = AccountOption & {
+  balance: number;
+  isActive: boolean;
+  periodicPayment: number | null;
+  paymentDay: number | null;
+  counterparty: string | null;
 };
 
 export type RegistrationSetupStatus = {
@@ -276,10 +308,25 @@ export async function createHouseholdOnboarding(rawInput: unknown, client: Supab
   }
 
   const accountPayload = [
-    ...input.operationalAccounts.map((item) => ({ household_id: householdId, name: item.nombre, type: 'operativa', balance: (item.saldoInicial ?? 0).toFixed(2) })),
-    ...input.fundAccounts.map((item) => ({ household_id: householdId, name: item.nombre, type: 'fondo', balance: (item.saldoInicial ?? 0).toFixed(2) })),
-    ...input.debtAccounts.map((item) => ({ household_id: householdId, name: item.nombre, type: 'deuda', balance: (item.saldoInicial ?? 0).toFixed(2) })),
-    ...input.receivables.map((item) => ({ household_id: householdId, name: item.nombre, type: 'por_cobrar', balance: item.monto.toFixed(2) }))
+    ...input.operationalAccounts.map((item) => ({ household_id: householdId, name: item.nombre, type: 'operativa', balance: (item.saldoInicial ?? 0).toFixed(2), is_active: true })),
+    ...input.fundAccounts.map((item) => ({ household_id: householdId, name: item.nombre, type: 'fondo', balance: (item.saldoInicial ?? 0).toFixed(2), is_active: true })),
+    ...input.debtAccounts.map((item) => ({
+      household_id: householdId,
+      name: item.nombre,
+      type: 'deuda',
+      balance: (item.saldoInicial ?? 0).toFixed(2),
+      periodic_payment: item.pagoPeriodico ? item.pagoPeriodico.toFixed(2) : null,
+      payment_day: item.diaPago ?? null,
+      is_active: true
+    })),
+    ...input.receivables.map((item) => ({
+      household_id: householdId,
+      name: item.nombre,
+      type: 'por_cobrar',
+      balance: item.monto.toFixed(2),
+      counterparty: item.contraparte,
+      is_active: true
+    }))
   ];
 
   if (accountPayload.length > 0) {
@@ -449,11 +496,125 @@ export async function getAccountsForRegistration(client: SupabaseClientLike = su
     .from('accounts')
     .select('id,name,type')
     .eq('household_id', householdId)
+    .eq('is_active', true)
     .order('name');
 
   const accounts = (data ?? []) as AccountOption[];
   logDebug('Cuentas lookup', { householdId, accountCount: accounts.length, readMode: 'db_result' });
   return accounts;
+}
+
+export async function getAccountsForManagement(client: SupabaseClientLike = supabaseAdmin): Promise<ManagedAccount[]> {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) return [];
+
+  const { data, error } = await client
+    .from('accounts')
+    .select('id,name,type,balance,is_active,periodic_payment,payment_day,counterparty')
+    .eq('household_id', householdId)
+    .order('type')
+    .order('name');
+
+  if (error) {
+    throw new Error(`No fue posible leer cuentas del hogar: ${error.message}`);
+  }
+
+  return ((data ?? []) as Array<{
+    id: string;
+    name: string;
+    type: string;
+    balance: string;
+    is_active: boolean | null;
+    periodic_payment: string | null;
+    payment_day: number | null;
+    counterparty: string | null;
+  }>)
+    .filter((account) => accountTypeValues.includes(account.type as (typeof accountTypeValues)[number]))
+    .map((account) => ({
+      id: account.id,
+      name: account.name,
+      type: account.type,
+      balance: Number(account.balance),
+      isActive: account.is_active !== false,
+      periodicPayment: account.periodic_payment === null ? null : Number(account.periodic_payment),
+      paymentDay: account.payment_day ?? null,
+      counterparty: account.counterparty ?? null
+    }));
+}
+
+export async function createAccount(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) {
+    throw new Error('No existe un hogar configurado para crear cuentas.');
+  }
+
+  const input = accountUpsertSchema.parse(rawInput);
+  const payload = {
+    household_id: householdId,
+    name: input.name,
+    type: input.type,
+    balance: input.balance.toFixed(2),
+    periodic_payment: input.periodicPayment === null || input.periodicPayment === undefined ? null : input.periodicPayment.toFixed(2),
+    payment_day: input.paymentDay ?? null,
+    counterparty: input.counterparty?.trim() ? input.counterparty.trim() : null,
+    is_active: true
+  };
+
+  const { error } = await client.from('accounts').insert(payload);
+  if (error) {
+    throw new Error(`No fue posible crear la cuenta: ${error.message}`);
+  }
+
+  await recalculateIndicators(householdId);
+}
+
+export async function updateAccount(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) {
+    throw new Error('No existe un hogar configurado para editar cuentas.');
+  }
+
+  const input = accountUpdateSchema.parse(rawInput);
+  const payload = {
+    name: input.name,
+    type: input.type,
+    balance: input.balance.toFixed(2),
+    periodic_payment: input.periodicPayment === null || input.periodicPayment === undefined ? null : input.periodicPayment.toFixed(2),
+    payment_day: input.paymentDay ?? null,
+    counterparty: input.counterparty?.trim() ? input.counterparty.trim() : null
+  };
+
+  const { error } = await client
+    .from('accounts')
+    .update(payload)
+    .eq('id', input.accountId)
+    .eq('household_id', householdId);
+
+  if (error) {
+    throw new Error(`No fue posible actualizar la cuenta: ${error.message}`);
+  }
+
+  await recalculateIndicators(householdId);
+}
+
+export async function deactivateAccount(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) {
+    throw new Error('No existe un hogar configurado para desactivar cuentas.');
+  }
+
+  const input = accountDeactivateSchema.parse(rawInput);
+  const { error } = await client
+    .from('accounts')
+    .update({ is_active: false })
+    .eq('id', input.accountId)
+    .eq('household_id', householdId);
+
+  if (error) {
+    throw new Error(`No fue posible desactivar la cuenta: ${error.message}`);
+  }
+
+  await recalculateIndicators(householdId);
 }
 
 export async function getRegistrationSetupStatus(client: SupabaseClientLike = supabaseAdmin): Promise<RegistrationSetupStatus> {
@@ -615,12 +776,32 @@ function applyDelta(deltaByAccountId: Map<string, number>, accountId: string | n
   deltaByAccountId.set(accountId, (deltaByAccountId.get(accountId) ?? 0) + delta);
 }
 
+function isDebtType(type: string) {
+  return type === 'deuda' || type === 'credit_card' || type === 'loan';
+}
+
+function isReceivableType(type: string) {
+  return type === 'por_cobrar' || type === 'receivable';
+}
+
+function isOperationalType(type: string) {
+  return type === 'operativa' || type === 'operational_cash';
+}
+
+function isSavingsFundType(type: string) {
+  return type === 'fondo' || type === 'savings_fund';
+}
+
+function isInvestmentType(type: string) {
+  return type === 'inversion' || type === 'investment';
+}
+
 function buildAccountBalanceDeltas(intent: TransactionIntent, source?: AccountState, destination?: AccountState) {
   const deltaByAccountId = new Map<string, number>();
 
   switch (intent.action) {
     case 'gasto':
-      if (source?.type === 'deuda') {
+      if (source && isDebtType(source.type)) {
         applyDelta(deltaByAccountId, source.id, intent.amount);
       } else {
         applyDelta(deltaByAccountId, source?.id, -intent.amount);
@@ -634,24 +815,24 @@ function buildAccountBalanceDeltas(intent: TransactionIntent, source?: AccountSt
       applyDelta(deltaByAccountId, destination?.id, intent.amount);
       break;
     case 'pago_deuda':
-      if (source && source.type !== 'deuda') {
+      if (source && !isDebtType(source.type)) {
         applyDelta(deltaByAccountId, source.id, -intent.amount);
       }
-      if (destination?.type === 'deuda') {
+      if (destination && isDebtType(destination.type)) {
         applyDelta(deltaByAccountId, destination.id, -intent.amount);
-      } else if (source?.type === 'deuda') {
+      } else if (source && isDebtType(source.type)) {
         applyDelta(deltaByAccountId, source.id, -intent.amount);
       }
       break;
     case 'prestamo_otorgado':
       applyDelta(deltaByAccountId, source?.id, -intent.amount);
-      if (destination?.type === 'por_cobrar') {
+      if (destination && isReceivableType(destination.type)) {
         applyDelta(deltaByAccountId, destination.id, intent.amount);
       }
       break;
     case 'pago_recibido':
       applyDelta(deltaByAccountId, destination?.id, intent.amount);
-      if (source?.type === 'por_cobrar') {
+      if (source && isReceivableType(source.type)) {
         applyDelta(deltaByAccountId, source.id, -intent.amount);
       }
       break;
@@ -669,20 +850,22 @@ function buildAccountBalanceDeltas(intent: TransactionIntent, source?: AccountSt
 async function getHouseholdAccounts(householdId: string) {
   const { data, error } = await supabaseAdmin
     .from('accounts')
-    .select('id,name,type,balance,household_id')
+    .select('id,name,type,balance,household_id,is_active')
     .eq('household_id', householdId);
 
   if (error) {
     throw new Error(`No fue posible leer cuentas del hogar: ${error.message}`);
   }
 
-  return ((data ?? []) as Array<{ id: string; name: string; type: string; balance: string; household_id: string }>).map((row) => ({
-    id: row.id,
-    name: row.name,
-    type: row.type,
-    householdId: row.household_id,
-    balance: Number(row.balance)
-  }));
+  return ((data ?? []) as Array<{ id: string; name: string; type: string; balance: string; household_id: string; is_active?: boolean | null }>)
+    .filter((row) => row.is_active !== false)
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      type: row.type,
+      householdId: row.household_id,
+      balance: Number(row.balance)
+    }));
 }
 
 function resolveStoredMovementDescriptor(lines: Array<{ type: string; category: string; account_id: string | null; amount: string }>): StoredMovementDescriptor | null {
@@ -780,8 +963,11 @@ function buildJournalEntries(intent: TransactionIntent, accounts: AccountOption[
         { accountId: sourceId, type: 'credit', category: intent.category, amount: intent.amount }
       ];
     case 'pago_deuda':
+      if (!sourceId || !destinationId) {
+        throw new Error('El pago de deuda requiere cuenta origen y cuenta destino.');
+      }
       return [
-        { accountId: null, type: 'debit', category: 'deuda', amount: intent.amount },
+        { accountId: destinationId, type: 'debit', category: 'deuda', amount: intent.amount },
         { accountId: sourceId, type: 'credit', category: 'salida_cuenta', amount: intent.amount }
       ];
     case 'prestamo_otorgado':
@@ -1014,16 +1200,16 @@ export async function recalculateIndicators(householdId: string) {
 
   const accountList = await getHouseholdAccounts(householdId);
   const operativeMoney = accountList
-    .filter((item) => item.type === 'operativa')
+    .filter((item) => isOperationalType(item.type))
     .reduce((acc, item) => acc + item.balance, 0);
   const liquidFunds = accountList
-    .filter((item) => item.type === 'fondo')
+    .filter((item) => isSavingsFundType(item.type))
     .reduce((acc, item) => acc + item.balance, 0);
   const liquidInvestments = accountList
-    .filter((item) => item.type === 'inversion')
+    .filter((item) => isInvestmentType(item.type))
     .reduce((acc, item) => acc + item.balance, 0);
   const debtBalance = accountList
-    .filter((item) => item.type === 'deuda')
+    .filter((item) => isDebtType(item.type))
     .reduce((acc, item) => acc + item.balance, 0);
 
   const { data: incomeSources } = await supabaseAdmin

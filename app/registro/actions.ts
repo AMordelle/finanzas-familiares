@@ -9,7 +9,8 @@ export async function getRegistrationAccountsAction() {
 }
 
 export async function interpretTransactionAction(text: string) {
-  return interpretTransaction(text);
+  const accounts = await getAccountsForRegistration();
+  return interpretTransaction(text, accounts);
 }
 
 export async function saveInterpretedTransactionAction(payload: unknown) {

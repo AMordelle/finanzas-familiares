@@ -711,4 +711,95 @@ describe('onboarding persistence', () => {
     delete process.env.DEV_PROFILE_ID;
   });
 
+  it('compra con tarjeta incrementa deuda sin bajar availableMoney', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createHouseholdOnboarding, saveConversationalTransaction, getDashboardData } = await import('@/lib/db/queries');
+    const { interpretTransaction } = await import('@/lib/ai/transactionInterpreter');
+
+    process.env.DEV_PROFILE_ID = 'profile-credit-purchase';
+
+    await createHouseholdOnboarding({
+      householdName: 'Caso Tarjeta Compra',
+      householdType: 'familia',
+      regularIncomes: [{ nombre: 'Sueldo', monto: 12000, periodicidad: 'mensual' }],
+      extraordinaryIncomes: [],
+      operationalAccounts: [{ nombre: 'Banco', saldoInicial: 4000 }],
+      fundAccounts: [],
+      debtAccounts: [{ nombre: 'TDC BBVA', saldoInicial: 1000, pagoPeriodico: 500, diaPago: 15 }],
+      receivables: [],
+      fixedExpenses: [],
+      variableSpending: []
+    });
+
+    const intent = await interpretTransaction('Gasté 1000 en ropa con tarjeta BBVA', [
+      { name: 'Banco', type: 'operational_cash' },
+      { name: 'TDC BBVA', type: 'credit_card' }
+    ]);
+
+    await saveConversationalTransaction(intent);
+    const dashboard = await getDashboardData();
+    const tdc = fakeClient.db.accounts.find((acc) => acc.name === 'TDC BBVA');
+    const banco = fakeClient.db.accounts.find((acc) => acc.name === 'Banco');
+
+    expect(intent.action).toBe('gasto');
+    expect(Number(tdc.balance)).toBe(2000);
+    expect(Number(banco.balance)).toBe(4000);
+    expect(dashboard.availableMoney).toBe(4000);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('pago a tarjeta se interpreta como pago_deuda y reduce banco + deuda', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createHouseholdOnboarding, saveConversationalTransaction, getDashboardData, getMovementsHistory } = await import('@/lib/db/queries');
+    const { interpretTransaction } = await import('@/lib/ai/transactionInterpreter');
+
+    process.env.DEV_PROFILE_ID = 'profile-credit-payment';
+
+    await createHouseholdOnboarding({
+      householdName: 'Caso Tarjeta Pago',
+      householdType: 'familia',
+      regularIncomes: [{ nombre: 'Sueldo', monto: 14000, periodicidad: 'mensual' }],
+      extraordinaryIncomes: [],
+      operationalAccounts: [{ nombre: 'Banco', saldoInicial: 4000 }],
+      fundAccounts: [],
+      debtAccounts: [{ nombre: 'TDC BBVA', saldoInicial: 2000, pagoPeriodico: 500, diaPago: 15 }],
+      receivables: [],
+      fixedExpenses: [],
+      variableSpending: []
+    });
+
+    const intent = await interpretTransaction('Pagué 500 a la TDC BBVA desde banco', [
+      { name: 'Banco', type: 'operational_cash' },
+      { name: 'TDC BBVA', type: 'credit_card' }
+    ]);
+
+    await saveConversationalTransaction(intent);
+
+    const banco = fakeClient.db.accounts.find((acc) => acc.name === 'Banco');
+    const tdc = fakeClient.db.accounts.find((acc) => acc.name === 'TDC BBVA');
+    const groupId = fakeClient.db.transaction_groups.at(-1)?.id;
+    const transactions = fakeClient.db.transactions.filter((tx) => tx.group_id === groupId);
+    const history = await getMovementsHistory();
+    const dashboard = await getDashboardData();
+
+    expect(intent.action).toBe('pago_deuda');
+    expect(intent.category).toBe('pago_deuda');
+    expect(intent.humanConfirmation).toContain('Registrar pago de deuda de $500');
+    expect(transactions).toHaveLength(2);
+    expect(transactions.every((tx) => Boolean(tx.account_id))).toBe(true);
+    expect(transactions.find((tx) => tx.type === 'credit')?.account_id).toBe(banco.id);
+    expect(transactions.find((tx) => tx.type === 'debit')?.account_id).toBe(tdc.id);
+    expect(Number(banco.balance)).toBe(3500);
+    expect(Number(tdc.balance)).toBe(1500);
+    expect(history.movements[0]?.tipoMovimiento).toBe('Pago de deuda');
+    expect(history.movements[0]?.cuentaOrigen).toBe('Banco');
+    expect(history.movements[0]?.cuentaDestino).toBe('TDC BBVA');
+    expect(dashboard.availableMoney).toBe(3500);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
 });
