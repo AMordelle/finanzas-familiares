@@ -30,13 +30,13 @@ export const transactionIntentSchema = z.object({
   description: z.string().min(1),
   category: z.string().min(1),
   sourceAccount: z.string().optional(),
-  destinationAccount: z.string().optional(),
+  destinationAccount: z.string().nullable().optional(),
   sourceAccountId: z.string().optional(),
   sourceAccountName: z.string().optional(),
   sourceAccountType: z.string().optional(),
-  destinationAccountId: z.string().optional(),
-  destinationAccountName: z.string().optional(),
-  destinationAccountType: z.string().optional(),
+  destinationAccountId: z.string().nullable().optional(),
+  destinationAccountName: z.string().nullable().optional(),
+  destinationAccountType: z.string().nullable().optional(),
   confidence: z.number().min(0).max(1).default(0.7),
   missingFields: z.array(z.string()).default([]),
   humanConfirmation: z.string().min(1)
@@ -248,7 +248,7 @@ function inferCategory(action: TransactionIntent['action'], normalizedText: stri
     if (has('escuela', 'colegiatura', 'utiles')) return 'educacion';
     if (has('cine', 'fiesta', 'paseo')) return 'entretenimiento';
     if (has('mueble', 'electrodomestico', 'casa')) return 'hogar';
-    return 'gasto_variable';
+    return 'otros_gastos';
   }
 
   if (['income', 'ingreso'].includes(action)) {
@@ -429,6 +429,7 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
 
   const category = inferCategory(action, normalized.normalizedAscii);
   const visibleType = inferVisibleType(action);
+  const isExpenseAction = action === 'expense_cash_like' || action === 'expense_debt_account';
 
   const missingFields = buildMissingFields(action, source, destination, {
     source: sourceResolution.ambiguous,
@@ -452,13 +453,13 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     description: detectDescription(normalized.original, action),
     category,
     sourceAccount: source?.name.toLowerCase(),
-    destinationAccount: destination?.name.toLowerCase(),
+    destinationAccount: isExpenseAction ? null : (destination?.name.toLowerCase() ?? null),
     sourceAccountId: source?.id,
     sourceAccountName: source?.name,
     sourceAccountType: source?.type,
-    destinationAccountId: destination?.id,
-    destinationAccountName: destination?.name,
-    destinationAccountType: destination?.type,
+    destinationAccountId: isExpenseAction ? null : (destination?.id ?? null),
+    destinationAccountName: isExpenseAction ? null : (destination?.name ?? null),
+    destinationAccountType: isExpenseAction ? null : (destination?.type ?? null),
     missingFields,
     confidence
   };

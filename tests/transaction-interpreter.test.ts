@@ -15,6 +15,8 @@ describe('transaction interpreter - context aware pipeline', () => {
     expect(result.action).toBe('expense_cash_like');
     expect(result.visibleType).toBe('Gasto con efectivo/banco');
     expect(result.category).toBe('comida');
+    expect(result.destinationAccount).toBeNull();
+    expect(result.destinationAccountId).toBeNull();
     expect(result.missingFields).toEqual([]);
   });
 
@@ -45,6 +47,8 @@ describe('transaction interpreter - context aware pipeline', () => {
     expect(result.action).toBe('expense_debt_account');
     expect(result.visibleType).toBe('Gasto con tarjeta de crédito');
     expect(result.category).toBe('ropa');
+    expect(result.destinationAccount).toBeNull();
+    expect(result.destinationAccountName).toBeNull();
   });
 
   it('F) frase mixta sigue siendo gasto con tarjeta, no pago de deuda', async () => {
@@ -83,7 +87,18 @@ describe('transaction interpreter - context aware pipeline', () => {
     const result = await interpretTransaction('Gasté 500 con Liverpool', accounts);
     expect(result.action).toBe('expense_debt_account');
     expect(result.visibleType).toBe('Gasto con tarjeta de crédito');
+    expect(result.category).toBe('otros_gastos');
     expect(result.sourceAccountName).toBe('Tarjeta Liverpool');
+  });
+
+  it('D-regresión) pagos/transferencias de deuda y transferencias mantienen destino', async () => {
+    const debtPayment = await interpretTransaction('Pagué 500 a la Tarjeta Liverpool desde efectivo', accounts);
+    const debtTransfer = await interpretTransaction('Pagué Liverpool con la TDC BBVA', accounts);
+    const ownTransfer = await interpretTransaction('Transferí 1000 de Banco BBVA al Fondo de emergencia', accounts);
+
+    expect(debtPayment.destinationAccount).toBeTruthy();
+    expect(debtTransfer.destinationAccount).toBeTruthy();
+    expect(ownTransfer.destinationAccount).toBeTruthy();
   });
 
   it('L) Pagué 500 a la BBVA pide aclaración por ambigüedad banco/tarjeta', async () => {
