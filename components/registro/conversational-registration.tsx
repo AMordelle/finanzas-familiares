@@ -16,40 +16,31 @@ type Props = {
 
 const missingFieldQuestions: Record<string, string> = {
   sourceAccount: '¿De qué cuenta salió el dinero?',
-  destinationAccount: '¿A qué cuenta entró el dinero?'
+  destinationAccount: '¿A qué cuenta entró el dinero?',
+  debtAccount: '¿A qué tarjeta o préstamo pagaste?'
 };
 
 export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
   const [input, setInput] = useState('');
   const [intent, setIntent] = useState<TransactionIntent | null>(null);
+  const [followUpValue, setFollowUpValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
   const isSavingRef = useRef(false);
 
-  const isReadyToConfirm = useMemo(() => intent && intent.missingFields.length === 0, [intent]);
+  const isReadyToConfirm = useMemo(() => intent && intent.missingFieldKinds.length === 0, [intent]);
   const hasAccounts = accounts.length > 0;
 
   if (!hasHousehold) {
-    return (
-      <Card>
-        <h2 className="text-xl font-semibold">Registro conversacional</h2>
-        <p className="mt-3 text-sm text-slate-700">
-          Aún no has configurado tu hogar y tus cuentas. Primero completa la configuración inicial para poder registrar movimientos.
-        </p>
-        <div className="mt-4">
-          <Button asChild>
-            <Link href="/onboarding">Ir al onboarding</Link>
-          </Button>
-        </div>
-      </Card>
-    );
+    return <Card><h2 className="text-xl font-semibold">Registro conversacional</h2><p className="mt-3 text-sm text-slate-700">Aún no has configurado tu hogar y tus cuentas. Primero completa la configuración inicial para poder registrar movimientos.</p><div className="mt-4"><Button asChild><Link href="/onboarding">Ir al onboarding</Link></Button></div></Card>;
   }
 
   const handleInterpret = () => {
     setSuccessMessage(null);
     setError(null);
+    setFollowUpValue('');
     startTransition(async () => {
       try {
         const next = await interpretTransactionAction(input);
@@ -60,19 +51,56 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
     });
   };
 
-  const handleMissingFieldChange = (field: 'sourceAccount' | 'destinationAccount', value: string) => {
-    if (!intent) return;
-    const updatedIntent: TransactionIntent = {
-      ...intent,
-      [field]: value,
-      missingFields: intent.missingFields.filter((item) => item !== field)
-    };
-    setIntent(updatedIntent);
+  const handleMissingFieldApply = () => {
+    if (!intent || !followUpValue.trim()) return;
+    const kind = intent.missingFieldKinds[0];
+    if (!kind) return;
+
+    const updated: TransactionIntent = { ...intent };
+    if (kind === 'missingSourceAccount') {
+      updated.sourceAccount = followUpValue.toLowerCase();
+      updated.sourceAccountName = followUpValue;
+    }
+    if (kind === 'missingDestinationAccount' || kind === 'missingDebtTarget') {
+      updated.destinationAccount = followUpValue.toLowerCase();
+      updated.destinationAccountName = followUpValue;
+    }
+    if (kind === 'missingWhatWasPaid' || kind === 'missingDescription') {
+      updated.description = `${intent.rawText}. ${followUpValue.trim()}`;
+    }
+    if (kind === 'missingIntent') {
+      const value = normalizeChoice(followUpValue);
+      if (value === 'tarjeta' || value === 'prestamo') {
+        updated.intent = 'debt_payment';
+        updated.visibleType = 'Pago de deuda';
+        updated.action = 'pago_deuda';
+      } else if (value === 'transferencia') {
+        updated.intent = 'transfer_between_own_accounts';
+        updated.visibleType = 'Transferencia entre cuentas';
+        updated.action = 'transferencia';
+      } else if (value === 'gasto') {
+        updated.intent = 'expense_cash_like';
+        updated.visibleType = 'Gasto con efectivo/banco';
+        updated.action = 'gasto';
+      }
+    }
+
+    updated.missingFieldKinds = updated.missingFieldKinds.slice(1);
+    updated.missingFields = updated.missingFields.slice(1);
+    updated.nextPrompt = updated.missingFieldKinds.length ? updated.nextPrompt : null;
+    updated.nextPromptInputType = updated.missingFieldKinds.length ? updated.nextPromptInputType : null;
+    updated.nextPromptAllowedAccountTypes = updated.missingFieldKinds.length ? updated.nextPromptAllowedAccountTypes : null;
+    updated.humanConfirmation = updated.missingFieldKinds.length ? null : `Registrar ${updated.visibleType.toLowerCase()} de $${updated.amount.toLocaleString('es-MX')}.`;
+    setIntent(updated);
+    setFollowUpValue('');
   };
 
-  const handleSave = () => {
-    if (!intent || intent.missingFields.length > 0 || isSavingRef.current) return;
+  const allowedAccounts = intent?.nextPromptAllowedAccountTypes
+    ? accounts.filter((account) => intent.nextPromptAllowedAccountTypes?.includes(account.type as never))
+    : accounts;
 
+  const handleSave = () => {
+    if (!intent || intent.missingFieldKinds.length > 0 || isSavingRef.current) return;
     setError(null);
     isSavingRef.current = true;
     startTransition(async () => {
@@ -94,78 +122,42 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
     <Card>
       <h2 className="text-xl font-semibold">Escribe como hablas</h2>
       <p className="mt-2 text-slate-600">Ejemplos: “Gasté 600 en gasolina con efectivo”, “Pagué 1200 del súper con tarjeta”, “Recibí 3000 de tiempo extra”, “Presté 500 a Juan”.</p>
+      <textarea className="mt-4 min-h-28 w-full rounded-lg border border-slate-300 p-3 text-sm" value={input} placeholder="Describe tu movimiento en lenguaje natural" onChange={(event) => setInput(event.target.value)} />
+      <div className="mt-4"><Button onClick={handleInterpret} disabled={isPending || !input.trim()}>{isPending ? 'Interpretando...' : 'Interpretar movimiento'}</Button></div>
 
-      <textarea
-        className="mt-4 min-h-28 w-full rounded-lg border border-slate-300 p-3 text-sm"
-        value={input}
-        placeholder="Describe tu movimiento en lenguaje natural"
-        onChange={(event) => setInput(event.target.value)}
-      />
-
-      <div className="mt-4">
-        <Button onClick={handleInterpret} disabled={isPending || !input.trim()}>
-          {isPending ? 'Interpretando...' : 'Interpretar movimiento'}
-        </Button>
-      </div>
-
-      {intent && intent.missingFields.length > 0 && (
+      {intent && intent.missingFieldKinds.length > 0 && (
         <div className="mt-6 space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
           <p className="text-sm font-medium text-amber-900">Faltan datos para completar el movimiento:</p>
-          {!hasAccounts && (
-            <div className="rounded-md border border-amber-300 bg-white p-3 text-sm text-slate-700">
-              <p>No hay cuentas disponibles todavía. Configura tus cuentas en el onboarding.</p>
-              <div className="mt-3">
-                <Button asChild>
-                  <Link href="/onboarding">Ir al onboarding</Link>
-                </Button>
-              </div>
-            </div>
+          <p className="text-sm text-slate-700">{intent.nextPrompt ?? missingFieldQuestions[intent.missingFields[0] ?? 'sourceAccount']}</p>
+          {intent.nextPromptInputType === 'guided_choice' && (
+            <select className="w-full rounded-md border border-slate-300 bg-white p-2" value={followUpValue} onChange={(event) => setFollowUpValue(event.target.value)}>
+              <option value="">Selecciona una opción</option>
+              <option value="tarjeta">Una tarjeta</option>
+              <option value="prestamo">Un préstamo</option>
+              <option value="gasto">Un gasto normal</option>
+              <option value="transferencia">Una transferencia</option>
+            </select>
           )}
-          {intent.missingFields.map((field) => (
-            <label key={field} className="block text-sm text-slate-700">
-              {missingFieldQuestions[field] ?? `Completa ${field}`}
-              {hasAccounts ? (
-                <select
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2"
-                  defaultValue=""
-                  onChange={(event) => handleMissingFieldChange(field as 'sourceAccount' | 'destinationAccount', event.target.value)}
-                >
-                  <option value="" disabled>
-                    Selecciona una cuenta
-                  </option>
-                  {accounts.map((account) => (
-                    <option key={account.id} value={account.name.toLowerCase()}>
-                      {account.name}
-                    </option>
-                  ))}
-                </select>
-              ) : null}
-            </label>
-          ))}
+          {intent.nextPromptInputType === 'text_input' && (
+            <input className="w-full rounded-md border border-slate-300 bg-white p-2" placeholder="Escribe el detalle" value={followUpValue} onChange={(event) => setFollowUpValue(event.target.value)} />
+          )}
+          {intent.nextPromptInputType === 'account_selector' && hasAccounts && (
+            <select className="w-full rounded-md border border-slate-300 bg-white p-2" value={followUpValue} onChange={(event) => setFollowUpValue(event.target.value)}>
+              <option value="">Selecciona una cuenta</option>
+              {allowedAccounts.map((account) => <option key={account.id} value={account.name}>{account.name}</option>)}
+            </select>
+          )}
+          <Button onClick={handleMissingFieldApply} disabled={!followUpValue.trim()}>Continuar</Button>
         </div>
       )}
 
-      {isReadyToConfirm && intent && (
-        <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <h3 className="font-semibold">Confirmación</h3>
-          <ul className="mt-3 space-y-1 text-sm text-slate-700">
-            <li>Tipo de movimiento: {intent.action}</li>
-            <li>Monto: ${intent.amount.toLocaleString('es-MX')}</li>
-            <li>Descripción: {intent.description}</li>
-            <li>Cuenta origen: {intent.sourceAccount ?? 'N/A'}</li>
-            <li>Cuenta destino: {intent.destinationAccount ?? 'N/A'}</li>
-            <li>Categoría: {intent.category}</li>
-          </ul>
-          <p className="mt-3 text-sm font-medium text-slate-900">{intent.humanConfirmation}</p>
-          <div className="mt-4 flex gap-2">
-            <Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Confirmar'}</Button>
-            <Button variant="outline" onClick={() => setIntent(null)} disabled={isPending}>Cancelar</Button>
-          </div>
-        </div>
-      )}
-
+      {isReadyToConfirm && intent && <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4"><h3 className="font-semibold">Confirmación</h3><ul className="mt-3 space-y-1 text-sm text-slate-700"><li>Tipo de movimiento: {intent.visibleType}</li><li>Monto: ${intent.amount.toLocaleString('es-MX')}</li><li>Descripción: {intent.description}</li><li>Cuenta origen: {intent.sourceAccountName ?? 'N/A'}</li><li>Cuenta destino: {intent.destinationAccountName ?? 'N/A'}</li><li>Categoría: {intent.category}</li></ul><p className="mt-3 text-sm font-medium text-slate-900">{intent.humanConfirmation}</p><div className="mt-4 flex gap-2"><Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Confirmar'}</Button><Button variant="outline" onClick={() => setIntent(null)} disabled={isPending}>Cancelar</Button></div></div>}
       {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
       {successMessage && <p className="mt-4 text-sm text-emerald-700">{successMessage}</p>}
     </Card>
   );
+}
+
+function normalizeChoice(value: string) {
+  return value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
