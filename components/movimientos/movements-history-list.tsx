@@ -50,6 +50,7 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
                 <div>
                   <p><span className="font-semibold">Fecha:</span> {formatDate(movement.fecha)}</p>
                   <p><span className="font-semibold">Tipo de movimiento:</span> {movement.tipoMovimiento}</p>
+                  <p><span className="font-semibold">Categoría:</span> {movement.categoria}</p>
                   <p><span className="font-semibold">Descripción:</span> {movement.descripcion}</p>
                   <p><span className="font-semibold">Cuenta origen:</span> {movement.cuentaOrigen ?? 'N/A'}</p>
                   <p><span className="font-semibold">Cuenta destino:</span> {movement.cuentaDestino ?? 'N/A'}</p>

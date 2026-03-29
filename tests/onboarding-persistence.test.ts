@@ -385,7 +385,7 @@ describe('onboarding persistence', () => {
     expect(result.movements[0]?.tipoMovimiento).toBe('Transferencia');
     expect(result.movements[0]?.cuentaOrigen).toBe('Efectivo');
     expect(result.movements[0]?.cuentaDestino).toBe('Banco');
-    expect(result.movements[1]?.tipoMovimiento).toBe('Gasto');
+    expect(result.movements[1]?.tipoMovimiento).toBe('Gasto con efectivo/banco');
 
     delete process.env.DEV_PROFILE_ID;
   });
@@ -742,7 +742,7 @@ describe('onboarding persistence', () => {
     const tdc = fakeClient.db.accounts.find((acc) => acc.name === 'TDC BBVA');
     const banco = fakeClient.db.accounts.find((acc) => acc.name === 'Banco');
 
-    expect(intent.action).toBe('gasto');
+    expect(intent.action).toBe('expense_debt_account');
     expect(Number(tdc.balance)).toBe(2000);
     expect(Number(banco.balance)).toBe(4000);
     expect(dashboard.availableMoney).toBe(4000);
@@ -785,8 +785,8 @@ describe('onboarding persistence', () => {
     const history = await getMovementsHistory();
     const dashboard = await getDashboardData();
 
-    expect(intent.action).toBe('pago_deuda');
-    expect(intent.category).toBe('pago_deuda');
+    expect(intent.action).toBe('debt_payment');
+    expect(intent.category).toBe('deuda');
     expect(intent.humanConfirmation).toContain('Registrar pago de deuda de $500');
     expect(transactions).toHaveLength(2);
     expect(transactions.every((tx) => Boolean(tx.account_id))).toBe(true);

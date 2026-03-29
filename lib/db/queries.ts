@@ -88,6 +88,7 @@ export type MovementHistoryItem = {
   fecha: string;
   tipoMovimiento: string;
   descripcion: string;
+  categoria: string;
   monto: number;
   cuentaOrigen: string | null;
   cuentaDestino: string | null;
@@ -108,6 +109,35 @@ type JournalLine = {
 };
 
 type SupportedMovementAction = TransactionIntent['action'];
+
+
+function toLedgerAction(action: TransactionIntent['action']) {
+  switch (action) {
+    case 'income':
+      return 'ingreso';
+    case 'expense_cash_like':
+    case 'expense_debt_account':
+      return 'gasto';
+    case 'debt_payment':
+      return 'pago_deuda';
+    case 'debt_transfer':
+      return 'transferencia';
+    case 'transfer_between_own_accounts':
+      return 'transferencia';
+    case 'savings_contribution':
+      return 'objetivo_aporte';
+    case 'savings_withdrawal':
+      return 'transferencia';
+    case 'receivable_created':
+      return 'prestamo_otorgado';
+    case 'receivable_payment':
+      return 'pago_recibido';
+    case 'manual_adjustment':
+      return 'transferencia';
+    default:
+      return action;
+  }
+}
 
 type StoredMovementDescriptor = {
   action: SupportedMovementAction;
@@ -641,9 +671,10 @@ function inferMovementType(lines: Array<{ type: string; category: string }>) {
   if (has('debit', 'deuda')) return 'Pago de deuda';
   if (has('debit', 'por_cobrar')) return 'Préstamo otorgado';
   if (has('credit', 'por_cobrar')) return 'Pago recibido';
-  if (has('debit', 'ahorro_meta')) return 'Aporte a objetivo';
+  if (has('debit', 'ahorro_meta')) return 'Aporte a ahorro';
   if (has('debit', 'entrada_cuenta')) return 'Ingreso';
-  if (has('credit', 'salida_cuenta')) return 'Gasto';
+  if (has('debit', 'traslado_deuda') || has('credit', 'traslado_deuda')) return 'Traslado de deuda';
+  if (has('credit', 'salida_cuenta')) return has('debit', 'deuda') ? 'Pago de deuda' : 'Gasto con efectivo/banco';
 
   const debitLine = lines.find((line) => line.type === 'debit');
   const creditLine = lines.find((line) => line.type === 'credit');
@@ -657,6 +688,7 @@ function inferMovementType(lines: Array<{ type: string; category: string }>) {
 function inferMovementAction(lines: Array<{ type: string; category: string }>): SupportedMovementAction | null {
   const has = (type: string, category: string) => lines.some((line) => line.type === type && line.category === category);
 
+  if (has('debit', 'traslado_deuda') || has('credit', 'traslado_deuda')) return 'transferencia';
   if (has('debit', 'deuda')) return 'pago_deuda';
   if (has('debit', 'por_cobrar')) return 'prestamo_otorgado';
   if (has('credit', 'por_cobrar')) return 'pago_recibido';
@@ -671,6 +703,12 @@ function inferMovementAction(lines: Array<{ type: string; category: string }>): 
   }
 
   return null;
+}
+
+function inferMovementCategory(lines: Array<{ type: string; category: string }>) {
+  const businessLine = lines.find((line) => !['salida_cuenta', 'entrada_cuenta'].includes(line.category));
+  if (businessLine?.category) return businessLine.category;
+  return 'otros';
 }
 
 export async function getMovementsHistory(client: SupabaseClientLike = supabaseAdmin): Promise<MovementsHistoryData> {
@@ -730,6 +768,7 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
       fecha: happenedAt,
       tipoMovimiento: inferMovementType(lines),
       descripcion: group.note?.trim() ? group.note : 'Movimiento sin descripción',
+      categoria: inferMovementCategory(lines),
       monto: Number(debitLine?.amount ?? creditLine?.amount ?? 0),
       cuentaOrigen: creditLine?.account_id ? accountById.get(creditLine.account_id) ?? null : null,
       cuentaDestino: debitLine?.account_id ? accountById.get(debitLine.account_id) ?? null : null,
@@ -798,8 +837,9 @@ function isInvestmentType(type: string) {
 
 function buildAccountBalanceDeltas(intent: TransactionIntent, source?: AccountState, destination?: AccountState) {
   const deltaByAccountId = new Map<string, number>();
+  const ledgerAction = toLedgerAction(intent.action);
 
-  switch (intent.action) {
+  switch (ledgerAction) {
     case 'gasto':
       if (source && isDebtType(source.type)) {
         applyDelta(deltaByAccountId, source.id, intent.amount);
@@ -945,8 +985,9 @@ async function applyAccountBalanceUpdates(householdId: string, intent: Transacti
 function buildJournalEntries(intent: TransactionIntent, accounts: AccountOption[]): JournalLine[] {
   const sourceId = findAccountIdByName(accounts, intent.sourceAccount);
   const destinationId = findAccountIdByName(accounts, intent.destinationAccount);
+  const ledgerAction = toLedgerAction(intent.action);
 
-  switch (intent.action) {
+  switch (ledgerAction) {
     case 'gasto':
       return [
         { accountId: null, type: 'debit', category: intent.category, amount: intent.amount },
@@ -959,8 +1000,8 @@ function buildJournalEntries(intent: TransactionIntent, accounts: AccountOption[
       ];
     case 'transferencia':
       return [
-        { accountId: destinationId, type: 'debit', category: intent.category, amount: intent.amount },
-        { accountId: sourceId, type: 'credit', category: intent.category, amount: intent.amount }
+        { accountId: destinationId, type: 'debit', category: intent.action === 'debt_transfer' ? 'traslado_deuda' : intent.category, amount: intent.amount },
+        { accountId: sourceId, type: 'credit', category: intent.action === 'debt_transfer' ? 'traslado_deuda' : intent.category, amount: intent.amount }
       ];
     case 'pago_deuda':
       if (!sourceId || !destinationId) {

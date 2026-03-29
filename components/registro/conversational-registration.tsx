@@ -16,7 +16,8 @@ type Props = {
 
 const missingFieldQuestions: Record<string, string> = {
   sourceAccount: '¿De qué cuenta salió el dinero?',
-  destinationAccount: '¿A qué cuenta entró el dinero?'
+  destinationAccount: '¿A qué cuenta llegó?',
+  whatWasPaid: '¿Qué pagaste?'
 };
 
 export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
@@ -60,7 +61,7 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
     });
   };
 
-  const handleMissingFieldChange = (field: 'sourceAccount' | 'destinationAccount', value: string) => {
+  const handleMissingFieldChange = (field: string, value: string) => {
     if (!intent) return;
     const updatedIntent: TransactionIntent = {
       ...intent,
@@ -128,7 +129,7 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
                 <select
                   className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2"
                   defaultValue=""
-                  onChange={(event) => handleMissingFieldChange(field as 'sourceAccount' | 'destinationAccount', event.target.value)}
+                  onChange={(event) => handleMissingFieldChange(field, event.target.value)}
                 >
                   <option value="" disabled>
                     Selecciona una cuenta
@@ -149,7 +150,8 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
         <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
           <h3 className="font-semibold">Confirmación</h3>
           <ul className="mt-3 space-y-1 text-sm text-slate-700">
-            <li>Tipo de movimiento: {intent.action}</li>
+            <li>Tipo de movimiento: {intent.visibleType}</li>
+            <li>Acción interna: {intent.action}</li>
             <li>Monto: ${intent.amount.toLocaleString('es-MX')}</li>
             <li>Descripción: {intent.description}</li>
             <li>Cuenta origen: {intent.sourceAccount ?? 'N/A'}</li>
