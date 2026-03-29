@@ -13,6 +13,15 @@ const accounts = [
 ] as const;
 
 describe('transaction interpreter semantic pipeline', () => {
+  it('A: income keeps source empty and confirms only destination', async () => {
+    const result = await interpretTransaction('Recibí 2000 de tiempo extra en banco', accounts as any);
+    expect(result.intent).toBe('income');
+    expect(result.sourceAccountName).toBeNull();
+    expect(result.sourceAccountId).toBeNull();
+    expect(result.destinationAccountName).toBe('Banco BBVA');
+    expect(result.humanConfirmation).toBe('Registrar ingreso de $2,000 hacia Banco BBVA.');
+  });
+
   it('A/B: clear expense with source account and punctuation has no follow-up', async () => {
     const result = await interpretTransaction('Gasté 600 en gasolina con efectivo.', accounts as any);
     expect(result.intent).toBe('expense_cash_like');
@@ -75,5 +84,25 @@ describe('transaction interpreter semantic pipeline', () => {
     const missingDesc = await interpretTransaction('Gasté 300 con efectivo', accounts as any);
     expect(missingDesc.missingFieldKinds).toContain('missingWhatWasPaid');
     expect(missingDesc.nextPromptInputType).toBe('text_input');
+  });
+
+  it('D: unknown explicit credit card never auto-maps and asks clarification', async () => {
+    const result = await interpretTransaction('Gasté 2000 en ropa con TDC SCTBNK', accounts as any);
+    expect(result.sourceAccountName).toBeNull();
+    expect(result.missingFieldKinds).toContain('missingSourceAccount');
+    expect(result.nextPrompt).toContain('No encontré una cuenta llamada');
+  });
+
+  it('E: generic credit card phrase resolves only when unique', async () => {
+    const uniqueCardAccounts = [
+      { id: 'acc-ef', name: 'Efectivo', type: 'operational_cash' },
+      { id: 'acc-tdc', name: 'TDC Única', type: 'credit_card' }
+    ];
+    const uniqueResult = await interpretTransaction('Gasté 1000 con tarjeta de crédito', uniqueCardAccounts as any);
+    expect(uniqueResult.sourceAccountName).toBe('TDC Única');
+
+    const ambiguousResult = await interpretTransaction('Gasté 1000 con tarjeta de crédito', accounts as any);
+    expect(ambiguousResult.sourceAccountName).toBeNull();
+    expect(ambiguousResult.missingFieldKinds).toContain('missingSourceAccount');
   });
 });

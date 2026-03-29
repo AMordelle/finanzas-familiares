@@ -95,6 +95,14 @@ type EnrichedAccount = {
   is_active: boolean;
 };
 
+type ExplicitAccountReference = {
+  raw: string;
+  normalized: string;
+  expectedKind: 'debt' | 'operational' | 'savings' | null;
+  isGeneric: boolean;
+  role: 'source' | 'destination';
+};
+
 const visibleTypeMap: Record<z.infer<typeof financialIntentSchema>, string> = {
   income: 'Ingreso',
   expense_cash_like: 'Gasto con efectivo/banco',
@@ -154,6 +162,94 @@ function enrichAccounts(accounts: InterpreterAccountContext[]): EnrichedAccount[
 function matchAccounts(text: string, accounts: EnrichedAccount[]) {
   const normalized = normalize(text);
   return accounts.filter((account) => normalized.includes(account.normalized_name) || account.aliases.some((alias) => normalized.includes(alias)));
+}
+
+function extractExplicitAccountReference(
+  normalizedText: string,
+  intent: z.infer<typeof financialIntentSchema>
+): ExplicitAccountReference | null {
+  const withMatch = intent === 'income'
+    ? normalizedText.match(/(en)\s+([a-z0-9\s]+)$/)
+    : normalizedText.match(/(con|desde|a la|al)\s+([a-z0-9\s]+?)(?=\s+(?:desde|con|en|a la|al)\b|$)/);
+  const preposition = withMatch?.[1]?.trim() ?? '';
+  const raw = withMatch?.[2]?.trim();
+  if (!raw) return null;
+
+  const cleaned = raw.replace(/\b(en|de|del|la|el)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  const expectedKind =
+    /(tarjeta|tdc|prestamo|hipoteca)/.test(cleaned) ? 'debt'
+      : /(banco|efectivo|debito)/.test(cleaned) ? 'operational'
+        : /(ahorro|fondo|meta)/.test(cleaned) ? 'savings'
+          : null;
+  const isGeneric = /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|ahorro|fondo|meta)$/.test(cleaned);
+
+  return {
+    raw: cleaned,
+    normalized: normalize(cleaned),
+    expectedKind,
+    isGeneric,
+    role: ['a la', 'al', 'en'].includes(preposition) ? 'destination' : 'source'
+  };
+}
+
+function resolveExplicitReference(
+  reference: ExplicitAccountReference | null,
+  accounts: EnrichedAccount[]
+): { account: EnrichedAccount | null; confidence: number; unresolvedMessage: string | null } {
+  if (!reference) return { account: null, confidence: 0, unresolvedMessage: null };
+
+  const pool = reference.expectedKind
+    ? accounts.filter((account) => reference.expectedKind === 'debt' ? account.is_debt : reference.expectedKind === 'operational' ? account.type === 'operational_cash' : account.type === 'savings_fund')
+    : accounts;
+
+  if (!pool.length) return { account: null, confidence: 0, unresolvedMessage: null };
+  if (reference.isGeneric) {
+    if (reference.expectedKind) {
+      const genericPool = pool;
+      const keywordPool = genericPool.filter((account) => {
+        if (reference.normalized.includes('banco')) return account.normalized_name.includes('banco');
+        if (reference.normalized.includes('efectivo')) return account.normalized_name.includes('efectivo');
+        if (reference.normalized.includes('tarjeta') || reference.normalized.includes('tdc')) return account.is_debt;
+        return true;
+      });
+      if (keywordPool.length === 1) return { account: keywordPool[0], confidence: 0.9, unresolvedMessage: null };
+      if (genericPool.length === 1) return { account: genericPool[0], confidence: 0.92, unresolvedMessage: null };
+      return { account: null, confidence: 0.4, unresolvedMessage: null };
+    }
+    return { account: null, confidence: 0.4, unresolvedMessage: null };
+  }
+
+  const ranked = pool
+    .map((account) => {
+      if (reference.normalized === account.normalized_name) return { account, score: 1 };
+      if (account.aliases.includes(reference.normalized)) return { account, score: 0.96 };
+      const tokens = reference.normalized.split(' ').filter((token) => token.length > 2);
+      const overlap = tokens.filter((token) => account.normalized_name.includes(token)).length;
+      let score = tokens.length ? overlap / tokens.length : 0;
+      if (reference.expectedKind === 'debt' && /(tarjeta|tdc)/.test(reference.normalized)) {
+        const institutionToken = tokens.find((token) => !['tarjeta', 'tdc', 'credito'].includes(token));
+        if (institutionToken && account.normalized_name.includes(institutionToken) && account.is_debt) {
+          score = Math.max(score, 0.9);
+        }
+      }
+      return { account, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  const best = ranked[0];
+  const second = ranked[1];
+  const strongThreshold = 0.85;
+  const ambiguousDelta = 0.2;
+
+  if (!best || best.score < strongThreshold || ((second?.score ?? 0) > 0 && best.score - (second?.score ?? 0) < ambiguousDelta)) {
+    return {
+      account: null,
+      confidence: best?.score ?? 0,
+      unresolvedMessage: `No encontré una cuenta llamada "${reference.raw.toUpperCase()}". ¿Quieres elegir una cuenta existente?`
+    };
+  }
+
+  return { account: best.account, confidence: best.score, unresolvedMessage: null };
 }
 
 function findAccountByHint(normalizedText: string, accounts: EnrichedAccount[], kind: 'debt' | 'operational' | 'savings') {
@@ -264,6 +360,8 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const amount = parseAmount(text);
   const matched = matchAccounts(text, modelAccounts);
   const intent = inferIntent(normalizedText, matched);
+  const explicitReference = extractExplicitAccountReference(normalizedText, intent);
+  const explicitResolution = resolveExplicitReference(explicitReference, modelAccounts);
 
   const sourceFromHint = findAccountByHint(normalizedText, modelAccounts, 'operational');
   const debtFromHint = findAccountByHint(normalizedText, modelAccounts, 'debt');
@@ -281,6 +379,17 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     destination = destination ?? savingsFromHint;
     source = source ?? sourceFromHint;
   }
+  if (intent === 'income') {
+    source = null;
+  }
+  if (explicitResolution.account && explicitResolution.confidence >= 0.85) {
+    if (intent === 'income' || explicitReference?.role === 'destination') destination = explicitResolution.account;
+    else source = explicitResolution.account;
+  }
+  if (explicitResolution.unresolvedMessage) {
+    if (intent === 'income') destination = null;
+    else source = null;
+  }
   const category = inferCategory(intent, normalizedText);
 
   const missingKinds: z.infer<typeof missingFieldKindSchema>[] = [];
@@ -297,13 +406,18 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   if (/pague\s+\d+\s*$/.test(normalizedText)) {
     missingKinds.push('missingIntent');
   }
+  if (explicitResolution.unresolvedMessage && !missingKinds.includes('missingSourceAccount')) {
+    missingKinds.push('missingSourceAccount');
+  }
 
   const prompt = choosePrompt(missingKinds);
-  const confidence = missingKinds.length === 0 ? 0.94 : 0.62;
+  const confidence = Math.max(0.4, missingKinds.length === 0 ? 0.94 : 0.62, explicitResolution.confidence);
   const visibleType = visibleTypeMap[intent];
   const humanConfirmation = missingKinds.length
     ? null
-    : `Registrar ${visibleType.toLowerCase()} de $${amount.toLocaleString('es-MX')}${source ? ` desde ${source.name}` : ''}${destination ? ` hacia ${destination.name}` : ''}.`;
+    : intent === 'income'
+      ? `Registrar ingreso de $${amount.toLocaleString('es-MX')} hacia ${destination?.name ?? 'N/A'}.`
+      : `Registrar ${visibleType.toLowerCase()} de $${amount.toLocaleString('es-MX')}${source ? ` desde ${source.name}` : ''}${destination ? ` hacia ${destination.name}` : ''}.`;
 
   return transactionIntentSchema.parse({
     rawText: text,
@@ -324,7 +438,7 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     destinationAccount: destination?.name.toLowerCase(),
     missingFields: missingKinds.map((item) => item.replace('missing', '').replace('Target', 'Account').replace(/^./, (c) => c.toLowerCase())),
     missingFieldKinds: missingKinds,
-    nextPrompt: prompt.nextPrompt,
+    nextPrompt: explicitResolution.unresolvedMessage ?? prompt.nextPrompt,
     nextPromptInputType: prompt.nextPromptInputType,
     nextPromptAllowedAccountTypes: prompt.nextPromptAllowedAccountTypes,
     confidence,
