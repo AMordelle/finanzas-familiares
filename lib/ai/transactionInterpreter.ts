@@ -121,6 +121,10 @@ function normalize(input: string) {
   return input.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[¿?¡!.,;:]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeAccountLabel(input: string) {
+  return normalize(input).replace(/\b(tarjeta|cuenta|banco|tdc)\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function parseAmount(input: string) {
   const match = input.replace(/,/g, '').match(/(\d+(?:\.\d+)?)/);
   return Number(match?.[1] ?? 0) || 1;
@@ -139,7 +143,12 @@ function enrichAccounts(accounts: InterpreterAccountContext[]): EnrichedAccount[
   return accounts.map((account, index) => {
     const type = toCanonicalType(account.type);
     const normalizedName = normalize(account.name);
-    const aliases = (account.aliases ?? []).map((alias) => normalize(alias)).filter(Boolean);
+    const normalizedCompactName = normalizeAccountLabel(account.name);
+    const aliases = Array.from(new Set([
+      ...(account.aliases ?? []).map((alias) => normalize(alias)),
+      normalizedName,
+      normalizedCompactName
+    ])).filter(Boolean);
 
     return {
       id: account.id ?? `${normalizedName}-${index}`,
@@ -161,7 +170,12 @@ function enrichAccounts(accounts: InterpreterAccountContext[]): EnrichedAccount[
 
 function matchAccounts(text: string, accounts: EnrichedAccount[]) {
   const normalized = normalize(text);
-  return accounts.filter((account) => normalized.includes(account.normalized_name) || account.aliases.some((alias) => normalized.includes(alias)));
+  const compact = normalizeAccountLabel(text);
+  return accounts.filter((account) =>
+    normalized.includes(account.normalized_name)
+    || compact.includes(normalizeAccountLabel(account.name))
+    || account.aliases.some((alias) => normalized.includes(alias) || compact.includes(alias))
+  );
 }
 
 function extractExplicitAccountReference(
@@ -222,6 +236,7 @@ function resolveExplicitReference(
   const ranked = pool
     .map((account) => {
       if (reference.normalized === account.normalized_name) return { account, score: 1 };
+      if (reference.normalized === normalizeAccountLabel(account.name)) return { account, score: 0.97 };
       if (account.aliases.includes(reference.normalized)) return { account, score: 0.96 };
       const tokens = reference.normalized.split(' ').filter((token) => token.length > 2);
       const overlap = tokens.filter((token) => account.normalized_name.includes(token)).length;
@@ -241,11 +256,16 @@ function resolveExplicitReference(
   const strongThreshold = 0.85;
   const ambiguousDelta = 0.2;
 
-  if (!best || best.score < strongThreshold || ((second?.score ?? 0) > 0 && best.score - (second?.score ?? 0) < ambiguousDelta)) {
+  const ambiguous = (second?.score ?? 0) > 0 && best && best.score - (second?.score ?? 0) < ambiguousDelta;
+  if (!best || best.score < strongThreshold || ambiguous) {
+    const options = ranked.filter((item) => item.score > 0.45).slice(0, 3).map((item) => item.account.name);
+    const clarification = options.length > 1
+      ? `¿Te refieres a ${options.join(' o ')}?`
+      : `No encontré una cuenta llamada "${reference.raw.toUpperCase()}". ¿Quieres elegir una cuenta existente?`;
     return {
       account: null,
       confidence: best?.score ?? 0,
-      unresolvedMessage: `No encontré una cuenta llamada "${reference.raw.toUpperCase()}". ¿Quieres elegir una cuenta existente?`
+      unresolvedMessage: clarification
     };
   }
 
@@ -261,10 +281,19 @@ function findAccountByHint(normalizedText: string, accounts: EnrichedAccount[], 
     if (debtByKeyword) return debtByKeyword;
     if (/(tarjeta|tdc|prestamo|hipoteca)/.test(normalizedText)) {
       const debtAccounts = accounts.filter((account) => account.is_debt);
+      const creditCards = debtAccounts.filter((account) => account.type === 'credit_card');
+      const hintTokens = normalizedText.split(' ').filter((token) => token.length > 2 && !['tarjeta', 'tdc', 'prestamo', 'hipoteca', 'deuda', 'credito'].includes(token));
+      if (!hintTokens.length) {
+        if (normalizedText.includes('tarjeta') && creditCards.length === 1) return creditCards[0];
+        if (normalizedText.includes('prestamo') && debtAccounts.filter((account) => account.type === 'loan').length === 1) {
+          return debtAccounts.find((account) => account.type === 'loan') ?? null;
+        }
+        return null;
+      }
       const ranked = debtAccounts
         .map((account) => ({
           account,
-          score: account.normalized_name.split(' ').filter((token) => token.length > 2 && normalizedText.includes(token)).length
+          score: account.normalized_name.split(' ').filter((token) => token.length > 2 && hintTokens.includes(token)).length
         }))
         .sort((a, b) => b.score - a.score);
       if (!ranked.length) return null;

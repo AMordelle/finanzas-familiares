@@ -5,7 +5,7 @@ const accounts = [
   { id: 'acc-ef', name: 'Efectivo', type: 'operational_cash' },
   { id: 'acc-ban', name: 'Banco BBVA', type: 'operational_cash' },
   { id: 'acc-tdc', name: 'TDC BBVA', type: 'credit_card' },
-  { id: 'acc-liv', name: 'Liverpool', type: 'credit_card' },
+  { id: 'acc-liv', name: 'Tarjeta Liverpool', type: 'credit_card' },
   { id: 'acc-loan', name: 'Préstamo auto', type: 'loan' },
   { id: 'acc-ah1', name: 'Ahorro Emergencia', type: 'savings_fund' },
   { id: 'acc-ah2', name: 'Ahorro Viaje', type: 'savings_fund' },
@@ -48,6 +48,7 @@ describe('transaction interpreter semantic pipeline', () => {
     const ccExpense = await interpretTransaction('Gasté 500 con Liverpool', accounts as any);
     expect(ccExpense.intent).toBe('expense_debt_account');
     expect(ccExpense.visibleType).toBe('Gasto con tarjeta de crédito');
+    expect(ccExpense.sourceAccountName).toBe('Tarjeta Liverpool');
 
     const payment = await interpretTransaction('Pagué 500 a la TDC BBVA desde Banco BBVA', accounts as any);
     expect(payment.intent).toBe('debt_payment');
@@ -60,6 +61,13 @@ describe('transaction interpreter semantic pipeline', () => {
     const result = await interpretTransaction('Gasté 1000 con tarjeta de credito', accounts as any);
     expect(result.missingFieldKinds[0]).toBe('missingSourceAccount');
     expect(result.nextPrompt).toContain('tarjeta');
+  });
+
+  it('B-extra: BBVA ambiguous reference asks clarification and does not auto-select', async () => {
+    const result = await interpretTransaction('Gasté 500 con BBVA', accounts as any);
+    expect(result.sourceAccountName).toBeNull();
+    expect(result.nextPrompt).toContain('Banco BBVA');
+    expect(result.nextPrompt).toContain('TDC BBVA');
   });
 
   it('I/J/K: account-aware and ambiguity/multi-turn requirements', async () => {
@@ -129,7 +137,7 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(complete.intent).toBe('debt_transfer');
     expect(complete.visibleType).toBe('Traslado de deuda');
     expect(complete.sourceAccountName).toBe('TDC BBVA');
-    expect(complete.destinationAccountName).toBe('Liverpool');
+    expect(complete.destinationAccountName).toBe('Tarjeta Liverpool');
 
     const incomplete = await interpretTransaction('Pagué 1000 de Liverpool con', accounts as any);
     expect(['debt_transfer', 'debt_payment']).toContain(incomplete.intent);
