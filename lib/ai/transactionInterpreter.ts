@@ -315,6 +315,32 @@ function inferIntent(normalizedText: string, matched: EnrichedAccount[]): z.infe
   return 'expense_cash_like';
 }
 
+function inferFinalIntent(
+  currentIntent: z.infer<typeof financialIntentSchema>,
+  sourceType: z.infer<typeof accountTypeSchema> | null | undefined,
+  destinationType: z.infer<typeof accountTypeSchema> | null | undefined,
+  normalizedText: string
+): z.infer<typeof financialIntentSchema> {
+  if ((currentIntent === 'expense_cash_like' || currentIntent === 'expense_debt_account') && sourceType === 'credit_card') {
+    return 'expense_debt_account';
+  }
+  if (currentIntent === 'debt_payment' || currentIntent === 'debt_transfer' || /pague/.test(normalizedText)) {
+    const sourceIsDebt = ['credit_card', 'loan'].includes(sourceType ?? '');
+    const destinationIsDebt = ['credit_card', 'loan'].includes(destinationType ?? '');
+    if (sourceIsDebt && destinationIsDebt) return 'debt_transfer';
+    if (!sourceIsDebt && destinationIsDebt) return 'debt_payment';
+  }
+  return currentIntent;
+}
+
+function findDebtDestinationFromText(normalizedText: string, accounts: EnrichedAccount[]) {
+  const match = normalizedText.match(/de\s+([a-z0-9\s]+?)\s+con\b/);
+  const fragment = match?.[1]?.trim();
+  if (!fragment) return null;
+  const normalizedFragment = normalize(fragment);
+  return accounts.find((account) => account.is_debt && (account.normalized_name.includes(normalizedFragment) || normalizedFragment.includes(account.normalized_name))) ?? null;
+}
+
 function inferCategory(intent: z.infer<typeof financialIntentSchema>, normalizedText: string) {
   if (intent === 'income') {
     if (/(nomina|sueldo)/.test(normalizedText)) return 'ingreso_fijo';
@@ -387,6 +413,7 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const sourceFromHint = findAccountByHint(normalizedText, modelAccounts, 'operational');
   const debtFromHint = findAccountByHint(normalizedText, modelAccounts, 'debt');
   const savingsFromHint = findAccountByHint(normalizedText, modelAccounts, 'savings');
+  const debtDestinationFromText = findDebtDestinationFromText(normalizedText, modelAccounts);
 
   let source = matched[0] ?? null;
   let destination = matched[1] ?? (intent === 'income' ? matched[0] ?? null : null);
@@ -395,6 +422,12 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   if (intent === 'debt_payment') {
     destination = destination ?? debtFromHint;
     source = source ?? sourceFromHint;
+  }
+  if (intent === 'debt_transfer' && debtDestinationFromText) {
+    destination = debtDestinationFromText;
+    if (source?.id === destination.id) {
+      source = null;
+    }
   }
   if (intent === 'savings_contribution') {
     destination = destination ?? savingsFromHint;
@@ -411,14 +444,15 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     if (intent === 'income' || explicitReference?.role === 'destination') destination = null;
     else source = null;
   }
-  const category = inferCategory(intent, normalizedText);
+  const finalIntent = inferFinalIntent(intent, source?.type, destination?.type, normalizedText);
+  const category = inferCategory(finalIntent, normalizedText);
 
   const missingKinds: z.infer<typeof missingFieldKindSchema>[] = [];
-  if (intent === 'manual_adjustment') missingKinds.push('missingIntent');
-  if (['income', 'transfer_between_own_accounts', 'debt_payment', 'debt_transfer', 'savings_contribution', 'savings_withdrawal', 'receivable_payment'].includes(intent) && !destination) {
-    missingKinds.push(intent === 'debt_payment' || intent === 'debt_transfer' ? 'missingDebtTarget' : 'missingDestinationAccount');
+  if (finalIntent === 'manual_adjustment') missingKinds.push('missingIntent');
+  if (['income', 'transfer_between_own_accounts', 'debt_payment', 'debt_transfer', 'savings_contribution', 'savings_withdrawal', 'receivable_payment'].includes(finalIntent) && !destination) {
+    missingKinds.push(finalIntent === 'debt_payment' || finalIntent === 'debt_transfer' ? 'missingDebtTarget' : 'missingDestinationAccount');
   }
-  if (['expense_cash_like', 'expense_debt_account', 'debt_payment', 'debt_transfer', 'savings_contribution', 'savings_withdrawal', 'transfer_between_own_accounts', 'receivable_created'].includes(intent) && !source) {
+  if (['expense_cash_like', 'expense_debt_account', 'debt_payment', 'debt_transfer', 'savings_contribution', 'savings_withdrawal', 'transfer_between_own_accounts', 'receivable_created'].includes(finalIntent) && !source) {
     missingKinds.push('missingSourceAccount');
   }
   if (/gaste\s+\d+\s+con\s+/.test(normalizedText) && !/(en\s+\w+)/.test(normalizedText)) {
@@ -431,21 +465,21 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     missingKinds.push('missingSourceAccount');
   }
 
-  const prompt = choosePrompt(missingKinds, intent, normalizedText);
+  const prompt = choosePrompt(missingKinds, finalIntent, normalizedText);
   const confidence = Math.max(0.4, missingKinds.length === 0 ? 0.94 : 0.62, explicitResolution.confidence);
-  const visibleType = visibleTypeMap[intent];
+  const visibleType = visibleTypeMap[finalIntent];
   const humanConfirmation = missingKinds.length
     ? null
-    : intent === 'income'
+    : finalIntent === 'income'
       ? `Registrar ingreso de $${amount.toLocaleString('es-MX')} hacia ${destination?.name ?? 'N/A'}.`
       : `Registrar ${visibleType.toLowerCase()} de $${amount.toLocaleString('es-MX')}${source ? ` desde ${source.name}` : ''}${destination ? ` hacia ${destination.name}` : ''}.`;
 
   return transactionIntentSchema.parse({
     rawText: text,
     normalizedText,
-    intent,
+    intent: finalIntent,
     visibleType,
-    action: intentToLegacyAction(intent),
+    action: intentToLegacyAction(finalIntent),
     amount,
     description: text.trim() || null,
     category,
@@ -520,6 +554,15 @@ export async function applyFollowUpAnswer(
     updated.visibleType = visibleTypeMap.debt_transfer;
     updated.action = intentToLegacyAction(updated.intent);
   }
+
+  updated.intent = inferFinalIntent(
+    updated.intent,
+    updated.sourceAccountType,
+    updated.destinationAccountType,
+    updated.normalizedText
+  );
+  updated.visibleType = visibleTypeMap[updated.intent];
+  updated.action = intentToLegacyAction(updated.intent);
 
   const final = { ...updated };
   const remaining = final.missingFieldKinds.filter((item) => item !== kind);

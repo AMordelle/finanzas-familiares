@@ -47,6 +47,7 @@ describe('transaction interpreter semantic pipeline', () => {
   it('F/G/H: credit-card purchase, debt payment, debt transfer', async () => {
     const ccExpense = await interpretTransaction('Gasté 500 con Liverpool', accounts as any);
     expect(ccExpense.intent).toBe('expense_debt_account');
+    expect(ccExpense.visibleType).toBe('Gasto con tarjeta de crédito');
 
     const payment = await interpretTransaction('Pagué 500 a la TDC BBVA desde Banco BBVA', accounts as any);
     expect(payment.intent).toBe('debt_payment');
@@ -133,6 +134,10 @@ describe('transaction interpreter semantic pipeline', () => {
     const incomplete = await interpretTransaction('Pagué 1000 de Liverpool con', accounts as any);
     expect(['debt_transfer', 'debt_payment']).toContain(incomplete.intent);
     expect(incomplete.nextPrompt).not.toContain('¿Qué pagaste?');
+
+    const withSource = await applyFollowUpAnswer(incomplete, 'Banco BBVA', accounts as any);
+    expect(withSource.intent).toBe('debt_payment');
+    expect(withSource.visibleType).toBe('Pago de deuda');
   });
 
   it('E: generic credit card phrase resolves only when unique', async () => {
