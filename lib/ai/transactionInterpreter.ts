@@ -419,6 +419,12 @@ function applyIntentAccountConstraints(draft: TransactionIntent) {
     draft.destinationAccountType = null;
     draft.destinationAccount = undefined;
   }
+  if (draft.intent === 'expense_debt_account' && draft.sourceAccountType !== 'credit_card') {
+    draft.sourceAccountId = null;
+    draft.sourceAccountName = null;
+    draft.sourceAccountType = null;
+    draft.sourceAccount = undefined;
+  }
 }
 
 function recomputeMissingKinds(draft: TransactionIntent, unresolvedMessage: string | null = null) {
@@ -436,7 +442,7 @@ function recomputeMissingKinds(draft: TransactionIntent, unresolvedMessage: stri
   if (/pague\s+\d+\s*$/.test(draft.normalizedText)) {
     missingKinds.push('missingIntent');
   }
-  if (draft.intent === 'expense_debt_account' && !draft.sourceAccountId && !missingKinds.includes('missingSourceAccount')) {
+  if (draft.intent === 'expense_debt_account' && (draft.sourceAccountType !== 'credit_card' || !draft.sourceAccountId) && !missingKinds.includes('missingSourceAccount')) {
     missingKinds.push('missingSourceAccount');
   }
   if (unresolvedMessage && !missingKinds.includes('missingSourceAccount')) {

@@ -30,7 +30,14 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
   const router = useRouter();
   const isSavingRef = useRef(false);
 
-  const isReadyToConfirm = useMemo(() => intent && intent.missingFieldKinds.length === 0, [intent]);
+  const isCreditExpenseSourceInvalid = useMemo(
+    () => !!intent && intent.intent === 'expense_debt_account' && intent.sourceAccountType !== 'credit_card',
+    [intent]
+  );
+  const isReadyToConfirm = useMemo(
+    () => !!intent && intent.missingFieldKinds.length === 0 && !isCreditExpenseSourceInvalid,
+    [intent, isCreditExpenseSourceInvalid]
+  );
   const hasAccounts = accounts.length > 0;
 
   if (!hasHousehold) {
@@ -65,7 +72,7 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
     : accounts;
 
   const handleSave = () => {
-    if (!intent || intent.missingFieldKinds.length > 0 || isSavingRef.current) return;
+    if (!intent || intent.missingFieldKinds.length > 0 || isCreditExpenseSourceInvalid || isSavingRef.current) return;
     setError(null);
     isSavingRef.current = true;
     startTransition(async () => {
@@ -113,6 +120,13 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
             </select>
           )}
           <Button onClick={handleMissingFieldApply} disabled={!followUpValue.trim()}>Continuar</Button>
+        </div>
+      )}
+
+      {intent && isCreditExpenseSourceInvalid && (
+        <div className="mt-6 space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm font-medium text-amber-900">Faltan datos para completar el movimiento:</p>
+          <p className="text-sm text-slate-700">¿Con qué tarjeta de crédito pagaste?</p>
         </div>
       )}
 

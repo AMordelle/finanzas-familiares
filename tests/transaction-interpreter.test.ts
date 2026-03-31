@@ -223,6 +223,28 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(afterCardSelection.humanConfirmation).toContain('gasto con tarjeta de crédito');
   });
 
+  it('D3-followup: texto libre largo mantiene tarjeta pendiente y nunca asigna Banco', async () => {
+    const start = await interpretTransaction('Gasté 1000 con tarjeta de credito', accounts as any);
+    const afterDescription = await applyFollowUpAnswer(start, 'la cooperacion de la escuela de mi hijo', accounts as any);
+    expect(afterDescription.intent).toBe('expense_debt_account');
+    expect(afterDescription.sourceAccountName).toBeNull();
+    expect(afterDescription.sourceAccountType).toBeNull();
+    expect(afterDescription.sourceAccountName).not.toBe('Banco BBVA');
+    expect(afterDescription.missingFieldKinds).toContain('missingSourceAccount');
+    expect(afterDescription.nextPrompt).toBe('¿Con qué tarjeta de crédito pagaste?');
+    expect(afterDescription.humanConfirmation).toBeNull();
+  });
+
+  it('D4-followup: seleccionar cuenta no deuda no puede cerrar gasto con tarjeta', async () => {
+    const start = await interpretTransaction('Gasté 1000 con tarjeta de credito', accounts as any);
+    const resolved = await applyFollowUpAnswer(start, 'Banco BBVA', accounts as any);
+    expect(resolved.intent).toBe('expense_debt_account');
+    expect(resolved.sourceAccountName).toBeNull();
+    expect(resolved.sourceAccountType).toBeNull();
+    expect(resolved.missingFieldKinds).toContain('missingSourceAccount');
+    expect(resolved.humanConfirmation).toBeNull();
+  });
+
   it('E-followup: texto libre de descripción no muta cuentas', async () => {
     const start = await interpretTransaction('Gasté 300 con efectivo', accounts as any);
     expect(start.sourceAccountName).toBe('Efectivo');
