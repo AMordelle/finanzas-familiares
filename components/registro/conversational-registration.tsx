@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
+import { applyFollowUpAnswer, type TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import type { AccountOption } from '@/lib/db/queries';
 import { interpretTransactionAction, saveInterpretedTransactionAction } from '@/app/registro/actions';
 
@@ -53,46 +53,11 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
 
   const handleMissingFieldApply = () => {
     if (!intent || !followUpValue.trim()) return;
-    const kind = intent.missingFieldKinds[0];
-    if (!kind) return;
-
-    const updated: TransactionIntent = { ...intent };
-    if (kind === 'missingSourceAccount') {
-      updated.sourceAccount = followUpValue.toLowerCase();
-      updated.sourceAccountName = followUpValue;
-    }
-    if (kind === 'missingDestinationAccount' || kind === 'missingDebtTarget') {
-      updated.destinationAccount = followUpValue.toLowerCase();
-      updated.destinationAccountName = followUpValue;
-    }
-    if (kind === 'missingWhatWasPaid' || kind === 'missingDescription') {
-      updated.description = `${intent.rawText}. ${followUpValue.trim()}`;
-    }
-    if (kind === 'missingIntent') {
-      const value = normalizeChoice(followUpValue);
-      if (value === 'tarjeta' || value === 'prestamo') {
-        updated.intent = 'debt_payment';
-        updated.visibleType = 'Pago de deuda';
-        updated.action = 'pago_deuda';
-      } else if (value === 'transferencia') {
-        updated.intent = 'transfer_between_own_accounts';
-        updated.visibleType = 'Transferencia entre cuentas';
-        updated.action = 'transferencia';
-      } else if (value === 'gasto') {
-        updated.intent = 'expense_cash_like';
-        updated.visibleType = 'Gasto con efectivo/banco';
-        updated.action = 'gasto';
-      }
-    }
-
-    updated.missingFieldKinds = updated.missingFieldKinds.slice(1);
-    updated.missingFields = updated.missingFields.slice(1);
-    updated.nextPrompt = updated.missingFieldKinds.length ? updated.nextPrompt : null;
-    updated.nextPromptInputType = updated.missingFieldKinds.length ? updated.nextPromptInputType : null;
-    updated.nextPromptAllowedAccountTypes = updated.missingFieldKinds.length ? updated.nextPromptAllowedAccountTypes : null;
-    updated.humanConfirmation = updated.missingFieldKinds.length ? null : `Registrar ${updated.visibleType.toLowerCase()} de $${updated.amount.toLocaleString('es-MX')}.`;
-    setIntent(updated);
-    setFollowUpValue('');
+    startTransition(async () => {
+      const resolved = await applyFollowUpAnswer(intent, followUpValue.trim(), accounts);
+      setIntent(resolved);
+      setFollowUpValue('');
+    });
   };
 
   const allowedAccounts = intent?.nextPromptAllowedAccountTypes
@@ -156,8 +121,4 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
       {successMessage && <p className="mt-4 text-sm text-emerald-700">{successMessage}</p>}
     </Card>
   );
-}
-
-function normalizeChoice(value: string) {
-  return value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }

@@ -274,6 +274,16 @@ function findAccountByHint(normalizedText: string, accounts: EnrichedAccount[], 
     }
   }
   if (kind === 'operational' && /(efectivo|banco|debito)/.test(normalizedText)) {
+    if (normalizedText.includes('banco')) {
+      return accounts.find((account) => account.type === 'operational_cash' && account.normalized_name.includes('banco'))
+        ?? accounts.find((account) => account.type === 'operational_cash')
+        ?? null;
+    }
+    if (normalizedText.includes('efectivo')) {
+      return accounts.find((account) => account.type === 'operational_cash' && account.normalized_name.includes('efectivo'))
+        ?? accounts.find((account) => account.type === 'operational_cash')
+        ?? null;
+    }
     return accounts.find((account) => account.type === 'operational_cash') ?? null;
   }
   if (kind === 'savings' && /(ahorro|fondo|meta)/.test(normalizedText)) {
@@ -290,6 +300,7 @@ function inferIntent(normalizedText: string, matched: EnrichedAccount[]): z.infe
   if (/(ahorro|fondo emergencia|meta)/.test(normalizedText) && /(meti|aporte|abone|deposite|movi)/.test(normalizedText)) return 'savings_contribution';
   if (/(retire|saque).*(ahorro|fondo|meta)/.test(normalizedText)) return 'savings_withdrawal';
   if (/(pague|abone|abono)/.test(normalizedText)) {
+    if (/de\s+\w+\s+con\s*$/.test(normalizedText)) return 'debt_transfer';
     const debtMentions = matched.filter((account) => account.is_debt);
     if (debtMentions.length >= 2) return 'debt_transfer';
     if (debtMentions.length >= 1 || /(tarjeta|tdc|prestamo|hipoteca)/.test(normalizedText)) return 'debt_payment';
@@ -336,7 +347,11 @@ function intentToLegacyAction(intent: z.infer<typeof financialIntentSchema>): Tr
   return 'gasto';
 }
 
-function choosePrompt(missingKinds: z.infer<typeof missingFieldKindSchema>[]) {
+function choosePrompt(
+  missingKinds: z.infer<typeof missingFieldKindSchema>[],
+  intent?: z.infer<typeof financialIntentSchema>,
+  normalizedText?: string
+) {
   const first = missingKinds[0];
   if (!first) return { nextPrompt: null, nextPromptInputType: null, nextPromptAllowedAccountTypes: null };
   if (first === 'missingIntent') {
@@ -350,6 +365,12 @@ function choosePrompt(missingKinds: z.infer<typeof missingFieldKindSchema>[]) {
   }
   if (first === 'missingDestinationAccount') {
     return { nextPrompt: '¿A qué cuenta entró el dinero?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['operational_cash', 'savings_fund', 'investment', 'receivable'] as const };
+  }
+  if (first === 'missingSourceAccount' && intent === 'expense_debt_account') {
+    return { nextPrompt: '¿Qué tarjeta usaste para este gasto?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['credit_card'] as const };
+  }
+  if (first === 'missingSourceAccount' && intent === 'debt_transfer' && normalizedText?.includes('de ')) {
+    return { nextPrompt: '¿Con qué cuenta pagaste esa deuda?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['credit_card', 'loan', 'operational_cash'] as const };
   }
   return { nextPrompt: '¿De qué cuenta salió el dinero?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['operational_cash', 'savings_fund', 'investment', 'credit_card', 'loan'] as const };
 }
@@ -387,18 +408,18 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     else source = explicitResolution.account;
   }
   if (explicitResolution.unresolvedMessage) {
-    if (intent === 'income') destination = null;
+    if (intent === 'income' || explicitReference?.role === 'destination') destination = null;
     else source = null;
   }
   const category = inferCategory(intent, normalizedText);
 
   const missingKinds: z.infer<typeof missingFieldKindSchema>[] = [];
   if (intent === 'manual_adjustment') missingKinds.push('missingIntent');
-  if (['expense_cash_like', 'expense_debt_account', 'debt_payment', 'debt_transfer', 'savings_contribution', 'savings_withdrawal', 'transfer_between_own_accounts', 'receivable_created'].includes(intent) && !source) {
-    missingKinds.push('missingSourceAccount');
-  }
   if (['income', 'transfer_between_own_accounts', 'debt_payment', 'debt_transfer', 'savings_contribution', 'savings_withdrawal', 'receivable_payment'].includes(intent) && !destination) {
     missingKinds.push(intent === 'debt_payment' || intent === 'debt_transfer' ? 'missingDebtTarget' : 'missingDestinationAccount');
+  }
+  if (['expense_cash_like', 'expense_debt_account', 'debt_payment', 'debt_transfer', 'savings_contribution', 'savings_withdrawal', 'transfer_between_own_accounts', 'receivable_created'].includes(intent) && !source) {
+    missingKinds.push('missingSourceAccount');
   }
   if (/gaste\s+\d+\s+con\s+/.test(normalizedText) && !/(en\s+\w+)/.test(normalizedText)) {
     missingKinds.push('missingWhatWasPaid');
@@ -410,7 +431,7 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     missingKinds.push('missingSourceAccount');
   }
 
-  const prompt = choosePrompt(missingKinds);
+  const prompt = choosePrompt(missingKinds, intent, normalizedText);
   const confidence = Math.max(0.4, missingKinds.length === 0 ? 0.94 : 0.62, explicitResolution.confidence);
   const visibleType = visibleTypeMap[intent];
   const humanConfirmation = missingKinds.length
@@ -444,4 +465,81 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     confidence,
     humanConfirmation
   });
+}
+
+function findAccountByName(accounts: EnrichedAccount[], value: string) {
+  const normalized = normalize(value);
+  return accounts.find((account) => account.normalized_name === normalized || account.aliases.includes(normalized));
+}
+
+export async function applyFollowUpAnswer(
+  current: TransactionIntent,
+  answer: string,
+  accounts: InterpreterAccountContext[] = []
+): TransactionIntent {
+  const updated = { ...current };
+  const kind = updated.missingFieldKinds[0];
+  const modelAccounts = enrichAccounts(accounts);
+  const matchedAccount = findAccountByName(modelAccounts, answer);
+
+  if (kind === 'missingDebtTarget' || kind === 'missingDestinationAccount') {
+    if (matchedAccount) {
+      updated.destinationAccountId = matchedAccount.id;
+      updated.destinationAccountName = matchedAccount.name;
+      updated.destinationAccountType = matchedAccount.type;
+      updated.destinationAccount = matchedAccount.name.toLowerCase();
+    }
+  }
+
+  if (kind === 'missingSourceAccount') {
+    if (matchedAccount) {
+      updated.sourceAccountId = matchedAccount.id;
+      updated.sourceAccountName = matchedAccount.name;
+      updated.sourceAccountType = matchedAccount.type;
+      updated.sourceAccount = matchedAccount.name.toLowerCase();
+    }
+  }
+
+  if (kind === 'missingIntent') {
+    const normalizedAnswer = normalize(answer);
+    if (normalizedAnswer.includes('gasto')) updated.intent = 'expense_cash_like';
+    if (normalizedAnswer.includes('tarjeta') || normalizedAnswer.includes('prestamo')) updated.intent = 'debt_payment';
+    if (normalizedAnswer.includes('transferencia')) updated.intent = 'transfer_between_own_accounts';
+    updated.visibleType = visibleTypeMap[updated.intent];
+    updated.action = intentToLegacyAction(updated.intent);
+  }
+
+  if (updated.intent === 'expense_cash_like' && updated.sourceAccountType === 'credit_card') {
+    updated.intent = 'expense_debt_account';
+    updated.visibleType = visibleTypeMap.expense_debt_account;
+    updated.action = intentToLegacyAction(updated.intent);
+  }
+
+  if (updated.intent === 'debt_payment' && ['credit_card', 'loan'].includes(updated.sourceAccountType ?? '') && ['credit_card', 'loan'].includes(updated.destinationAccountType ?? '')) {
+    updated.intent = 'debt_transfer';
+    updated.visibleType = visibleTypeMap.debt_transfer;
+    updated.action = intentToLegacyAction(updated.intent);
+  }
+
+  const final = { ...updated };
+  const remaining = final.missingFieldKinds.filter((item) => item !== kind);
+  if (kind === 'missingIntent' && !final.sourceAccountName && ['expense_cash_like', 'expense_debt_account'].includes(final.intent)) {
+    remaining.push('missingSourceAccount');
+  }
+  if (kind === 'missingDebtTarget' && !final.sourceAccountName && final.intent === 'debt_payment') {
+    remaining.push('missingSourceAccount');
+  }
+  final.missingFieldKinds = Array.from(new Set(remaining));
+  final.missingFields = final.missingFieldKinds.map((item) => item.replace('missing', '').replace('Target', 'Account').replace(/^./, (c) => c.toLowerCase()));
+  const prompt = choosePrompt(final.missingFieldKinds, final.intent, final.normalizedText);
+  final.nextPrompt = prompt.nextPrompt;
+  final.nextPromptInputType = prompt.nextPromptInputType;
+  final.nextPromptAllowedAccountTypes = prompt.nextPromptAllowedAccountTypes;
+  final.humanConfirmation = final.missingFieldKinds.length
+    ? null
+    : final.intent === 'income'
+      ? `Registrar ingreso de $${final.amount.toLocaleString('es-MX')} hacia ${final.destinationAccountName ?? 'N/A'}.`
+      : `Registrar ${final.visibleType.toLowerCase()} de $${final.amount.toLocaleString('es-MX')}${final.sourceAccountName ? ` desde ${final.sourceAccountName}` : ''}${final.destinationAccountName ? ` hacia ${final.destinationAccountName}` : ''}.`;
+
+  return transactionIntentSchema.parse(final);
 }

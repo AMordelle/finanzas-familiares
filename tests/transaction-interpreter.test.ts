@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { interpretTransaction } from '@/lib/ai/transactionInterpreter';
+import { applyFollowUpAnswer, interpretTransaction } from '@/lib/ai/transactionInterpreter';
 
 const accounts = [
   { id: 'acc-ef', name: 'Efectivo', type: 'operational_cash' },
@@ -55,6 +55,12 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(transfer.intent).toBe('debt_transfer');
   });
 
+  it('B: generic tarjeta with multiple cards asks which one', async () => {
+    const result = await interpretTransaction('Gasté 1000 con tarjeta de credito', accounts as any);
+    expect(result.missingFieldKinds[0]).toBe('missingSourceAccount');
+    expect(result.nextPrompt).toContain('tarjeta');
+  });
+
   it('I/J/K: account-aware and ambiguity/multi-turn requirements', async () => {
     const liverpool = await interpretTransaction('Gasté 500 con Liverpool', accounts as any);
     expect(liverpool.intent).toBe('expense_debt_account');
@@ -91,6 +97,42 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(result.sourceAccountName).toBeNull();
     expect(result.missingFieldKinds).toContain('missingSourceAccount');
     expect(result.nextPrompt).toContain('No encontré una cuenta llamada');
+  });
+
+  it('C/D: preserves source when unknown debt target is corrected', async () => {
+    const first = await interpretTransaction('Pagué 500 a la TDC SCTBNK desde banco', accounts as any);
+    const resolved = await applyFollowUpAnswer(first, 'TDC BBVA', accounts as any);
+    expect(resolved.sourceAccountName).toBe('Banco BBVA');
+    expect(resolved.destinationAccountName).toBe('TDC BBVA');
+
+    const second = await interpretTransaction('Pagué 300 a la TDC SCTBNK con efectivo', accounts as any);
+    const resolvedSecond = await applyFollowUpAnswer(second, 'TDC BBVA', accounts as any);
+    expect(resolvedSecond.sourceAccountName).toBe('Efectivo');
+    expect(resolvedSecond.destinationAccountName).toBe('TDC BBVA');
+  });
+
+  it('E/F: ambiguous payment continues flow and binds by asked role', async () => {
+    const base = await interpretTransaction('Pagué 300', accounts as any);
+    const afterIntent = await applyFollowUpAnswer(base, 'Un gasto normal', accounts as any);
+    expect(afterIntent.missingFieldKinds).toContain('missingSourceAccount');
+
+    const cardPayment = await interpretTransaction('Pagué 300 a la tarjeta', accounts as any);
+    expect(cardPayment.missingFieldKinds[0]).toBe('missingDebtTarget');
+    const afterCard = await applyFollowUpAnswer(cardPayment, 'TDC BBVA', accounts as any);
+    expect(afterCard.destinationAccountName).toBe('TDC BBVA');
+    expect(afterCard.missingFieldKinds).toContain('missingSourceAccount');
+  });
+
+  it('G/H: debt-transfer context survives complete and incomplete forms', async () => {
+    const complete = await interpretTransaction('Pagué 1000 de Liverpool con TDC BBVA', accounts as any);
+    expect(complete.intent).toBe('debt_transfer');
+    expect(complete.visibleType).toBe('Traslado de deuda');
+    expect(complete.sourceAccountName).toBe('TDC BBVA');
+    expect(complete.destinationAccountName).toBe('Liverpool');
+
+    const incomplete = await interpretTransaction('Pagué 1000 de Liverpool con', accounts as any);
+    expect(['debt_transfer', 'debt_payment']).toContain(incomplete.intent);
+    expect(incomplete.nextPrompt).not.toContain('¿Qué pagaste?');
   });
 
   it('E: generic credit card phrase resolves only when unique', async () => {
