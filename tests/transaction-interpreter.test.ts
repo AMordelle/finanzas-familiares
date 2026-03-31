@@ -192,11 +192,35 @@ describe('transaction interpreter semantic pipeline', () => {
 
   it('D-followup: descripción libre no cierra gasto con tarjeta genérica si falta tarjeta', async () => {
     const start = await interpretTransaction('Gasté 1000 con tarjeta de crédito', accounts as any);
+    expect(start.missingFieldKinds[0]).toBe('missingSourceAccount');
+    expect(start.nextPrompt).toBe('¿Con qué tarjeta de crédito pagaste?');
+
     const afterDescription = await applyFollowUpAnswer(start, 'en restaurante', accounts as any);
     expect(afterDescription.intent).toBe('expense_debt_account');
     expect(afterDescription.sourceAccountName).toBeNull();
+    expect(afterDescription.sourceAccountType).toBeNull();
     expect(afterDescription.missingFieldKinds[0]).toBe('missingSourceAccount');
-    expect(afterDescription.nextPrompt).toContain('tarjeta');
+    expect(afterDescription.nextPrompt).toBe('¿Con qué tarjeta de crédito pagaste?');
+    expect(afterDescription.humanConfirmation).toBeNull();
+  });
+
+  it('D2-followup: gasto con tarjeta genérica solo confirma cuando se elige tarjeta específica', async () => {
+    const start = await interpretTransaction('Gasté 1000 con tarjeta de credito', accounts as any);
+    expect(start.sourceAccountName).toBeNull();
+    expect(start.sourceAccountName).not.toBe('Banco BBVA');
+    expect(start.missingFieldKinds).toContain('missingSourceAccount');
+
+    const afterDescription = await applyFollowUpAnswer(start, 'en un viaje', accounts as any);
+    expect(afterDescription.sourceAccountName).toBeNull();
+    expect(afterDescription.sourceAccountName).not.toBe('Banco BBVA');
+    expect(afterDescription.missingFieldKinds).toContain('missingSourceAccount');
+
+    const afterCardSelection = await applyFollowUpAnswer(afterDescription, 'Tarjeta Liverpool', accounts as any);
+    expect(afterCardSelection.intent).toBe('expense_debt_account');
+    expect(afterCardSelection.sourceAccountName).toBe('Tarjeta Liverpool');
+    expect(afterCardSelection.destinationAccountName).toBeNull();
+    expect(afterCardSelection.missingFieldKinds).toEqual([]);
+    expect(afterCardSelection.humanConfirmation).toContain('gasto con tarjeta de crédito');
   });
 
   it('E-followup: texto libre de descripción no muta cuentas', async () => {
