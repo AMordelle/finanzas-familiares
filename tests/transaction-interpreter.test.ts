@@ -160,4 +160,53 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(ambiguousResult.sourceAccountName).toBeNull();
     expect(ambiguousResult.missingFieldKinds).toContain('missingSourceAccount');
   });
+
+  it('A-followup: gasto con Liverpool conserva destination null al finalizar', async () => {
+    const result = await interpretTransaction('Gasté 500 con Liverpool', accounts as any);
+    expect(result.intent).toBe('expense_debt_account');
+    expect(result.sourceAccountName).toBe('Tarjeta Liverpool');
+    expect(result.destinationAccountName).toBeNull();
+    expect(result.destinationAccountId).toBeNull();
+    expect(result.destinationAccountType).toBeNull();
+  });
+
+  it('B-followup: gasto con BBVA + Banco BBVA mantiene destination null', async () => {
+    const start = await interpretTransaction('Gasté 500 con BBVA', accounts as any);
+    const resolved = await applyFollowUpAnswer(start, 'Banco BBVA', accounts as any);
+    expect(resolved.intent).toBe('expense_cash_like');
+    expect(resolved.sourceAccountName).toBe('Banco BBVA');
+    expect(resolved.destinationAccountName).toBeNull();
+    expect(resolved.destinationAccountId).toBeNull();
+    expect(resolved.destinationAccountType).toBeNull();
+  });
+
+  it('C-followup: gasto con BBVA + TDC BBVA mantiene destination null', async () => {
+    const start = await interpretTransaction('Gasté 500 con BBVA', accounts as any);
+    const resolved = await applyFollowUpAnswer(start, 'TDC BBVA', accounts as any);
+    expect(resolved.intent).toBe('expense_debt_account');
+    expect(resolved.sourceAccountName).toBe('TDC BBVA');
+    expect(resolved.destinationAccountName).toBeNull();
+    expect(resolved.destinationAccountId).toBeNull();
+    expect(resolved.destinationAccountType).toBeNull();
+  });
+
+  it('D-followup: descripción libre no cierra gasto con tarjeta genérica si falta tarjeta', async () => {
+    const start = await interpretTransaction('Gasté 1000 con tarjeta de crédito', accounts as any);
+    const afterDescription = await applyFollowUpAnswer(start, 'en restaurante', accounts as any);
+    expect(afterDescription.intent).toBe('expense_debt_account');
+    expect(afterDescription.sourceAccountName).toBeNull();
+    expect(afterDescription.missingFieldKinds[0]).toBe('missingSourceAccount');
+    expect(afterDescription.nextPrompt).toContain('tarjeta');
+  });
+
+  it('E-followup: texto libre de descripción no muta cuentas', async () => {
+    const start = await interpretTransaction('Gasté 300 con efectivo', accounts as any);
+    expect(start.sourceAccountName).toBe('Efectivo');
+    expect(start.destinationAccountName).toBeNull();
+
+    const afterDescription = await applyFollowUpAnswer(start, 'servicio de internet', accounts as any);
+    expect(afterDescription.sourceAccountName).toBe('Efectivo');
+    expect(afterDescription.destinationAccountName).toBeNull();
+    expect(afterDescription.category).toBe('servicios');
+  });
 });
