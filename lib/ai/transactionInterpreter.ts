@@ -171,10 +171,18 @@ function enrichAccounts(accounts: InterpreterAccountContext[]): EnrichedAccount[
 function matchAccounts(text: string, accounts: EnrichedAccount[]) {
   const normalized = normalize(text);
   const compact = normalizeAccountLabel(text);
+  const aliasFrequency = accounts.reduce((map, account) => {
+    account.aliases.forEach((alias) => map.set(alias, (map.get(alias) ?? 0) + 1));
+    return map;
+  }, new Map<string, number>());
   return accounts.filter((account) =>
     normalized.includes(account.normalized_name)
-    || compact.includes(normalizeAccountLabel(account.name))
-    || account.aliases.some((alias) => normalized.includes(alias) || compact.includes(alias))
+    || account.aliases.some((alias) => {
+      const aliasTokenCount = alias.split(' ').filter(Boolean).length;
+      const isUnambiguousAlias = aliasTokenCount > 1 || (aliasFrequency.get(alias) ?? 0) === 1;
+      if (!isUnambiguousAlias) return false;
+      return normalized.includes(alias) || compact.includes(alias);
+    })
   );
 }
 
@@ -192,10 +200,10 @@ function extractExplicitAccountReference(
   const cleaned = raw.replace(/\b(en|de|del|la|el)\b/g, ' ').replace(/\s+/g, ' ').trim();
   const expectedKind =
     /(tarjeta|tdc|prestamo|hipoteca)/.test(cleaned) ? 'debt'
-      : /(banco|efectivo|debito)/.test(cleaned) ? 'operational'
+      : /(banco|efectivo|debito|tdd)/.test(cleaned) ? 'operational'
         : /(ahorro|fondo|meta)/.test(cleaned) ? 'savings'
           : null;
-  const isGeneric = /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|ahorro|fondo|meta)$/.test(cleaned);
+  const isGeneric = /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|debito|tdd|ahorro|fondo|meta)$/.test(cleaned);
 
   return {
     raw: cleaned,
@@ -302,7 +310,7 @@ function findAccountByHint(normalizedText: string, accounts: EnrichedAccount[], 
       return null;
     }
   }
-  if (kind === 'operational' && /(efectivo|banco|debito)/.test(normalizedText)) {
+  if (kind === 'operational' && /(efectivo|banco|debito|tdd)/.test(normalizedText)) {
     if (normalizedText.includes('banco')) {
       return accounts.find((account) => account.type === 'operational_cash' && account.normalized_name.includes('banco'))
         ?? accounts.find((account) => account.type === 'operational_cash')
@@ -311,6 +319,11 @@ function findAccountByHint(normalizedText: string, accounts: EnrichedAccount[], 
     if (normalizedText.includes('efectivo')) {
       return accounts.find((account) => account.type === 'operational_cash' && account.normalized_name.includes('efectivo'))
         ?? accounts.find((account) => account.type === 'operational_cash')
+        ?? null;
+    }
+    if (normalizedText.includes('tdd') || normalizedText.includes('debito')) {
+      return accounts.find((account) => account.type === 'operational_cash' && (account.normalized_name.includes('tdd') || account.normalized_name.includes('debito')))
+        ?? accounts.find((account) => account.type === 'operational_cash' && account.normalized_name.includes('bbva'))
         ?? null;
     }
     return accounts.find((account) => account.type === 'operational_cash') ?? null;
@@ -646,6 +659,7 @@ export async function applyFollowUpAnswer(
   );
   updated.visibleType = visibleTypeMap[updated.intent];
   updated.action = intentToLegacyAction(updated.intent);
+  updated.category = inferCategory(updated.intent, updated.normalizedText);
 
   if ((kind === 'missingDescription' || kind === 'missingWhatWasPaid') && answer.trim()) {
     updated.description = answer.trim();

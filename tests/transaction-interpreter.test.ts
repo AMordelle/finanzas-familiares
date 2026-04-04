@@ -4,8 +4,9 @@ import { applyFollowUpAnswer, interpretTransaction } from '@/lib/ai/transactionI
 const accounts = [
   { id: 'acc-ef', name: 'Efectivo', type: 'operational_cash' },
   { id: 'acc-ban', name: 'Banco BBVA', type: 'operational_cash' },
+  { id: 'acc-tdd', name: 'TDD BBVA', type: 'operational_cash', aliases: ['Débito BBVA'] },
   { id: 'acc-tdc', name: 'TDC BBVA', type: 'credit_card' },
-  { id: 'acc-liv', name: 'Tarjeta Liverpool', type: 'credit_card' },
+  { id: 'acc-liv', name: 'Tarjeta Liverpool', type: 'credit_card', aliases: ['TDC Liverpool'] },
   { id: 'acc-loan', name: 'Préstamo auto', type: 'loan' },
   { id: 'acc-ah1', name: 'Ahorro Emergencia', type: 'savings_fund' },
   { id: 'acc-ah2', name: 'Ahorro Viaje', type: 'savings_fund' },
@@ -33,6 +34,15 @@ describe('transaction interpreter semantic pipeline', () => {
     const result = await interpretTransaction('Gasté 500 en cena', accounts as any);
     expect(result.missingFieldKinds).toContain('missingSourceAccount');
     expect(result.nextPromptInputType).toBe('account_selector');
+  });
+
+  it('A-blocker: gasto incompleto no autoasigna Banco y pide cuenta origen', async () => {
+    const result = await interpretTransaction('Gasté 100 en café', accounts as any);
+    expect(result.intent).toBe('expense_cash_like');
+    expect(result.sourceAccountName).toBeNull();
+    expect(result.sourceAccountName).not.toBe('Banco BBVA');
+    expect(result.missingFieldKinds).toContain('missingSourceAccount');
+    expect(result.nextPrompt).toBe('¿De qué cuenta salió el dinero?');
   });
 
   it('D/E: income explicit destination no follow-up, missing destination asks', async () => {
@@ -68,6 +78,17 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(result.sourceAccountName).toBeNull();
     expect(result.nextPrompt).toContain('Banco BBVA');
     expect(result.nextPrompt).toContain('TDC BBVA');
+  });
+
+  it('B-blocker: resolución de efectivo es case-insensitive y consistente', async () => {
+    const upper = await interpretTransaction('Pagué 300 a la TDC BBVA con Efectivo', accounts as any);
+    const lower = await interpretTransaction('Pagué 300 a la TDC BBVA con efectivo', accounts as any);
+    expect(upper.sourceAccountName).toBe('Efectivo');
+    expect(lower.sourceAccountName).toBe('Efectivo');
+    expect(upper.destinationAccountName).toBe('TDC BBVA');
+    expect(lower.destinationAccountName).toBe('TDC BBVA');
+    expect(upper.intent).toBe('debt_payment');
+    expect(lower.intent).toBe('debt_payment');
   });
 
   it('I/J/K: account-aware and ambiguity/multi-turn requirements', async () => {
@@ -146,6 +167,45 @@ describe('transaction interpreter semantic pipeline', () => {
     const withSource = await applyFollowUpAnswer(incomplete, 'Banco BBVA', accounts as any);
     expect(withSource.intent).toBe('debt_payment');
     expect(withSource.visibleType).toBe('Pago de deuda');
+  });
+
+  it('C-blocker: source operacional + destination deuda finaliza como debt_payment', async () => {
+    const result = await interpretTransaction('Pagué 500 a la TDC BBVA desde TDD BBVA', accounts as any);
+    expect(result.sourceAccountName).toBe('TDD BBVA');
+    expect(result.destinationAccountName).toBe('TDC BBVA');
+    expect(result.intent).toBe('debt_payment');
+    expect(result.visibleType).toBe('Pago de deuda');
+    expect(result.category).toBe('pago_deuda');
+  });
+
+  it('D-blocker: mantener source TDD y elegir deuda destino finaliza como debt_payment', async () => {
+    const start = await interpretTransaction('Pagué 500 a la TDC SCTBNK desde TDD BBVA', accounts as any);
+    const resolved = await applyFollowUpAnswer(start, 'TDC Liverpool', accounts as any);
+    expect(resolved.sourceAccountName).toBe('TDD BBVA');
+    expect(resolved.destinationAccountName).toBe('Tarjeta Liverpool');
+    expect(resolved.intent).toBe('debt_payment');
+    expect(resolved.category).toBe('pago_deuda');
+  });
+
+  it('E/G-blocker: deuda entre tarjetas mantiene intent y categoría traslado_deuda', async () => {
+    const complete = await interpretTransaction('Pagué 1000 de Liverpool con TDC BBVA', accounts as any);
+    expect(complete.intent).toBe('debt_transfer');
+    expect(complete.visibleType).toBe('Traslado de deuda');
+    expect(complete.category).toBe('traslado_deuda');
+
+    const incomplete = await interpretTransaction('Pagué 1000 de Liverpool con', accounts as any);
+    const withCardSource = await applyFollowUpAnswer(incomplete, 'TDC BBVA', accounts as any);
+    expect(withCardSource.intent).toBe('debt_transfer');
+    expect(withCardSource.destinationAccountName).toBe('Tarjeta Liverpool');
+    expect(withCardSource.category).toBe('traslado_deuda');
+  });
+
+  it('F-blocker: deuda incompleta + source efectivo finaliza como debt_payment', async () => {
+    const incomplete = await interpretTransaction('Pagué 1000 de Liverpool con', accounts as any);
+    const withCashSource = await applyFollowUpAnswer(incomplete, 'Efectivo', accounts as any);
+    expect(withCashSource.intent).toBe('debt_payment');
+    expect(withCashSource.destinationAccountName).toBe('Tarjeta Liverpool');
+    expect(withCashSource.category).toBe('pago_deuda');
   });
 
   it('E: generic credit card phrase resolves only when unique', async () => {
