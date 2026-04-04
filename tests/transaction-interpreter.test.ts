@@ -178,6 +178,16 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(result.category).toBe('pago_deuda');
   });
 
+  it('C2-blocker: frase "de deuda con fuente operacional" conserva roles correctos', async () => {
+    const result = await interpretTransaction('Pagué 500 de TDC BBVA con TDD BBVA', accounts as any);
+    expect(result.intent).toBe('debt_payment');
+    expect(result.visibleType).toBe('Pago de deuda');
+    expect(result.sourceAccountName).toBe('TDD BBVA');
+    expect(result.destinationAccountName).toBe('TDC BBVA');
+    expect(result.sourceAccountName).not.toBe(result.destinationAccountName);
+    expect(result.category).toBe('pago_deuda');
+  });
+
   it('D-blocker: mantener source TDD y elegir deuda destino finaliza como debt_payment', async () => {
     const start = await interpretTransaction('Pagué 500 a la TDC SCTBNK desde TDD BBVA', accounts as any);
     const resolved = await applyFollowUpAnswer(start, 'TDC Liverpool', accounts as any);

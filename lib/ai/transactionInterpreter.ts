@@ -103,6 +103,11 @@ type ExplicitAccountReference = {
   role: 'source' | 'destination';
 };
 
+type PaymentRoleResolution = {
+  source: EnrichedAccount | null;
+  destination: EnrichedAccount | null;
+};
+
 const visibleTypeMap: Record<z.infer<typeof financialIntentSchema>, string> = {
   income: 'Ingreso',
   expense_cash_like: 'Gasto con efectivo/banco',
@@ -278,6 +283,46 @@ function resolveExplicitReference(
   }
 
   return { account: best.account, confidence: best.score, unresolvedMessage: null };
+}
+
+function cleanReferenceFragment(fragment: string) {
+  return fragment.replace(/\b(en|de|del|la|el)\b/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function resolvePaymentRoles(normalizedText: string, accounts: EnrichedAccount[]): PaymentRoleResolution {
+  const destinationFragment = normalizedText.match(/(?:a la|al|de)\s+([a-z0-9\s]+?)(?=\s+(?:desde|con)\b|$)/)?.[1]?.trim();
+  const sourceFragment = normalizedText.match(/(?:desde|con)\s+([a-z0-9\s]+)$/)?.[1]?.trim();
+  const isGenericReference = (value: string) => /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|debito|tdd|ahorro|fondo|meta)$/.test(value);
+
+  const cleanedDestination = destinationFragment ? cleanReferenceFragment(destinationFragment) : '';
+  const destinationRef = destinationFragment
+    ? resolveExplicitReference({
+      raw: cleanedDestination,
+      normalized: normalize(cleanedDestination),
+      expectedKind: 'debt',
+      isGeneric: isGenericReference(cleanedDestination),
+      role: 'destination'
+    }, accounts).account
+    : null;
+
+  const sourceExpectedKind: ExplicitAccountReference['expectedKind'] = sourceFragment
+    ? /(efectivo|banco|debito|tdd)/.test(sourceFragment) ? 'operational'
+      : /(tarjeta|tdc|prestamo|hipoteca)/.test(sourceFragment) ? 'debt'
+        : null
+    : null;
+
+  const cleanedSource = sourceFragment ? cleanReferenceFragment(sourceFragment) : '';
+  const sourceRef = sourceFragment
+    ? resolveExplicitReference({
+      raw: cleanedSource,
+      normalized: normalize(cleanedSource),
+      expectedKind: sourceExpectedKind,
+      isGeneric: isGenericReference(cleanedSource),
+      role: 'source'
+    }, accounts).account
+    : null;
+
+  return { source: sourceRef, destination: destinationRef };
 }
 
 function findAccountByHint(normalizedText: string, accounts: EnrichedAccount[], kind: 'debt' | 'operational' | 'savings') {
@@ -505,14 +550,19 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const debtFromHint = findAccountByHint(normalizedText, modelAccounts, 'debt');
   const savingsFromHint = findAccountByHint(normalizedText, modelAccounts, 'savings');
   const debtDestinationFromText = findDebtDestinationFromText(normalizedText, modelAccounts);
+  const paymentRoles = resolvePaymentRoles(normalizedText, modelAccounts);
 
   let source = matched[0] ?? null;
   let destination = matched[1] ?? (intent === 'income' ? matched[0] ?? null : null);
 
   if (intent === 'expense_debt_account' && !source) source = debtFromHint;
   if (intent === 'debt_payment') {
-    destination = destination ?? debtFromHint;
-    source = source ?? sourceFromHint;
+    destination = paymentRoles.destination ?? destination ?? debtFromHint;
+    source = paymentRoles.source ?? source ?? sourceFromHint;
+  }
+  if (intent === 'debt_transfer') {
+    destination = paymentRoles.destination ?? destination;
+    source = paymentRoles.source ?? source;
   }
   if (intent === 'debt_transfer' && debtDestinationFromText) {
     destination = debtDestinationFromText;
