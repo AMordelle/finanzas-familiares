@@ -342,4 +342,71 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(afterDescription.destinationAccountName).toBeNull();
     expect(afterDescription.category).toBe('servicios');
   });
+
+  it('hotfix A: gasto con TDD explícita se mantiene como gasto efectivo/banco', async () => {
+    const result = await interpretTransaction('Gaste 250 en taxi con TDD BBVA', accounts as any);
+    expect(result.visibleType).toBe('Gasto con efectivo/banco');
+    expect(result.intent).toBe('expense_cash_like');
+    expect(result.sourceAccountName).toBe('TDD BBVA');
+    expect(result.destinationAccountName).toBeNull();
+    expect(result.category).toBe('transporte');
+    expect(result.nextPrompt).not.toBe('¿Con qué tarjeta de crédito pagaste?');
+  });
+
+  it('hotfix B: gasto con tarjeta de débito explícita se mantiene cash-like', async () => {
+    const result = await interpretTransaction('Gaste 250 en taxi con tarjeta de débito BBVA', accounts as any);
+    expect(result.visibleType).toBe('Gasto con efectivo/banco');
+    expect(result.intent).toBe('expense_cash_like');
+    expect(result.sourceAccountName).toBe('TDD BBVA');
+    expect(result.destinationAccountName).toBeNull();
+    expect(result.nextPrompt).not.toBe('¿Con qué tarjeta de crédito pagaste?');
+  });
+
+  it('hotfix B2: gasto con débito BBVA resuelve cuenta operacional existente', async () => {
+    const result = await interpretTransaction('Gaste 250 en taxi con debito BBVA', accounts as any);
+    expect(result.visibleType).toBe('Gasto con efectivo/banco');
+    expect(result.intent).toBe('expense_cash_like');
+    expect(result.sourceAccountName).toBe('TDD BBVA');
+    expect(result.destinationAccountName).toBeNull();
+    expect(result.nextPrompt).not.toBe('¿Con qué tarjeta de crédito pagaste?');
+  });
+
+  it('hotfix B/C/D: transferencias preservan roles explícitos de X a Y', async () => {
+    const toCash = await interpretTransaction('Transferi 1000 de TDD BBVA a Efectivo', accounts as any);
+    expect(toCash.visibleType).toBe('Transferencia entre cuentas');
+    expect(toCash.sourceAccountName).toBe('TDD BBVA');
+    expect(toCash.destinationAccountName).toBe('Efectivo');
+
+    const toFund = await interpretTransaction('Transferi 500 de TDD BBVA a Fondo de emergencia', accounts as any);
+    expect(toFund.sourceAccountName).toBe('TDD BBVA');
+    expect(toFund.destinationAccountName).toBe('Ahorro Emergencia');
+
+    const fromFund = await interpretTransaction('Transferi 300 de Fondo de emergencia a TDD BBVA', accounts as any);
+    expect(fromFund.sourceAccountName).toBe('Ahorro Emergencia');
+    expect(fromFund.destinationAccountName).toBe('TDD BBVA');
+  });
+
+  it('hotfix E: pago recibido mantiene destino operacional y categoría', async () => {
+    const result = await interpretTransaction('Juan Perez me pago 300 en Efectivo', accounts as any);
+    expect(result.visibleType).toBe('Pago recibido');
+    expect(result.intent).toBe('receivable_payment');
+    expect(result.destinationAccountName).toBe('Efectivo');
+    expect(result.category).toBe('pago_recibido');
+  });
+
+  it('hotfix F/G regressions: conserva deuda e identifica TDC en gasto', async () => {
+    const debtPayment = await interpretTransaction('Pague 500 a la TDC BBVA desde TDD BBVA', accounts as any);
+    expect(debtPayment.visibleType).toBe('Pago de deuda');
+    expect(debtPayment.sourceAccountName).toBe('TDD BBVA');
+    expect(debtPayment.destinationAccountName).toBe('TDC BBVA');
+
+    const creditCardExpense = await interpretTransaction('Gaste 1800 en ropa con TDC BBVA', accounts as any);
+    expect(creditCardExpense.visibleType).toBe('Gasto con tarjeta de crédito');
+    expect(creditCardExpense.sourceAccountName).toBe('TDC BBVA');
+    expect(creditCardExpense.destinationAccountName).toBeNull();
+
+    const creditCardTaxi = await interpretTransaction('Gaste 250 en taxi con TDC BBVA', accounts as any);
+    expect(creditCardTaxi.intent).toBe('expense_debt_account');
+    expect(creditCardTaxi.visibleType).toBe('Gasto con tarjeta de crédito');
+  });
 });
