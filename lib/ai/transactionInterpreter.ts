@@ -487,6 +487,10 @@ function findAccountByHint(normalizedText: string, accounts: EnrichedAccount[], 
   return null;
 }
 
+function hasExplicitDebitExpenseMarker(normalizedText: string) {
+  return /(con)\s+([a-z0-9\s]*\b(?:tdd|debito|tarjeta de debito)\b[a-z0-9\s]*)$/.test(normalizedText);
+}
+
 function inferIntent(normalizedText: string, matched: EnrichedAccount[]): z.infer<typeof financialIntentSchema> {
   if (/(me pago|pago recibido|me deposito)/.test(normalizedText)) return 'receivable_payment';
   if (/(preste|prestamo a|le di prestado)/.test(normalizedText)) return 'receivable_created';
@@ -502,6 +506,7 @@ function inferIntent(normalizedText: string, matched: EnrichedAccount[]): z.infe
     if (!/(que pagaste|pago recibido)/.test(normalizedText)) return 'manual_adjustment';
   }
   if (/(gaste|compre|pague en|consumi)/.test(normalizedText)) {
+    if (hasExplicitDebitExpenseMarker(normalizedText)) return 'expense_cash_like';
     if (/(tarjeta|tdc)/.test(normalizedText)) return 'expense_debt_account';
     const source = matched[0];
     return source?.type === 'credit_card' ? 'expense_debt_account' : 'expense_cash_like';
@@ -661,7 +666,7 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const paymentRoles = resolvePaymentRoles(normalizedText, modelAccounts);
   const transferRoles = resolveTransferRoles(normalizedText, modelAccounts);
   const receivableRoles = resolveReceivablePaymentRoles(normalizedText, modelAccounts);
-  const hasExplicitDebitExpenseSource = /(con)\s+([a-z0-9\s]*\b(?:tdd|debito)\b[a-z0-9\s]*)$/.test(normalizedText);
+  const hasExplicitDebitExpenseSource = hasExplicitDebitExpenseMarker(normalizedText);
 
   let source = matched[0] ?? null;
   let destination = matched[1] ?? (intent === 'income' ? matched[0] ?? null : null);
@@ -718,7 +723,7 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
       isGeneric: false,
       role: 'source'
     }, modelAccounts).account;
-    source = explicitDebitSource ?? source ?? sourceFromHint;
+    source = explicitDebitSource ?? sourceFromHint ?? (source?.type === 'credit_card' ? null : source);
   }
   if (intent === 'transfer_between_own_accounts') {
     if (transferRoles.hasSourceFragment) source = transferRoles.source ?? source;

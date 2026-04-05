@@ -353,6 +353,15 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(result.nextPrompt).not.toBe('¿Con qué tarjeta de crédito pagaste?');
   });
 
+  it('hotfix B: gasto con tarjeta de débito explícita se mantiene cash-like', async () => {
+    const result = await interpretTransaction('Gaste 250 en taxi con tarjeta de débito BBVA', accounts as any);
+    expect(result.visibleType).toBe('Gasto con efectivo/banco');
+    expect(result.intent).toBe('expense_cash_like');
+    expect(result.sourceAccountName).toBe('TDD BBVA');
+    expect(result.destinationAccountName).toBeNull();
+    expect(result.nextPrompt).not.toBe('¿Con qué tarjeta de crédito pagaste?');
+  });
+
   it('hotfix B/C/D: transferencias preservan roles explícitos de X a Y', async () => {
     const toCash = await interpretTransaction('Transferi 1000 de TDD BBVA a Efectivo', accounts as any);
     expect(toCash.visibleType).toBe('Transferencia entre cuentas');
@@ -386,5 +395,9 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(creditCardExpense.visibleType).toBe('Gasto con tarjeta de crédito');
     expect(creditCardExpense.sourceAccountName).toBe('TDC BBVA');
     expect(creditCardExpense.destinationAccountName).toBeNull();
+
+    const creditCardTaxi = await interpretTransaction('Gaste 250 en taxi con TDC BBVA', accounts as any);
+    expect(creditCardTaxi.intent).toBe('expense_debt_account');
+    expect(creditCardTaxi.visibleType).toBe('Gasto con tarjeta de crédito');
   });
 });
