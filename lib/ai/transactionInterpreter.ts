@@ -110,6 +110,19 @@ type PaymentRoleResolution = {
   hasDestinationFragment: boolean;
 };
 
+type TransferRoleResolution = {
+  source: EnrichedAccount | null;
+  destination: EnrichedAccount | null;
+  hasSourceFragment: boolean;
+  hasDestinationFragment: boolean;
+};
+
+type ReceivablePaymentResolution = {
+  receivableSource: EnrichedAccount | null;
+  destination: EnrichedAccount | null;
+  hasDestinationFragment: boolean;
+};
+
 const visibleTypeMap: Record<z.infer<typeof financialIntentSchema>, string> = {
   income: 'Ingreso',
   expense_cash_like: 'Gasto con efectivo/banco',
@@ -291,6 +304,20 @@ function cleanReferenceFragment(fragment: string) {
   return fragment.replace(/\b(en|de|del|la|el)\b/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function pickByTokenOverlap(fragment: string, pool: EnrichedAccount[]) {
+  const tokens = normalize(fragment).split(' ').filter((token) => token.length > 2);
+  if (!tokens.length || !pool.length) return null;
+  const ranked = pool
+    .map((account) => ({
+      account,
+      score: tokens.filter((token) => account.normalized_name.includes(token) || account.aliases.some((alias) => alias.includes(token))).length
+    }))
+    .sort((a, b) => b.score - a.score);
+  if (!ranked[0] || ranked[0].score === 0) return null;
+  if ((ranked[1]?.score ?? -1) >= ranked[0].score) return null;
+  return ranked[0].account;
+}
+
 function resolvePaymentRoles(normalizedText: string, accounts: EnrichedAccount[]): PaymentRoleResolution {
   const destinationFragment = normalizedText.match(/(?:a la|al|de)\s+([a-z0-9\s]+?)(?=\s+(?:desde|con)\b|$)/)?.[1]?.trim();
   const sourceFragment = normalizedText.match(/(?:desde|con)\s+([a-z0-9\s]+)$/)?.[1]?.trim();
@@ -328,6 +355,80 @@ function resolvePaymentRoles(normalizedText: string, accounts: EnrichedAccount[]
     source: sourceRef,
     destination: destinationRef,
     hasSourceFragment: Boolean(sourceFragment),
+    hasDestinationFragment: Boolean(destinationFragment)
+  };
+}
+
+function resolveTransferRoles(normalizedText: string, accounts: EnrichedAccount[]): TransferRoleResolution {
+  const transferMatch = normalizedText.match(/de\s+([a-z0-9\s]+?)\s+a\s+([a-z0-9\s]+)$/);
+  const sourceFragment = transferMatch?.[1]?.trim() ?? null;
+  const destinationFragment = transferMatch?.[2]?.trim() ?? null;
+  const isGenericReference = (value: string) => /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|debito|tdd|ahorro|fondo|meta)$/.test(value);
+
+  const cleanedSource = sourceFragment ? cleanReferenceFragment(sourceFragment) : '';
+  const sourceExpectedKind: ExplicitAccountReference['expectedKind'] =
+    /(efectivo|banco|debito|tdd)/.test(cleanedSource) ? 'operational'
+      : /(ahorro|fondo|meta)/.test(cleanedSource) ? 'savings'
+        : /(tarjeta|tdc|prestamo|hipoteca)/.test(cleanedSource) ? 'debt'
+          : null;
+  const source = sourceFragment
+    ? resolveExplicitReference({
+      raw: cleanedSource,
+      normalized: normalize(cleanedSource),
+      expectedKind: sourceExpectedKind,
+      isGeneric: isGenericReference(cleanedSource),
+      role: 'source'
+    }, accounts).account
+    : null;
+
+  const cleanedDestination = destinationFragment ? cleanReferenceFragment(destinationFragment) : '';
+  const destinationExpectedKind: ExplicitAccountReference['expectedKind'] =
+    /(efectivo|banco|debito|tdd)/.test(cleanedDestination) ? 'operational'
+      : /(ahorro|fondo|meta)/.test(cleanedDestination) ? 'savings'
+        : /(tarjeta|tdc|prestamo|hipoteca)/.test(cleanedDestination) ? 'debt'
+          : null;
+  const destination = destinationFragment
+    ? resolveExplicitReference({
+      raw: cleanedDestination,
+      normalized: normalize(cleanedDestination),
+      expectedKind: destinationExpectedKind,
+      isGeneric: isGenericReference(cleanedDestination),
+      role: 'destination'
+    }, accounts).account
+    : null;
+
+  return {
+    source: source ?? (sourceExpectedKind ? pickByTokenOverlap(cleanedSource, accounts.filter((account) => sourceExpectedKind === 'operational' ? account.type === 'operational_cash' : sourceExpectedKind === 'savings' ? account.type === 'savings_fund' : account.is_debt)) : null),
+    destination: destination ?? (destinationExpectedKind ? pickByTokenOverlap(cleanedDestination, accounts.filter((account) => destinationExpectedKind === 'operational' ? account.type === 'operational_cash' : destinationExpectedKind === 'savings' ? account.type === 'savings_fund' : account.is_debt)) : null),
+    hasSourceFragment: Boolean(sourceFragment),
+    hasDestinationFragment: Boolean(destinationFragment)
+  };
+}
+
+function resolveReceivablePaymentRoles(normalizedText: string, accounts: EnrichedAccount[]): ReceivablePaymentResolution {
+  const destinationFragment = normalizedText.match(/\ben\s+([a-z0-9\s]+)$/)?.[1]?.trim() ?? null;
+  const cleanedDestination = destinationFragment ? cleanReferenceFragment(destinationFragment) : '';
+  const destination = destinationFragment
+    ? resolveExplicitReference({
+      raw: cleanedDestination,
+      normalized: normalize(cleanedDestination),
+      expectedKind: /(ahorro|fondo|meta)/.test(cleanedDestination) ? 'savings' : 'operational',
+      isGeneric: /^(banco|efectivo|debito|tdd|ahorro|fondo|meta)$/.test(cleanedDestination),
+      role: 'destination'
+    }, accounts).account
+    : null;
+
+  const debtorFragment = normalizedText.match(/^([a-z0-9\s]+?)\s+me\s+(?:pago|abono|deposito)\b/)?.[1]?.trim() ?? null;
+  const debtorTokens = debtorFragment
+    ? debtorFragment.split(' ').map((token) => token.trim()).filter((token) => token.length > 2)
+    : [];
+  const receivableSource = debtorTokens.length
+    ? accounts.find((account) => account.type === 'receivable' && debtorTokens.every((token) => account.normalized_name.includes(token))) ?? null
+    : null;
+
+  return {
+    receivableSource,
+    destination,
     hasDestinationFragment: Boolean(destinationFragment)
   };
 }
@@ -558,6 +659,9 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const savingsFromHint = findAccountByHint(normalizedText, modelAccounts, 'savings');
   const debtDestinationFromText = findDebtDestinationFromText(normalizedText, modelAccounts);
   const paymentRoles = resolvePaymentRoles(normalizedText, modelAccounts);
+  const transferRoles = resolveTransferRoles(normalizedText, modelAccounts);
+  const receivableRoles = resolveReceivablePaymentRoles(normalizedText, modelAccounts);
+  const hasExplicitDebitExpenseSource = /(con)\s+([a-z0-9\s]*\b(?:tdd|debito)\b[a-z0-9\s]*)$/.test(normalizedText);
 
   let source = matched[0] ?? null;
   let destination = matched[1] ?? (intent === 'income' ? matched[0] ?? null : null);
@@ -588,6 +692,16 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   if (intent === 'income') {
     source = null;
   }
+  if (intent === 'transfer_between_own_accounts') {
+    source = transferRoles.hasSourceFragment ? transferRoles.source : source;
+    destination = transferRoles.hasDestinationFragment ? transferRoles.destination : destination;
+  }
+  if (intent === 'receivable_payment') {
+    source = receivableRoles.receivableSource ?? source;
+    destination = receivableRoles.hasDestinationFragment
+      ? receivableRoles.destination
+      : (destination ?? sourceFromHint);
+  }
   if (explicitResolution.account && explicitResolution.confidence >= 0.85) {
     if (intent === 'income' || explicitReference?.role === 'destination') destination = explicitResolution.account;
     else source = explicitResolution.account;
@@ -595,6 +709,23 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   if (explicitResolution.unresolvedMessage) {
     if (intent === 'income' || explicitReference?.role === 'destination') destination = null;
     else source = null;
+  }
+  if (intent === 'expense_cash_like' && hasExplicitDebitExpenseSource) {
+    const explicitDebitSource = resolveExplicitReference({
+      raw: normalizedText.match(/con\s+([a-z0-9\s]+)$/)?.[1]?.trim() ?? '',
+      normalized: normalize(normalizedText.match(/con\s+([a-z0-9\s]+)$/)?.[1]?.trim() ?? ''),
+      expectedKind: 'operational',
+      isGeneric: false,
+      role: 'source'
+    }, modelAccounts).account;
+    source = explicitDebitSource ?? source ?? sourceFromHint;
+  }
+  if (intent === 'transfer_between_own_accounts') {
+    if (transferRoles.hasSourceFragment) source = transferRoles.source ?? source;
+    if (transferRoles.hasDestinationFragment) destination = transferRoles.destination ?? destination;
+  }
+  if (intent === 'receivable_payment' && receivableRoles.hasDestinationFragment) {
+    destination = receivableRoles.destination ?? destination;
   }
   const finalIntent = inferFinalIntent(intent, source?.type, destination?.type, normalizedText);
   const category = inferCategory(finalIntent, normalizedText);
