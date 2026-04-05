@@ -106,6 +106,8 @@ type ExplicitAccountReference = {
 type PaymentRoleResolution = {
   source: EnrichedAccount | null;
   destination: EnrichedAccount | null;
+  hasSourceFragment: boolean;
+  hasDestinationFragment: boolean;
 };
 
 const visibleTypeMap: Record<z.infer<typeof financialIntentSchema>, string> = {
@@ -322,7 +324,12 @@ function resolvePaymentRoles(normalizedText: string, accounts: EnrichedAccount[]
     }, accounts).account
     : null;
 
-  return { source: sourceRef, destination: destinationRef };
+  return {
+    source: sourceRef,
+    destination: destinationRef,
+    hasSourceFragment: Boolean(sourceFragment),
+    hasDestinationFragment: Boolean(destinationFragment)
+  };
 }
 
 function findAccountByHint(normalizedText: string, accounts: EnrichedAccount[], kind: 'debt' | 'operational' | 'savings') {
@@ -557,12 +564,16 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
 
   if (intent === 'expense_debt_account' && !source) source = debtFromHint;
   if (intent === 'debt_payment') {
-    destination = paymentRoles.destination ?? destination ?? debtFromHint;
-    source = paymentRoles.source ?? source ?? sourceFromHint;
+    destination = paymentRoles.hasDestinationFragment
+      ? paymentRoles.destination
+      : (destination ?? debtFromHint);
+    source = paymentRoles.hasSourceFragment
+      ? (paymentRoles.source ?? source)
+      : (source ?? sourceFromHint);
   }
   if (intent === 'debt_transfer') {
-    destination = paymentRoles.destination ?? destination;
-    source = paymentRoles.source ?? source;
+    destination = paymentRoles.hasDestinationFragment ? paymentRoles.destination : (destination ?? debtDestinationFromText);
+    source = paymentRoles.hasSourceFragment ? paymentRoles.source : source;
   }
   if (intent === 'debt_transfer' && debtDestinationFromText) {
     destination = debtDestinationFromText;

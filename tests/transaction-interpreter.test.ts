@@ -197,6 +197,23 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(resolved.category).toBe('pago_deuda');
   });
 
+  it('A/B-blocker-final: deuda desconocida en "de ... con ..." mantiene source y pide destino deuda', async () => {
+    const start = await interpretTransaction('Pagué 500 de TDC SCTBNK con TDD BBVA', accounts as any);
+    expect(start.intent).toBe('debt_payment');
+    expect(start.sourceAccountName).toBe('TDD BBVA');
+    expect(start.destinationAccountName).toBeNull();
+    expect(start.destinationAccountName).not.toBe('TDD BBVA');
+    expect(start.missingFieldKinds).toContain('missingDebtTarget');
+    expect(start.nextPrompt).toBe('¿A qué tarjeta o préstamo pagaste?');
+
+    const resolved = await applyFollowUpAnswer(start, 'TDC Liverpool', accounts as any);
+    expect(resolved.intent).toBe('debt_payment');
+    expect(resolved.visibleType).toBe('Pago de deuda');
+    expect(resolved.sourceAccountName).toBe('TDD BBVA');
+    expect(resolved.destinationAccountName).toBe('Tarjeta Liverpool');
+    expect(resolved.category).toBe('pago_deuda');
+  });
+
   it('E/G-blocker: deuda entre tarjetas mantiene intent y categoría traslado_deuda', async () => {
     const complete = await interpretTransaction('Pagué 1000 de Liverpool con TDC BBVA', accounts as any);
     expect(complete.intent).toBe('debt_transfer');
