@@ -362,6 +362,15 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(result.nextPrompt).not.toBe('¿Con qué tarjeta de crédito pagaste?');
   });
 
+  it('hotfix B2: gasto con débito BBVA resuelve cuenta operacional existente', async () => {
+    const result = await interpretTransaction('Gaste 250 en taxi con debito BBVA', accounts as any);
+    expect(result.visibleType).toBe('Gasto con efectivo/banco');
+    expect(result.intent).toBe('expense_cash_like');
+    expect(result.sourceAccountName).toBe('TDD BBVA');
+    expect(result.destinationAccountName).toBeNull();
+    expect(result.nextPrompt).not.toBe('¿Con qué tarjeta de crédito pagaste?');
+  });
+
   it('hotfix B/C/D: transferencias preservan roles explícitos de X a Y', async () => {
     const toCash = await interpretTransaction('Transferi 1000 de TDD BBVA a Efectivo', accounts as any);
     expect(toCash.visibleType).toBe('Transferencia entre cuentas');

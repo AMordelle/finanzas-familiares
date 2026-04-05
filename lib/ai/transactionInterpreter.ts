@@ -145,6 +145,22 @@ function normalizeAccountLabel(input: string) {
   return normalize(input).replace(/\b(tarjeta|cuenta|banco|tdc)\b/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function buildOperationalDebitAliases(normalizedName: string) {
+  if (!/\b(tdd|debito)\b/.test(normalizedName)) return [] as string[];
+  const institutionPart = normalizedName
+    .replace(/\b(tarjeta|cuenta|de|del|al|a|tdd|debito)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!institutionPart) return [];
+
+  return [
+    `tdd ${institutionPart}`,
+    `debito ${institutionPart}`,
+    `tarjeta de debito ${institutionPart}`,
+    `tarjeta debito ${institutionPart}`
+  ].map((alias) => normalize(alias));
+}
+
 function parseAmount(input: string) {
   const match = input.replace(/,/g, '').match(/(\d+(?:\.\d+)?)/);
   return Number(match?.[1] ?? 0) || 1;
@@ -164,10 +180,12 @@ function enrichAccounts(accounts: InterpreterAccountContext[]): EnrichedAccount[
     const type = toCanonicalType(account.type);
     const normalizedName = normalize(account.name);
     const normalizedCompactName = normalizeAccountLabel(account.name);
+    const debitAliases = type === 'operational_cash' ? buildOperationalDebitAliases(normalizedName) : [];
     const aliases = Array.from(new Set([
       ...(account.aliases ?? []).map((alias) => normalize(alias)),
       normalizedName,
-      normalizedCompactName
+      normalizedCompactName,
+      ...debitAliases
     ])).filter(Boolean);
 
     return {
@@ -272,6 +290,13 @@ function resolveExplicitReference(
       if (reference.expectedKind === 'debt' && /(tarjeta|tdc)/.test(reference.normalized)) {
         const institutionToken = tokens.find((token) => !['tarjeta', 'tdc', 'credito'].includes(token));
         if (institutionToken && account.normalized_name.includes(institutionToken) && account.is_debt) {
+          score = Math.max(score, 0.9);
+        }
+      }
+      if (reference.expectedKind === 'operational' && /(debito|tdd)/.test(reference.normalized)) {
+        const institutionToken = tokens.find((token) => !['tarjeta', 'debito', 'tdd'].includes(token));
+        const accountLooksDebit = /(debito|tdd)/.test(account.normalized_name) || account.aliases.some((alias) => /(debito|tdd)/.test(alias));
+        if (institutionToken && account.normalized_name.includes(institutionToken) && accountLooksDebit) {
           score = Math.max(score, 0.9);
         }
       }
