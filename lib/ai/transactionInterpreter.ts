@@ -149,6 +149,13 @@ function normalizeAccountLabel(input: string) {
   return normalize(input).replace(/\b(tarjeta|cuenta|banco|tdc)\b/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function stripReferenceNoise(input: string) {
+  return normalize(input)
+    .replace(/\b(mi|mis|la|el|las|los|de|del|al|a|en|para|por)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function buildOperationalDebitAliases(normalizedName: string) {
   if (!/\b(tdd|debito)\b/.test(normalizedName)) return [] as string[];
   const institutionPart = normalizedName
@@ -184,11 +191,27 @@ function enrichAccounts(accounts: InterpreterAccountContext[]): EnrichedAccount[
     const type = toCanonicalType(account.type);
     const normalizedName = normalize(account.name);
     const normalizedCompactName = normalizeAccountLabel(account.name);
+    const normalizedCompactNoisy = stripReferenceNoise(account.name);
+    const institution = normalize(account.institution ?? '');
     const debitAliases = type === 'operational_cash' ? buildOperationalDebitAliases(normalizedName) : [];
+    const naturalAliases = [
+      normalizedCompactNoisy,
+      institution,
+      institution ? `la ${institution}` : '',
+      institution ? `de ${institution}` : '',
+      institution ? `la de ${institution}` : '',
+      institution ? `cuenta ${institution}` : '',
+      institution ? `mi cuenta ${institution}` : '',
+      institution && type === 'credit_card' ? `tarjeta ${institution}` : '',
+      institution && type === 'credit_card' ? `mi tarjeta ${institution}` : '',
+      institution && type === 'credit_card' ? `la tarjeta ${institution}` : '',
+      institution && type === 'credit_card' ? `la ${institution}` : ''
+    ].map((alias) => normalize(alias)).filter(Boolean);
     const aliases = Array.from(new Set([
       ...(account.aliases ?? []).map((alias) => normalize(alias)),
       normalizedName,
       normalizedCompactName,
+      ...naturalAliases,
       ...debitAliases
     ])).filter(Boolean);
 
@@ -261,6 +284,7 @@ function resolveExplicitReference(
   accounts: EnrichedAccount[]
 ): { account: EnrichedAccount | null; confidence: number; unresolvedMessage: string | null } {
   if (!reference) return { account: null, confidence: 0, unresolvedMessage: null };
+  const normalizedReference = stripReferenceNoise(reference.normalized);
 
   const pool = reference.expectedKind
     ? accounts.filter((account) => reference.expectedKind === 'debt' ? account.is_debt : reference.expectedKind === 'operational' ? account.type === 'operational_cash' : account.type === 'savings_fund')
@@ -286,9 +310,10 @@ function resolveExplicitReference(
   const ranked = pool
     .map((account) => {
       if (reference.normalized === account.normalized_name) return { account, score: 1 };
-      if (reference.normalized === normalizeAccountLabel(account.name)) return { account, score: 0.97 };
-      if (account.aliases.includes(reference.normalized)) return { account, score: 0.96 };
-      const tokens = reference.normalized.split(' ').filter((token) => token.length > 2);
+      if (normalizedReference === account.normalized_name) return { account, score: 0.99 };
+      if (reference.normalized === normalizeAccountLabel(account.name) || normalizedReference === normalizeAccountLabel(account.name)) return { account, score: 0.97 };
+      if (account.aliases.includes(reference.normalized) || account.aliases.includes(normalizedReference)) return { account, score: 0.96 };
+      const tokens = normalizedReference.split(' ').filter((token) => token.length > 2);
       const overlap = tokens.filter((token) => account.normalized_name.includes(token)).length;
       let score = tokens.length ? overlap / tokens.length : 0;
       if (reference.expectedKind === 'debt' && /(tarjeta|tdc)/.test(reference.normalized)) {

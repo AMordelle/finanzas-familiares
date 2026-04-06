@@ -80,6 +80,31 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(result.nextPrompt).toContain('TDC BBVA');
   });
 
+  it('B-natural: resolves natural human aliases only when unique and asks when ambiguous', async () => {
+    const withExtraCard = [
+      ...accounts,
+      { id: 'acc-sears', name: 'Tarjeta Sears', type: 'credit_card' }
+    ];
+
+    const liverpool = await interpretTransaction('Gasté 500 con la Liverpool', withExtraCard as any);
+    expect(liverpool.sourceAccountName).toBe('Tarjeta Liverpool');
+    expect(liverpool.intent).toBe('expense_debt_account');
+
+    const myCard = await interpretTransaction('Gasté 800 con mi tarjeta BBVA', accounts as any);
+    expect(myCard.sourceAccountName).toBe('TDC BBVA');
+    expect(myCard.intent).toBe('expense_debt_account');
+
+    const laDe = await interpretTransaction('Gasté 350 con la de BBVA', accounts as any);
+    expect(laDe.sourceAccountName).toBeNull();
+    expect(laDe.missingFieldKinds).toContain('missingSourceAccount');
+    expect(laDe.nextPrompt).toContain('Banco BBVA');
+    expect(laDe.nextPrompt).toContain('TDC BBVA');
+
+    const incompleteCard = await interpretTransaction('Pagué 400 a la tarjeta de', accounts as any);
+    expect(incompleteCard.destinationAccountName).toBeNull();
+    expect(incompleteCard.missingFieldKinds).toContain('missingDebtTarget');
+  });
+
   it('B-blocker: resolución de efectivo es case-insensitive y consistente', async () => {
     const upper = await interpretTransaction('Pagué 300 a la TDC BBVA con Efectivo', accounts as any);
     const lower = await interpretTransaction('Pagué 300 a la TDC BBVA con efectivo', accounts as any);
