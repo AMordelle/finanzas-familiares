@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { interpretTransaction, transactionIntentSchema } from '@/lib/ai/transactionInterpreter';
+import { enforceFinancialConsistency, interpretTransaction, transactionIntentSchema } from '@/lib/ai/transactionInterpreter';
 import { getAccountsForRegistration, saveConversationalTransaction } from '@/lib/db/queries';
 
 export async function getRegistrationAccountsAction() {
@@ -14,7 +14,7 @@ export async function interpretTransactionAction(text: string) {
 }
 
 export async function saveInterpretedTransactionAction(payload: unknown) {
-  const intent = transactionIntentSchema.parse(payload);
+  const intent = enforceFinancialConsistency(transactionIntentSchema.parse(payload));
   await saveConversationalTransaction(intent);
   revalidatePath('/dashboard');
   revalidatePath('/movimientos');
