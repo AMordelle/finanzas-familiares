@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const parseMock = vi.fn();
+const enforceFinancialConsistencyMock = vi.fn();
 const saveMock = vi.fn();
 const revalidatePathMock = vi.fn();
 
@@ -10,6 +11,7 @@ describe('registro actions revalidation', () => {
     vi.clearAllMocks();
 
     parseMock.mockImplementation((payload) => payload);
+    enforceFinancialConsistencyMock.mockImplementation((payload) => payload);
 
     vi.doMock('next/cache', () => ({
       revalidatePath: revalidatePathMock
@@ -17,6 +19,7 @@ describe('registro actions revalidation', () => {
 
     vi.doMock('@/lib/ai/transactionInterpreter', () => ({
       interpretTransaction: vi.fn(),
+      enforceFinancialConsistency: enforceFinancialConsistencyMock,
       transactionIntentSchema: {
         parse: parseMock
       }
@@ -45,6 +48,7 @@ describe('registro actions revalidation', () => {
     const response = await saveInterpretedTransactionAction(intent);
 
     expect(parseMock).toHaveBeenCalledWith(intent);
+    expect(enforceFinancialConsistencyMock).toHaveBeenCalledWith(intent);
     expect(saveMock).toHaveBeenCalledWith(intent);
     expect(revalidatePathMock).toHaveBeenCalledWith('/dashboard');
     expect(revalidatePathMock).toHaveBeenCalledWith('/movimientos');

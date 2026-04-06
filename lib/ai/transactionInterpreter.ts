@@ -123,6 +123,10 @@ type ReceivablePaymentResolution = {
   hasDestinationFragment: boolean;
 };
 
+type FinancialConsistencySuggestion = Partial<Pick<TransactionIntent,
+  'sourceAccountId' | 'sourceAccountName' | 'sourceAccountType' | 'sourceAccount'
+  | 'destinationAccountId' | 'destinationAccountName' | 'destinationAccountType' | 'destinationAccount'>>;
+
 const visibleTypeMap: Record<z.infer<typeof financialIntentSchema>, string> = {
   income: 'Ingreso',
   expense_cash_like: 'Gasto con efectivo/banco',
@@ -675,6 +679,67 @@ function choosePrompt(
   return { nextPrompt: '¿De qué cuenta salió el dinero?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['operational_cash', 'savings_fund', 'investment', 'credit_card', 'loan'] as const };
 }
 
+export function enforceFinancialConsistency(result: TransactionIntent): TransactionIntent {
+  const suggestedCorrections: FinancialConsistencySuggestion = {};
+
+  if ((result.intent === 'expense_cash_like' || result.intent === 'expense_debt_account') && result.destinationAccountId) {
+    suggestedCorrections.destinationAccountId = null;
+    suggestedCorrections.destinationAccountName = null;
+    suggestedCorrections.destinationAccountType = null;
+    suggestedCorrections.destinationAccount = undefined;
+  }
+
+  if (result.intent === 'income' && result.sourceAccountId) {
+    suggestedCorrections.sourceAccountId = null;
+    suggestedCorrections.sourceAccountName = null;
+    suggestedCorrections.sourceAccountType = null;
+    suggestedCorrections.sourceAccount = undefined;
+  }
+
+  if (Object.keys(suggestedCorrections).length > 0) {
+    const suggestedResult = { ...result, ...suggestedCorrections };
+    console.info('[ConsistencyLayer]');
+    console.info(`intent: ${result.intent}`);
+    console.info('original:', {
+      source: result.sourceAccountName,
+      destination: result.destinationAccountName
+    });
+    console.info('suggested:', {
+      source: suggestedResult.sourceAccountName,
+      destination: suggestedResult.destinationAccountName
+    });
+  }
+
+  if (result.intent === 'debt_payment' && result.destinationAccountId && !['credit_card', 'loan'].includes(result.destinationAccountType ?? '')) {
+    console.warn('[ConsistencyLayer] debt_payment destination should be debt-type account', {
+      destinationAccountName: result.destinationAccountName,
+      destinationAccountType: result.destinationAccountType
+    });
+  }
+
+  if (result.intent === 'debt_transfer') {
+    const hasInconsistentSource = Boolean(result.sourceAccountId) && !['credit_card', 'loan'].includes(result.sourceAccountType ?? '');
+    const hasInconsistentDestination = Boolean(result.destinationAccountId) && !['credit_card', 'loan'].includes(result.destinationAccountType ?? '');
+    if (hasInconsistentSource || hasInconsistentDestination) {
+      console.warn('[ConsistencyLayer] debt_transfer source/destination should be debt-type accounts', {
+        sourceAccountName: result.sourceAccountName,
+        sourceAccountType: result.sourceAccountType,
+        destinationAccountName: result.destinationAccountName,
+        destinationAccountType: result.destinationAccountType
+      });
+    }
+  }
+
+  if (result.intent === 'receivable_payment' && result.destinationAccountId && !['operational_cash', 'savings_fund'].includes(result.destinationAccountType ?? '')) {
+    console.warn('[ConsistencyLayer] receivable_payment destination should be operational account', {
+      destinationAccountName: result.destinationAccountName,
+      destinationAccountType: result.destinationAccountType
+    });
+  }
+
+  return result;
+}
+
 export async function interpretTransaction(text: string, accounts: InterpreterAccountContext[] = []): Promise<TransactionIntent> {
   const modelAccounts = enrichAccounts(accounts);
   const normalizedText = normalize(text);
@@ -792,7 +857,7 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
       ? `Registrar ingreso de $${amount.toLocaleString('es-MX')} hacia ${draftForConstraints.destinationAccountName ?? 'N/A'}.`
       : `Registrar ${visibleType.toLowerCase()} de $${amount.toLocaleString('es-MX')}${draftForConstraints.sourceAccountName ? ` desde ${draftForConstraints.sourceAccountName}` : ''}${draftForConstraints.destinationAccountName ? ` hacia ${draftForConstraints.destinationAccountName}` : ''}.`;
 
-  return transactionIntentSchema.parse({
+  const parsedResult = transactionIntentSchema.parse({
     rawText: text,
     normalizedText,
     intent: finalIntent,
@@ -817,6 +882,7 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     confidence,
     humanConfirmation
   });
+  return enforceFinancialConsistency(parsedResult);
 }
 
 function findAccountByName(accounts: EnrichedAccount[], value: string) {
@@ -907,5 +973,6 @@ export async function applyFollowUpAnswer(
       ? `Registrar ingreso de $${final.amount.toLocaleString('es-MX')} hacia ${final.destinationAccountName ?? 'N/A'}.`
       : `Registrar ${final.visibleType.toLowerCase()} de $${final.amount.toLocaleString('es-MX')}${final.sourceAccountName ? ` desde ${final.sourceAccountName}` : ''}${final.destinationAccountName ? ` hacia ${final.destinationAccountName}` : ''}.`;
 
-  return transactionIntentSchema.parse(final);
+  const parsedResult = transactionIntentSchema.parse(final);
+  return enforceFinancialConsistency(parsedResult);
 }

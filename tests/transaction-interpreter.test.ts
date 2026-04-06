@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { applyFollowUpAnswer, interpretTransaction } from '@/lib/ai/transactionInterpreter';
+import { describe, expect, it, vi } from 'vitest';
+import { applyFollowUpAnswer, enforceFinancialConsistency, interpretTransaction, transactionIntentSchema } from '@/lib/ai/transactionInterpreter';
 
 const accounts = [
   { id: 'acc-ef', name: 'Efectivo', type: 'operational_cash' },
@@ -408,5 +408,131 @@ describe('transaction interpreter semantic pipeline', () => {
     const creditCardTaxi = await interpretTransaction('Gaste 250 en taxi con TDC BBVA', accounts as any);
     expect(creditCardTaxi.intent).toBe('expense_debt_account');
     expect(creditCardTaxi.visibleType).toBe('Gasto con tarjeta de crédito');
+  });
+});
+
+describe('financial consistency layer (safe mode)', () => {
+  function buildIntent(overrides: Record<string, unknown>) {
+    return transactionIntentSchema.parse({
+      rawText: 'test',
+      normalizedText: 'test',
+      intent: 'expense_cash_like',
+      visibleType: 'Gasto con efectivo/banco',
+      action: 'gasto',
+      amount: 100,
+      description: 'test',
+      category: 'otros_gastos',
+      sourceAccountId: 'acc-ban',
+      sourceAccountName: 'Banco BBVA',
+      sourceAccountType: 'operational_cash',
+      destinationAccountId: null,
+      destinationAccountName: null,
+      destinationAccountType: null,
+      missingFields: [],
+      missingFieldKinds: [],
+      nextPrompt: null,
+      nextPromptInputType: null,
+      nextPromptAllowedAccountTypes: null,
+      confidence: 0.9,
+      humanConfirmation: 'ok',
+      ...overrides
+    });
+  }
+
+  it('logs suggestion when expense contains destination account', () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const result = buildIntent({
+      intent: 'expense_cash_like',
+      destinationAccountId: 'acc-tdc',
+      destinationAccountName: 'TDC BBVA',
+      destinationAccountType: 'credit_card'
+    });
+
+    const output = enforceFinancialConsistency(result);
+    expect(output).toBe(result);
+    expect(infoSpy).toHaveBeenCalledWith('[ConsistencyLayer]');
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('intent: expense_cash_like'));
+    expect(infoSpy).toHaveBeenCalledWith('suggested:', expect.objectContaining({ destination: null }));
+    infoSpy.mockRestore();
+  });
+
+  it('logs suggestion when income contains source account', () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const result = buildIntent({
+      intent: 'income',
+      action: 'ingreso',
+      visibleType: 'Ingreso',
+      sourceAccountId: 'acc-ban',
+      sourceAccountName: 'Banco BBVA',
+      sourceAccountType: 'operational_cash',
+      destinationAccountId: 'acc-ah1',
+      destinationAccountName: 'Ahorro Emergencia',
+      destinationAccountType: 'savings_fund'
+    });
+
+    const output = enforceFinancialConsistency(result);
+    expect(output).toBe(result);
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('intent: income'));
+    expect(infoSpy).toHaveBeenCalledWith('suggested:', expect.objectContaining({ source: null }));
+    infoSpy.mockRestore();
+  });
+
+  it('preserves source and destination roles for transfer_between_own_accounts', () => {
+    const result = buildIntent({
+      intent: 'transfer_between_own_accounts',
+      action: 'transferencia',
+      visibleType: 'Transferencia entre cuentas',
+      sourceAccountId: 'acc-ban',
+      sourceAccountName: 'Banco BBVA',
+      sourceAccountType: 'operational_cash',
+      destinationAccountId: 'acc-ah1',
+      destinationAccountName: 'Ahorro Emergencia',
+      destinationAccountType: 'savings_fund'
+    });
+
+    const output = enforceFinancialConsistency(result);
+    expect(output.sourceAccountId).toBe('acc-ban');
+    expect(output.destinationAccountId).toBe('acc-ah1');
+  });
+
+  it('logs warning when debt payment destination is not debt-type', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = buildIntent({
+      intent: 'debt_payment',
+      action: 'pago_deuda',
+      visibleType: 'Pago de deuda',
+      destinationAccountId: 'acc-ban',
+      destinationAccountName: 'Banco BBVA',
+      destinationAccountType: 'operational_cash'
+    });
+
+    enforceFinancialConsistency(result);
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[ConsistencyLayer] debt_payment destination should be debt-type account',
+      expect.objectContaining({ destinationAccountType: 'operational_cash' })
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('logs warning when receivable payment destination is not operational', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = buildIntent({
+      intent: 'receivable_payment',
+      action: 'pago_recibido',
+      visibleType: 'Pago recibido',
+      sourceAccountId: 'acc-rec',
+      sourceAccountName: 'Juan por cobrar',
+      sourceAccountType: 'receivable',
+      destinationAccountId: 'acc-tdc',
+      destinationAccountName: 'TDC BBVA',
+      destinationAccountType: 'credit_card'
+    });
+
+    enforceFinancialConsistency(result);
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[ConsistencyLayer] receivable_payment destination should be operational account',
+      expect.objectContaining({ destinationAccountType: 'credit_card' })
+    );
+    warnSpy.mockRestore();
   });
 });
