@@ -327,6 +327,26 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(resolved.destinationAccountType).toBeNull();
   });
 
+  it('D-followup-ambiguity: selecting TDD after "la BBVA" resolves source and moves to missing description', async () => {
+    const start = await interpretTransaction('Gaste 500 con la BBVA', accounts as any);
+    expect(start.missingFieldKinds).toContain('missingSourceAccount');
+
+    const resolved = await applyFollowUpAnswer(start, 'TDD BBVA', accounts as any);
+    expect(resolved.sourceAccountName).toBe('TDD BBVA');
+    expect(resolved.missingFieldKinds).toContain('missingWhatWasPaid');
+    expect(resolved.missingFieldKinds).not.toContain('missingSourceAccount');
+    expect(resolved.nextPrompt).toBe('¿En qué gastaste ese dinero?');
+  });
+
+  it('E-followup-ambiguity: selecting TDC after "la BBVA" resolves source and does not re-ask source', async () => {
+    const start = await interpretTransaction('Gaste 500 con la BBVA', accounts as any);
+    const resolved = await applyFollowUpAnswer(start, 'TDC BBVA', accounts as any);
+    expect(resolved.sourceAccountName).toBe('TDC BBVA');
+    expect(resolved.missingFieldKinds).toContain('missingWhatWasPaid');
+    expect(resolved.missingFieldKinds).not.toContain('missingSourceAccount');
+    expect(resolved.nextPrompt).toBe('¿En qué gastaste ese dinero?');
+  });
+
   it('D-followup: descripción libre no cierra gasto con tarjeta genérica si falta tarjeta', async () => {
     const start = await interpretTransaction('Gasté 1000 con tarjeta de crédito', accounts as any);
     expect(start.missingFieldKinds[0]).toBe('missingSourceAccount');

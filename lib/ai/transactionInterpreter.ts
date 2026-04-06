@@ -943,6 +943,8 @@ export async function applyFollowUpAnswer(
   const kind = updated.missingFieldKinds[0];
   const modelAccounts = enrichAccounts(accounts);
   const matchedAccount = findAccountByName(modelAccounts, answer);
+  const isAmbiguityClarification = (current.nextPrompt ?? '').startsWith('¿Te refieres a ');
+  let resolvedSourceBySelection = false;
 
   if (kind === 'missingDebtTarget' || kind === 'missingDestinationAccount') {
     if (matchedAccount) {
@@ -959,6 +961,7 @@ export async function applyFollowUpAnswer(
       updated.sourceAccountName = matchedAccount.name;
       updated.sourceAccountType = matchedAccount.type;
       updated.sourceAccount = matchedAccount.name.toLowerCase();
+      resolvedSourceBySelection = true;
     }
   }
 
@@ -974,6 +977,11 @@ export async function applyFollowUpAnswer(
   if (updated.intent === 'expense_cash_like' && updated.sourceAccountType === 'credit_card') {
     updated.intent = 'expense_debt_account';
     updated.visibleType = visibleTypeMap.expense_debt_account;
+    updated.action = intentToLegacyAction(updated.intent);
+  }
+  if (resolvedSourceBySelection && isAmbiguityClarification && updated.intent === 'expense_debt_account' && updated.sourceAccountType !== 'credit_card') {
+    updated.intent = 'expense_cash_like';
+    updated.visibleType = visibleTypeMap.expense_cash_like;
     updated.action = intentToLegacyAction(updated.intent);
   }
 
