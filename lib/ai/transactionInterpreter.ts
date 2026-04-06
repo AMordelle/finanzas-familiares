@@ -156,6 +156,21 @@ function stripReferenceNoise(input: string) {
     .trim();
 }
 
+function hasStrongDebitMarker(input: string) {
+  const normalizedInput = normalize(input);
+  return /\b(tarjeta de debito|tarjeta debito|debito|tdd)\b/.test(normalizedInput);
+}
+
+function normalizeStrongDebitReference(input: string) {
+  const normalizedInput = normalize(input);
+  if (!hasStrongDebitMarker(normalizedInput)) return normalizedInput;
+  return normalizedInput
+    .replace(/\btarjeta de debito\b/g, 'debito')
+    .replace(/\btarjeta debito\b/g, 'debito')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function buildOperationalDebitAliases(normalizedName: string) {
   if (!/\b(tdd|debito)\b/.test(normalizedName)) return [] as string[];
   const institutionPart = normalizedName
@@ -263,16 +278,18 @@ function extractExplicitAccountReference(
   if (!raw) return null;
 
   const cleaned = raw.replace(/\b(en|de|del|la|el)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  const normalizedCleaned = normalizeStrongDebitReference(cleaned);
   const expectedKind =
-    /(tarjeta|tdc|prestamo|hipoteca)/.test(cleaned) ? 'debt'
-      : /(banco|efectivo|debito|tdd)/.test(cleaned) ? 'operational'
+    hasStrongDebitMarker(cleaned) ? 'operational'
+      : /(tarjeta|tdc|prestamo|hipoteca)/.test(cleaned) ? 'debt'
+        : /(banco|efectivo|debito|tdd)/.test(cleaned) ? 'operational'
         : /(ahorro|fondo|meta)/.test(cleaned) ? 'savings'
           : null;
   const isGeneric = /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|debito|tdd|ahorro|fondo|meta)$/.test(cleaned);
 
   return {
     raw: cleaned,
-    normalized: normalize(cleaned),
+    normalized: normalizedCleaned,
     expectedKind,
     isGeneric,
     role: ['a la', 'al', 'en'].includes(preposition) ? 'destination' : 'source'
@@ -284,10 +301,13 @@ function resolveExplicitReference(
   accounts: EnrichedAccount[]
 ): { account: EnrichedAccount | null; confidence: number; unresolvedMessage: string | null } {
   if (!reference) return { account: null, confidence: 0, unresolvedMessage: null };
-  const normalizedReference = stripReferenceNoise(reference.normalized);
+  const normalizedReference = normalizeStrongDebitReference(stripReferenceNoise(reference.normalized));
 
-  const pool = reference.expectedKind
-    ? accounts.filter((account) => reference.expectedKind === 'debt' ? account.is_debt : reference.expectedKind === 'operational' ? account.type === 'operational_cash' : account.type === 'savings_fund')
+  const expectedKind = hasStrongDebitMarker(reference.normalized)
+    ? 'operational'
+    : reference.expectedKind;
+  const pool = expectedKind
+    ? accounts.filter((account) => expectedKind === 'debt' ? account.is_debt : expectedKind === 'operational' ? account.type === 'operational_cash' : account.type === 'savings_fund')
     : accounts;
 
   if (!pool.length) return { account: null, confidence: 0, unresolvedMessage: null };
@@ -695,7 +715,7 @@ function choosePrompt(
   if (first === 'missingDestinationAccount') {
     return { nextPrompt: '¿A qué cuenta entró el dinero?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['operational_cash', 'savings_fund', 'investment', 'receivable'] as const };
   }
-  if (first === 'missingSourceAccount' && intent === 'expense_debt_account') {
+  if (first === 'missingSourceAccount' && intent === 'expense_debt_account' && /(tarjeta|tdc|credito|prestamo|hipoteca)/.test(normalizedText ?? '')) {
     return { nextPrompt: '¿Con qué tarjeta de crédito pagaste?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['credit_card'] as const };
   }
   if (first === 'missingSourceAccount' && intent === 'debt_transfer' && normalizedText?.includes('de ')) {

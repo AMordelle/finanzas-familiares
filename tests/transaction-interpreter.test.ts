@@ -105,6 +105,31 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(incompleteCard.missingFieldKinds).toContain('missingDebtTarget');
   });
 
+  it('B-debit-natural: strong debit phrases resolve to TDD and avoid credit bias', async () => {
+    const debitPhrase = await interpretTransaction('Gaste 250 en taxi con tarjeta de debito BBVA', accounts as any);
+    expect(debitPhrase.sourceAccountName).toBe('TDD BBVA');
+    expect(debitPhrase.missingFieldKinds).toEqual([]);
+    expect(debitPhrase.nextPrompt).toBeNull();
+    expect(debitPhrase.visibleType).toBe('Gasto con efectivo/banco');
+
+    const shortDebitPhrase = await interpretTransaction('Gaste 250 en taxi con debito BBVA', accounts as any);
+    expect(shortDebitPhrase.sourceAccountName).toBe('TDD BBVA');
+
+    const creditRegression = await interpretTransaction('Gaste 250 con tarjeta de credito BBVA', accounts as any);
+    expect(creditRegression.sourceAccountName).toBe('TDC BBVA');
+    expect(creditRegression.intent).toBe('expense_debt_account');
+  });
+
+  it('B-ambiguity: la BBVA keeps full candidate list and does not restrict to credit only', async () => {
+    const result = await interpretTransaction('Gaste 500 con la BBVA', accounts as any);
+    expect(result.sourceAccountName).toBeNull();
+    expect(result.missingFieldKinds).toContain('missingSourceAccount');
+    expect(result.nextPrompt).toContain('TDD BBVA');
+    expect(result.nextPrompt).toContain('TDC BBVA');
+    expect(result.nextPromptAllowedAccountTypes).toContain('operational_cash');
+    expect(result.nextPromptAllowedAccountTypes).toContain('credit_card');
+  });
+
   it('B-blocker: resolución de efectivo es case-insensitive y consistente', async () => {
     const upper = await interpretTransaction('Pagué 300 a la TDC BBVA con Efectivo', accounts as any);
     const lower = await interpretTransaction('Pagué 300 a la TDC BBVA con efectivo', accounts as any);
