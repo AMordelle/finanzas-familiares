@@ -439,7 +439,7 @@ describe('financial consistency layer (safe mode)', () => {
     });
   }
 
-  it('logs suggestion when expense contains destination account', () => {
+  it('forces destination to null when expense contains destination account', () => {
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
     const result = buildIntent({
       intent: 'expense_cash_like',
@@ -449,14 +449,17 @@ describe('financial consistency layer (safe mode)', () => {
     });
 
     const output = enforceFinancialConsistency(result);
-    expect(output).toBe(result);
-    expect(infoSpy).toHaveBeenCalledWith('[ConsistencyLayer]');
+    expect(output).not.toBe(result);
+    expect(output.destinationAccountId).toBeNull();
+    expect(output.destinationAccountName).toBeNull();
+    expect(output.destinationAccountType).toBeNull();
+    expect(infoSpy).toHaveBeenCalledWith('[ConsistencyLayer][APPLIED]');
     expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('intent: expense_cash_like'));
-    expect(infoSpy).toHaveBeenCalledWith('suggested:', expect.objectContaining({ destination: null }));
+    expect(infoSpy).toHaveBeenCalledWith('fix: destination → null');
     infoSpy.mockRestore();
   });
 
-  it('logs suggestion when income contains source account', () => {
+  it('forces source to null when income contains source account', () => {
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
     const result = buildIntent({
       intent: 'income',
@@ -471,9 +474,13 @@ describe('financial consistency layer (safe mode)', () => {
     });
 
     const output = enforceFinancialConsistency(result);
-    expect(output).toBe(result);
-    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('intent: income'));
-    expect(infoSpy).toHaveBeenCalledWith('suggested:', expect.objectContaining({ source: null }));
+    expect(output).not.toBe(result);
+    expect(output.sourceAccountId).toBeNull();
+    expect(output.sourceAccountName).toBeNull();
+    expect(output.sourceAccountType).toBeNull();
+    expect(infoSpy).toHaveBeenCalledWith('[ConsistencyLayer][APPLIED]');
+    expect(infoSpy).toHaveBeenCalledWith('intent: income');
+    expect(infoSpy).toHaveBeenCalledWith('fix: source → null');
     infoSpy.mockRestore();
   });
 
@@ -493,6 +500,24 @@ describe('financial consistency layer (safe mode)', () => {
     const output = enforceFinancialConsistency(result);
     expect(output.sourceAccountId).toBe('acc-ban');
     expect(output.destinationAccountId).toBe('acc-ah1');
+  });
+
+  it('keeps source and destination unchanged for debt_transfer (safe mode)', () => {
+    const result = buildIntent({
+      intent: 'debt_transfer',
+      action: 'pago_deuda',
+      visibleType: 'Traslado de deuda',
+      sourceAccountId: 'acc-tdc-1',
+      sourceAccountName: 'TDC BBVA',
+      sourceAccountType: 'credit_card',
+      destinationAccountId: 'acc-tdc-2',
+      destinationAccountName: 'TDC Liverpool',
+      destinationAccountType: 'credit_card'
+    });
+
+    const output = enforceFinancialConsistency(result);
+    expect(output.sourceAccountId).toBe('acc-tdc-1');
+    expect(output.destinationAccountId).toBe('acc-tdc-2');
   });
 
   it('logs warning when debt payment destination is not debt-type', () => {

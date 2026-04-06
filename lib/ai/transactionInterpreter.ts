@@ -681,12 +681,17 @@ function choosePrompt(
 
 export function enforceFinancialConsistency(result: TransactionIntent): TransactionIntent {
   const suggestedCorrections: FinancialConsistencySuggestion = {};
+  let hasAppliedFix = false;
 
   if ((result.intent === 'expense_cash_like' || result.intent === 'expense_debt_account') && result.destinationAccountId) {
     suggestedCorrections.destinationAccountId = null;
     suggestedCorrections.destinationAccountName = null;
     suggestedCorrections.destinationAccountType = null;
     suggestedCorrections.destinationAccount = undefined;
+    console.info('[ConsistencyLayer][APPLIED]');
+    console.info(`intent: ${result.intent}`);
+    console.info('fix: destination → null');
+    hasAppliedFix = true;
   }
 
   if (result.intent === 'income' && result.sourceAccountId) {
@@ -694,20 +699,10 @@ export function enforceFinancialConsistency(result: TransactionIntent): Transact
     suggestedCorrections.sourceAccountName = null;
     suggestedCorrections.sourceAccountType = null;
     suggestedCorrections.sourceAccount = undefined;
-  }
-
-  if (Object.keys(suggestedCorrections).length > 0) {
-    const suggestedResult = { ...result, ...suggestedCorrections };
-    console.info('[ConsistencyLayer]');
-    console.info(`intent: ${result.intent}`);
-    console.info('original:', {
-      source: result.sourceAccountName,
-      destination: result.destinationAccountName
-    });
-    console.info('suggested:', {
-      source: suggestedResult.sourceAccountName,
-      destination: suggestedResult.destinationAccountName
-    });
+    console.info('[ConsistencyLayer][APPLIED]');
+    console.info('intent: income');
+    console.info('fix: source → null');
+    hasAppliedFix = true;
   }
 
   if (result.intent === 'debt_payment' && result.destinationAccountId && !['credit_card', 'loan'].includes(result.destinationAccountType ?? '')) {
@@ -735,6 +730,10 @@ export function enforceFinancialConsistency(result: TransactionIntent): Transact
       destinationAccountName: result.destinationAccountName,
       destinationAccountType: result.destinationAccountType
     });
+  }
+
+  if (hasAppliedFix) {
+    return { ...result, ...suggestedCorrections };
   }
 
   return result;
