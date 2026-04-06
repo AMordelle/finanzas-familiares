@@ -80,6 +80,56 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(result.nextPrompt).toContain('TDC BBVA');
   });
 
+  it('B-natural: resolves natural human aliases only when unique and asks when ambiguous', async () => {
+    const withExtraCard = [
+      ...accounts,
+      { id: 'acc-sears', name: 'Tarjeta Sears', type: 'credit_card' }
+    ];
+
+    const liverpool = await interpretTransaction('Gasté 500 con la Liverpool', withExtraCard as any);
+    expect(liverpool.sourceAccountName).toBe('Tarjeta Liverpool');
+    expect(liverpool.intent).toBe('expense_debt_account');
+
+    const myCard = await interpretTransaction('Gasté 800 con mi tarjeta BBVA', accounts as any);
+    expect(myCard.sourceAccountName).toBe('TDC BBVA');
+    expect(myCard.intent).toBe('expense_debt_account');
+
+    const laDe = await interpretTransaction('Gasté 350 con la de BBVA', accounts as any);
+    expect(laDe.sourceAccountName).toBeNull();
+    expect(laDe.missingFieldKinds).toContain('missingSourceAccount');
+    expect(laDe.nextPrompt).toContain('Banco BBVA');
+    expect(laDe.nextPrompt).toContain('TDC BBVA');
+
+    const incompleteCard = await interpretTransaction('Pagué 400 a la tarjeta de', accounts as any);
+    expect(incompleteCard.destinationAccountName).toBeNull();
+    expect(incompleteCard.missingFieldKinds).toContain('missingDebtTarget');
+  });
+
+  it('B-debit-natural: strong debit phrases resolve to TDD and avoid credit bias', async () => {
+    const debitPhrase = await interpretTransaction('Gaste 250 en taxi con tarjeta de debito BBVA', accounts as any);
+    expect(debitPhrase.sourceAccountName).toBe('TDD BBVA');
+    expect(debitPhrase.missingFieldKinds).toEqual([]);
+    expect(debitPhrase.nextPrompt).toBeNull();
+    expect(debitPhrase.visibleType).toBe('Gasto con efectivo/banco');
+
+    const shortDebitPhrase = await interpretTransaction('Gaste 250 en taxi con debito BBVA', accounts as any);
+    expect(shortDebitPhrase.sourceAccountName).toBe('TDD BBVA');
+
+    const creditRegression = await interpretTransaction('Gaste 250 con tarjeta de credito BBVA', accounts as any);
+    expect(creditRegression.sourceAccountName).toBe('TDC BBVA');
+    expect(creditRegression.intent).toBe('expense_debt_account');
+  });
+
+  it('B-ambiguity: la BBVA keeps full candidate list and does not restrict to credit only', async () => {
+    const result = await interpretTransaction('Gaste 500 con la BBVA', accounts as any);
+    expect(result.sourceAccountName).toBeNull();
+    expect(result.missingFieldKinds).toContain('missingSourceAccount');
+    expect(result.nextPrompt).toContain('TDD BBVA');
+    expect(result.nextPrompt).toContain('TDC BBVA');
+    expect(result.nextPromptAllowedAccountTypes).toContain('operational_cash');
+    expect(result.nextPromptAllowedAccountTypes).toContain('credit_card');
+  });
+
   it('B-blocker: resolución de efectivo es case-insensitive y consistente', async () => {
     const upper = await interpretTransaction('Pagué 300 a la TDC BBVA con Efectivo', accounts as any);
     const lower = await interpretTransaction('Pagué 300 a la TDC BBVA con efectivo', accounts as any);
@@ -275,6 +325,26 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(resolved.destinationAccountName).toBeNull();
     expect(resolved.destinationAccountId).toBeNull();
     expect(resolved.destinationAccountType).toBeNull();
+  });
+
+  it('D-followup-ambiguity: selecting TDD after "la BBVA" resolves source and moves to missing description', async () => {
+    const start = await interpretTransaction('Gaste 500 con la BBVA', accounts as any);
+    expect(start.missingFieldKinds).toContain('missingSourceAccount');
+
+    const resolved = await applyFollowUpAnswer(start, 'TDD BBVA', accounts as any);
+    expect(resolved.sourceAccountName).toBe('TDD BBVA');
+    expect(resolved.missingFieldKinds).toContain('missingWhatWasPaid');
+    expect(resolved.missingFieldKinds).not.toContain('missingSourceAccount');
+    expect(resolved.nextPrompt).toBe('¿En qué gastaste ese dinero?');
+  });
+
+  it('E-followup-ambiguity: selecting TDC after "la BBVA" resolves source and does not re-ask source', async () => {
+    const start = await interpretTransaction('Gaste 500 con la BBVA', accounts as any);
+    const resolved = await applyFollowUpAnswer(start, 'TDC BBVA', accounts as any);
+    expect(resolved.sourceAccountName).toBe('TDC BBVA');
+    expect(resolved.missingFieldKinds).toContain('missingWhatWasPaid');
+    expect(resolved.missingFieldKinds).not.toContain('missingSourceAccount');
+    expect(resolved.nextPrompt).toBe('¿En qué gastaste ese dinero?');
   });
 
   it('D-followup: descripción libre no cierra gasto con tarjeta genérica si falta tarjeta', async () => {

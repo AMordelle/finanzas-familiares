@@ -149,6 +149,28 @@ function normalizeAccountLabel(input: string) {
   return normalize(input).replace(/\b(tarjeta|cuenta|banco|tdc)\b/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function stripReferenceNoise(input: string) {
+  return normalize(input)
+    .replace(/\b(mi|mis|la|el|las|los|de|del|al|a|en|para|por)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hasStrongDebitMarker(input: string) {
+  const normalizedInput = normalize(input);
+  return /\b(tarjeta de debito|tarjeta debito|debito|tdd)\b/.test(normalizedInput);
+}
+
+function normalizeStrongDebitReference(input: string) {
+  const normalizedInput = normalize(input);
+  if (!hasStrongDebitMarker(normalizedInput)) return normalizedInput;
+  return normalizedInput
+    .replace(/\btarjeta de debito\b/g, 'debito')
+    .replace(/\btarjeta debito\b/g, 'debito')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function buildOperationalDebitAliases(normalizedName: string) {
   if (!/\b(tdd|debito)\b/.test(normalizedName)) return [] as string[];
   const institutionPart = normalizedName
@@ -184,11 +206,27 @@ function enrichAccounts(accounts: InterpreterAccountContext[]): EnrichedAccount[
     const type = toCanonicalType(account.type);
     const normalizedName = normalize(account.name);
     const normalizedCompactName = normalizeAccountLabel(account.name);
+    const normalizedCompactNoisy = stripReferenceNoise(account.name);
+    const institution = normalize(account.institution ?? '');
     const debitAliases = type === 'operational_cash' ? buildOperationalDebitAliases(normalizedName) : [];
+    const naturalAliases = [
+      normalizedCompactNoisy,
+      institution,
+      institution ? `la ${institution}` : '',
+      institution ? `de ${institution}` : '',
+      institution ? `la de ${institution}` : '',
+      institution ? `cuenta ${institution}` : '',
+      institution ? `mi cuenta ${institution}` : '',
+      institution && type === 'credit_card' ? `tarjeta ${institution}` : '',
+      institution && type === 'credit_card' ? `mi tarjeta ${institution}` : '',
+      institution && type === 'credit_card' ? `la tarjeta ${institution}` : '',
+      institution && type === 'credit_card' ? `la ${institution}` : ''
+    ].map((alias) => normalize(alias)).filter(Boolean);
     const aliases = Array.from(new Set([
       ...(account.aliases ?? []).map((alias) => normalize(alias)),
       normalizedName,
       normalizedCompactName,
+      ...naturalAliases,
       ...debitAliases
     ])).filter(Boolean);
 
@@ -240,16 +278,18 @@ function extractExplicitAccountReference(
   if (!raw) return null;
 
   const cleaned = raw.replace(/\b(en|de|del|la|el)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  const normalizedCleaned = normalizeStrongDebitReference(cleaned);
   const expectedKind =
-    /(tarjeta|tdc|prestamo|hipoteca)/.test(cleaned) ? 'debt'
-      : /(banco|efectivo|debito|tdd)/.test(cleaned) ? 'operational'
+    hasStrongDebitMarker(cleaned) ? 'operational'
+      : /(tarjeta|tdc|prestamo|hipoteca)/.test(cleaned) ? 'debt'
+        : /(banco|efectivo|debito|tdd)/.test(cleaned) ? 'operational'
         : /(ahorro|fondo|meta)/.test(cleaned) ? 'savings'
           : null;
   const isGeneric = /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|debito|tdd|ahorro|fondo|meta)$/.test(cleaned);
 
   return {
     raw: cleaned,
-    normalized: normalize(cleaned),
+    normalized: normalizedCleaned,
     expectedKind,
     isGeneric,
     role: ['a la', 'al', 'en'].includes(preposition) ? 'destination' : 'source'
@@ -261,9 +301,13 @@ function resolveExplicitReference(
   accounts: EnrichedAccount[]
 ): { account: EnrichedAccount | null; confidence: number; unresolvedMessage: string | null } {
   if (!reference) return { account: null, confidence: 0, unresolvedMessage: null };
+  const normalizedReference = normalizeStrongDebitReference(stripReferenceNoise(reference.normalized));
 
-  const pool = reference.expectedKind
-    ? accounts.filter((account) => reference.expectedKind === 'debt' ? account.is_debt : reference.expectedKind === 'operational' ? account.type === 'operational_cash' : account.type === 'savings_fund')
+  const expectedKind = hasStrongDebitMarker(reference.normalized)
+    ? 'operational'
+    : reference.expectedKind;
+  const pool = expectedKind
+    ? accounts.filter((account) => expectedKind === 'debt' ? account.is_debt : expectedKind === 'operational' ? account.type === 'operational_cash' : account.type === 'savings_fund')
     : accounts;
 
   if (!pool.length) return { account: null, confidence: 0, unresolvedMessage: null };
@@ -286,9 +330,10 @@ function resolveExplicitReference(
   const ranked = pool
     .map((account) => {
       if (reference.normalized === account.normalized_name) return { account, score: 1 };
-      if (reference.normalized === normalizeAccountLabel(account.name)) return { account, score: 0.97 };
-      if (account.aliases.includes(reference.normalized)) return { account, score: 0.96 };
-      const tokens = reference.normalized.split(' ').filter((token) => token.length > 2);
+      if (normalizedReference === account.normalized_name) return { account, score: 0.99 };
+      if (reference.normalized === normalizeAccountLabel(account.name) || normalizedReference === normalizeAccountLabel(account.name)) return { account, score: 0.97 };
+      if (account.aliases.includes(reference.normalized) || account.aliases.includes(normalizedReference)) return { account, score: 0.96 };
+      const tokens = normalizedReference.split(' ').filter((token) => token.length > 2);
       const overlap = tokens.filter((token) => account.normalized_name.includes(token)).length;
       let score = tokens.length ? overlap / tokens.length : 0;
       if (reference.expectedKind === 'debt' && /(tarjeta|tdc)/.test(reference.normalized)) {
@@ -670,7 +715,7 @@ function choosePrompt(
   if (first === 'missingDestinationAccount') {
     return { nextPrompt: '¿A qué cuenta entró el dinero?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['operational_cash', 'savings_fund', 'investment', 'receivable'] as const };
   }
-  if (first === 'missingSourceAccount' && intent === 'expense_debt_account') {
+  if (first === 'missingSourceAccount' && intent === 'expense_debt_account' && /(tarjeta|tdc|credito|prestamo|hipoteca)/.test(normalizedText ?? '')) {
     return { nextPrompt: '¿Con qué tarjeta de crédito pagaste?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['credit_card'] as const };
   }
   if (first === 'missingSourceAccount' && intent === 'debt_transfer' && normalizedText?.includes('de ')) {
@@ -898,6 +943,8 @@ export async function applyFollowUpAnswer(
   const kind = updated.missingFieldKinds[0];
   const modelAccounts = enrichAccounts(accounts);
   const matchedAccount = findAccountByName(modelAccounts, answer);
+  const isAmbiguityClarification = (current.nextPrompt ?? '').startsWith('¿Te refieres a ');
+  let resolvedSourceBySelection = false;
 
   if (kind === 'missingDebtTarget' || kind === 'missingDestinationAccount') {
     if (matchedAccount) {
@@ -914,6 +961,7 @@ export async function applyFollowUpAnswer(
       updated.sourceAccountName = matchedAccount.name;
       updated.sourceAccountType = matchedAccount.type;
       updated.sourceAccount = matchedAccount.name.toLowerCase();
+      resolvedSourceBySelection = true;
     }
   }
 
@@ -929,6 +977,11 @@ export async function applyFollowUpAnswer(
   if (updated.intent === 'expense_cash_like' && updated.sourceAccountType === 'credit_card') {
     updated.intent = 'expense_debt_account';
     updated.visibleType = visibleTypeMap.expense_debt_account;
+    updated.action = intentToLegacyAction(updated.intent);
+  }
+  if (resolvedSourceBySelection && isAmbiguityClarification && updated.intent === 'expense_debt_account' && updated.sourceAccountType !== 'credit_card') {
+    updated.intent = 'expense_cash_like';
+    updated.visibleType = visibleTypeMap.expense_cash_like;
     updated.action = intentToLegacyAction(updated.intent);
   }
 
