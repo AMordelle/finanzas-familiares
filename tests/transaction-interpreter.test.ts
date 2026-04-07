@@ -479,6 +479,29 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(creditCardTaxi.intent).toBe('expense_debt_account');
     expect(creditCardTaxi.visibleType).toBe('Gasto con tarjeta de crédito');
   });
+
+  it('category mapping: refina categorías para frases comunes de gasto e ingreso', async () => {
+    const ropa = await interpretTransaction('Gaste 2000 en calzado con TDC BBVA', accounts as any);
+    expect(ropa.category).toBe('ropa');
+
+    const comida = await interpretTransaction('Gaste 700 en supermercado con Liverpool', accounts as any);
+    expect(comida.category).toBe('comida');
+
+    const entretenimiento = await interpretTransaction('Gaste 250 en Netflix con TDC BBVA', accounts as any);
+    expect(entretenimiento.category).toBe('entretenimiento');
+
+    const educacion = await interpretTransaction('Gaste 300 en cooperacion escolar con Efectivo', accounts as any);
+    expect(educacion.category).toBe('educación');
+
+    const hogar = await interpretTransaction('Gaste 1000 en una barra de sonido con Sears', accounts as any);
+    expect(hogar.category).toBe('hogar');
+
+    const ingresoExtra = await interpretTransaction('Recibi 2000 de la venta de un tv box en TDD BBVA', accounts as any);
+    expect(ingresoExtra.category).toBe('ingreso_extra');
+
+    const ingresoFijo = await interpretTransaction('Recibi 3000 de nomina semanal en TDD BBVA', accounts as any);
+    expect(ingresoFijo.category).toBe('ingreso_fijo');
+  });
 });
 
 describe('financial consistency layer (safe mode)', () => {
