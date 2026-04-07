@@ -1,5 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { applyFollowUpAnswer, enforceFinancialConsistency, interpretTransaction, transactionIntentSchema } from '@/lib/ai/transactionInterpreter';
+import { inferSemanticCategoryWithOpenAI } from '@/lib/ai/openai';
+
+vi.mock('@/lib/ai/openai', () => ({
+  inferSemanticCategoryWithOpenAI: vi.fn()
+}));
+
+const mockedInferSemanticCategoryWithOpenAI = vi.mocked(inferSemanticCategoryWithOpenAI);
 
 const accounts = [
   { id: 'acc-ef', name: 'Efectivo', type: 'operational_cash' },
@@ -12,6 +19,11 @@ const accounts = [
   { id: 'acc-ah2', name: 'Ahorro Viaje', type: 'savings_fund' },
   { id: 'acc-rec', name: 'Juan por cobrar', type: 'receivable' }
 ] as const;
+
+beforeEach(() => {
+  mockedInferSemanticCategoryWithOpenAI.mockReset();
+  mockedInferSemanticCategoryWithOpenAI.mockResolvedValue(null);
+});
 
 describe('transaction interpreter semantic pipeline', () => {
   it('A: income keeps source empty and confirms only destination', async () => {
@@ -654,3 +666,56 @@ describe('financial consistency layer (safe mode)', () => {
     warnSpy.mockRestore();
   });
 });
+
+it('semantic categories A-I: classifies representative phrases correctly', async () => {
+    const camioneta = await interpretTransaction('Gaste 6100 de la mensualidad de mi camioneta con TDD BBVA', accounts as any);
+    expect(camioneta.category).toBe('transporte');
+
+    const pizza = await interpretTransaction('Gaste 280 en pizza con TDD BBVA', accounts as any);
+    expect(pizza.category).toBe('comida');
+
+    const oxxo = await interpretTransaction('Gaste 180 en Oxxo en botana y cerveza con efectivo', accounts as any);
+    expect(oxxo.category).toBe('comida');
+
+    const primeVideo = await interpretTransaction('Gaste 240 en Prime Video con TDC BBVA', accounts as any);
+    expect(primeVideo.category).toBe('entretenimiento');
+
+    const escolar = await interpretTransaction('Gaste 300 en cooperacion escolar con Efectivo', accounts as any);
+    expect(escolar.category).toBe('educación');
+
+    const barraSonido = await interpretTransaction('Gaste 1000 en una barra de sonido con Sears', accounts as any);
+    expect(barraSonido.category).toBe('hogar');
+
+    const imprevisto = await interpretTransaction('Gaste 180 en un imprevisto con efectivo', accounts as any);
+    expect(imprevisto.category).toBe('otros_gastos');
+
+    const venta = await interpretTransaction('Recibi 2000 de la venta de un tv box en TDD BBVA', accounts as any);
+    expect(venta.category).toBe('ingreso_extra');
+
+    const nomina = await interpretTransaction('Recibi 3000 de nomina semanal en TDD BBVA', accounts as any);
+    expect(nomina.category).toBe('ingreso_fijo');
+  });
+
+  it('semantic category fallback J: invalid or low-confidence AI output keeps deterministic local category', async () => {
+    mockedInferSemanticCategoryWithOpenAI.mockResolvedValueOnce({
+      category: 'categoria_invalida',
+      confidence: 'high',
+      reason: 'invalid'
+    } as any);
+    const invalidCategory = await interpretTransaction('Gaste 280 en pizza con TDD BBVA', accounts as any);
+    expect(invalidCategory.category).toBe('comida');
+
+    mockedInferSemanticCategoryWithOpenAI.mockResolvedValueOnce({
+      category: 'comida',
+      confidence: 'low',
+      reason: 'uncertain'
+    });
+    const lowConfidence = await interpretTransaction('Gaste 240 en Prime Video con TDC BBVA', accounts as any);
+    expect(lowConfidence.category).toBe('entretenimiento');
+
+    mockedInferSemanticCategoryWithOpenAI.mockRejectedValueOnce(new Error('timeout'));
+    const openAIFailure = await interpretTransaction('Gaste 180 en un imprevisto con efectivo', accounts as any);
+    expect(openAIFailure.category).toBe('otros_gastos');
+  });
+
+
