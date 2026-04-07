@@ -617,9 +617,9 @@ function findDebtDestinationFromText(normalizedText: string, accounts: EnrichedA
 
 function inferCategory(intent: z.infer<typeof financialIntentSchema>, normalizedText: string) {
   if (intent === 'income') {
-    if (/(nomina|sueldo)/.test(normalizedText)) return 'ingreso_fijo';
-    if (/(tiempo extra|bono)/.test(normalizedText)) return 'ingreso_extra';
-    if (/reembolso/.test(normalizedText)) return 'reembolso';
+    if (/(reembolso|devolucion)/.test(normalizedText)) return 'reembolso';
+    if (/(nomina|sueldo|quincena|semanal|salario)/.test(normalizedText)) return 'ingreso_fijo';
+    if (/(tiempo extra|bono|venta de|vendi|me pagaron por vender)/.test(normalizedText)) return 'ingreso_extra';
     return 'ingreso_extra';
   }
   if (intent === 'debt_payment') return 'pago_deuda';
@@ -628,13 +628,15 @@ function inferCategory(intent: z.infer<typeof financialIntentSchema>, normalized
   if (intent === 'receivable_created') return 'préstamo_otorgado';
   if (intent === 'receivable_payment') return 'pago_recibido';
 
-  if (/(cena|comida|restaurante|tacos|desayuno)/.test(normalizedText)) return 'comida';
+  if (/(cena|comida|restaurante|tacos|desayuno|supermercado|despensa|abarrotes|almuerzo|cafe)/.test(normalizedText)) return 'comida';
   if (/(taxi|uber|gasolina)/.test(normalizedText)) return 'transporte';
-  if (/(ropa|zapatos)/.test(normalizedText)) return 'ropa';
-  if (/(internet|luz|agua)/.test(normalizedText)) return 'servicios';
-  if (/(medico|medicina)/.test(normalizedText)) return 'salud';
-  if (/(utiles|colegiatura)/.test(normalizedText)) return 'educación';
-  if (/(cine|fiesta)/.test(normalizedText)) return 'entretenimiento';
+  if (/(ropa|zapatos|calzado|tenis|playera|pantalon|camisa|blusa)/.test(normalizedText)) return 'ropa';
+  if (/\b(internet|wifi|telefono|recarga|luz|agua|gas)\b/.test(normalizedText)) return 'servicios';
+  if (/(medico|medicina|farmacia|doctor|consulta)/.test(normalizedText)) return 'salud';
+  if (/(utiles|colegiatura|escuela|cooperacion escolar|uniforme|inscripcion)/.test(normalizedText)) return 'educación';
+  if (/(cine|fiesta|netflix|spotify|disney|xbox|playstation|youtube premium)/.test(normalizedText)) return 'entretenimiento';
+  if (/(barra de sonido|bocina|electrodomestico|licuadora|television|colchon)/.test(normalizedText)) return 'hogar';
+  if (/(regalo|cumpleanos|aniversario)/.test(normalizedText)) return 'regalos';
   return 'otros_gastos';
 }
 
