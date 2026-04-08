@@ -129,6 +129,17 @@ type DashboardData = {
   availableMoney: number;
   diagnoses: string[];
   recommendations: string[];
+  financialPressure: {
+    requiredMoney: number;
+    availableMoney: number;
+    gap: number;
+    status: 'healthy' | 'warning' | 'critical';
+  } | null;
+  financialInsight: {
+    explanation: string;
+    topCauses: string[];
+    suggestions: string[];
+  } | null;
 };
 
 type SupabaseClientLike = typeof supabaseAdmin;
@@ -433,6 +444,36 @@ function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
   const availableMoney = toFiniteNumber(payload?.availableMoney, 0);
   const diagnoses = Array.isArray(payload?.diagnoses) ? payload.diagnoses.filter((x: unknown): x is string => typeof x === 'string') : [];
   const recommendations = Array.isArray(payload?.recommendations) ? payload.recommendations.filter((x: unknown): x is string => typeof x === 'string') : [];
+  const rawFinancialPressure =
+    payload && typeof payload.financialPressure === 'object' && payload.financialPressure !== null
+      ? (payload.financialPressure as Record<string, unknown>)
+      : null;
+  const normalizedStatus = rawFinancialPressure?.status;
+  const financialPressure =
+    rawFinancialPressure && (normalizedStatus === 'healthy' || normalizedStatus === 'warning' || normalizedStatus === 'critical')
+      ? {
+          requiredMoney: toFiniteNumber(rawFinancialPressure.requiredMoney, 0),
+          availableMoney: toFiniteNumber(rawFinancialPressure.availableMoney, 0),
+          gap: toFiniteNumber(rawFinancialPressure.gap, 0),
+          status: normalizedStatus
+        }
+      : null;
+  const rawFinancialInsight =
+    payload && typeof payload.financialInsight === 'object' && payload.financialInsight !== null
+      ? (payload.financialInsight as Record<string, unknown>)
+      : null;
+  const financialInsight =
+    rawFinancialInsight && typeof rawFinancialInsight.explanation === 'string'
+      ? {
+          explanation: rawFinancialInsight.explanation,
+          topCauses: Array.isArray(rawFinancialInsight.topCauses)
+            ? rawFinancialInsight.topCauses.filter((x: unknown): x is string => typeof x === 'string')
+            : [],
+          suggestions: Array.isArray(rawFinancialInsight.suggestions)
+            ? rawFinancialInsight.suggestions.filter((x: unknown): x is string => typeof x === 'string')
+            : []
+        }
+      : null;
 
   return {
     hasHousehold: true,
@@ -440,7 +481,9 @@ function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
     weeklyOFH,
     availableMoney,
     diagnoses: diagnoses.length ? diagnoses : ['Sin diagnósticos disponibles por el momento.'],
-    recommendations: recommendations.length ? recommendations : ['Aún no hay recomendaciones; registra movimientos para enriquecer el análisis.']
+    recommendations: recommendations.length ? recommendations : ['Aún no hay recomendaciones; registra movimientos para enriquecer el análisis.'],
+    financialPressure,
+    financialInsight
   };
 }
 
@@ -456,7 +499,9 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
       weeklyOFH: 0,
       availableMoney: 0,
       diagnoses: ['Completa tu onboarding para obtener diagnóstico.'],
-      recommendations: ['Configura hogar, cuentas e ingresos iniciales para activar recomendaciones.']
+      recommendations: ['Configura hogar, cuentas e ingresos iniciales para activar recomendaciones.'],
+      financialPressure: null,
+      financialInsight: null
     };
   }
 
@@ -478,7 +523,9 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
       weeklyOFH: 0,
       availableMoney: 0,
       diagnoses: ['Sin snapshot financiero inicial todavía.'],
-      recommendations: ['Finaliza onboarding para generar indicadores automáticos.']
+      recommendations: ['Finaliza onboarding para generar indicadores automáticos.'],
+      financialPressure: null,
+      financialInsight: null
     };
   }
 
