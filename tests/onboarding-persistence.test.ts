@@ -324,6 +324,120 @@ describe('onboarding persistence', () => {
     expect(dashboard.monthlyOFH).toBe(1234);
     expect(dashboard.availableMoney).toBe(0);
     expect(dashboard.recommendations.length).toBeGreaterThan(0);
+    expect(dashboard.financialPressure).toBeNull();
+    expect(dashboard.financialInsight).toBeNull();
+  });
+
+  it('dashboard expone financialPressure cuando existe en snapshot', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-fp', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-fp', profile_id: 'profile-fp', household_id: 'house-fp' });
+    fakeClient.db.financial_snapshots.push({
+      id: 'snap-fp',
+      household_id: 'house-fp',
+      payload: JSON.stringify({
+        monthlyOFH: 2000,
+        financialPressure: {
+          requiredMoney: 3200,
+          availableMoney: 2100,
+          gap: 1100,
+          status: 'critical'
+        }
+      }),
+      created_at: new Date().toISOString()
+    });
+
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getDashboardData } = await import('@/lib/db/queries');
+
+    const dashboard = await getDashboardData();
+    expect(dashboard.financialPressure).toEqual({
+      requiredMoney: 3200,
+      availableMoney: 2100,
+      gap: 1100,
+      status: 'critical'
+    });
+  });
+
+  it('dashboard conserva status de financialPressure para mapear etiqueta de estado', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-status', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-status', profile_id: 'profile-status', household_id: 'house-status' });
+    fakeClient.db.financial_snapshots.push({
+      id: 'snap-status',
+      household_id: 'house-status',
+      payload: JSON.stringify({
+        financialPressure: {
+          requiredMoney: 1500,
+          availableMoney: 1600,
+          gap: -100,
+          status: 'healthy'
+        }
+      }),
+      created_at: new Date().toISOString()
+    });
+
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getDashboardData } = await import('@/lib/db/queries');
+
+    const dashboard = await getDashboardData();
+    expect(dashboard.financialPressure?.status).toBe('healthy');
+  });
+
+  it('dashboard expone insight AI solo cuando viene en snapshot', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-ai', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-ai', profile_id: 'profile-ai', household_id: 'house-ai' });
+    fakeClient.db.financial_snapshots.push({
+      id: 'snap-ai',
+      household_id: 'house-ai',
+      payload: JSON.stringify({
+        financialPressure: {
+          requiredMoney: 2800,
+          availableMoney: 2000,
+          gap: 800,
+          status: 'warning'
+        },
+        financialInsight: {
+          explanation: 'Hay presión por compromisos de esta semana.',
+          topCauses: ['deudas ($1,500)'],
+          suggestions: ['Prioriza pagos críticos.']
+        }
+      }),
+      created_at: new Date().toISOString()
+    });
+
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getDashboardData } = await import('@/lib/db/queries');
+
+    const dashboard = await getDashboardData();
+    expect(dashboard.financialInsight?.explanation).toContain('presión');
+    expect(dashboard.financialInsight?.topCauses.length).toBe(1);
+    expect(dashboard.financialInsight?.suggestions.length).toBe(1);
+  });
+
+  it('dashboard no truena con snapshot viejo parcial de financialPressure', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-legacy', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-legacy', profile_id: 'profile-legacy', household_id: 'house-legacy' });
+    fakeClient.db.financial_snapshots.push({
+      id: 'snap-legacy',
+      household_id: 'house-legacy',
+      payload: JSON.stringify({
+        financialPressure: {
+          requiredMoney: 1000,
+          gap: 300
+        }
+      }),
+      created_at: new Date().toISOString()
+    });
+
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getDashboardData } = await import('@/lib/db/queries');
+
+    const dashboard = await getDashboardData();
+    expect(dashboard.financialPressure).toBeNull();
+    expect(dashboard.financialInsight).toBeNull();
   });
 
   it('dashboard lee snapshot actualizado después de guardar movimiento', async () => {
