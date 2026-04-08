@@ -11,6 +11,7 @@ import {
   calculateRegularIncome,
   calculateWeeklyOFH
 } from '@/lib/financial/engine';
+import { calculateFinancialPressure, generateFinancialInsight } from '@/lib/finance/financialPressure';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
 
@@ -1186,9 +1187,9 @@ export async function recalculateIndicators(householdId: string) {
   const { data: groups } = await supabaseAdmin.from('transaction_groups').select('id').eq('household_id', householdId);
   const groupIds = (groups ?? []).map((group) => group.id as string);
   const { data: transactionsData } = groupIds.length
-    ? await supabaseAdmin.from('transactions').select('type,category,amount').in('group_id', groupIds)
-    : { data: [] as Array<{ type: string; category: string; amount: string }> };
-  const parsed = (transactionsData ?? []) as Array<{ type: string; category: string; amount: string }>;
+    ? await supabaseAdmin.from('transactions').select('type,category,amount,happened_at').in('group_id', groupIds)
+    : { data: [] as Array<{ type: string; category: string; amount: string; happened_at: string }> };
+  const parsed = (transactionsData ?? []) as Array<{ type: string; category: string; amount: string; happened_at: string }>;
 
   const totalExpenses = parsed
     .filter((item) => item.type === 'debit' && item.category !== 'entrada_cuenta')
@@ -1280,6 +1281,35 @@ export async function recalculateIndicators(householdId: string) {
   const availableMoney = calculateAvailableMoney(operativeMoney);
   const diagnoses = buildTopDiagnoses(financialInput);
   const recommendations = buildRecommendations(diagnoses);
+  const financialPressure = calculateFinancialPressure({
+    accounts: accountList,
+    debts: obligationsList
+      .filter((item) => item.name.toLowerCase().startsWith('pago '))
+      .map((item) => ({ periodicPayment: Number(item.amount) })),
+    fixedExpenses,
+    recentTransactions: parsed.map((item) => ({
+      amount: Number(item.amount),
+      category: item.category,
+      type: item.type,
+      happenedAt: item.happened_at
+    }))
+  });
+
+  const shouldGenerateInsight = process.env.FINANCIAL_INSIGHT_AUTO === 'true';
+  const financialInsight = shouldGenerateInsight
+    ? await generateFinancialInsight(
+        financialPressure,
+        parsed
+          .filter((item) => item.type === 'debit')
+          .slice(-5)
+          .map((item) => ({
+            amount: Number(item.amount),
+            category: item.category,
+            type: item.type,
+            happenedAt: item.happened_at
+          }))
+      )
+    : null;
 
   await supabaseAdmin.from('financial_snapshots').insert({
     household_id: householdId,
@@ -1294,6 +1324,8 @@ export async function recalculateIndicators(householdId: string) {
       availableMoney,
       diagnoses,
       recommendations,
+      financialPressure,
+      financialInsight,
       financialInput,
       totals: { totalIncome, totalExpenses, receivablesOutstanding }
     })
