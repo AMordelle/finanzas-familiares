@@ -22,6 +22,7 @@ export default async function DashboardPage() {
   const financialInsight = data.financialInsight;
   const hasCoverage = financialPressure ? financialPressure.gap <= 0 : false;
   const absoluteGap = financialPressure ? Math.abs(financialPressure.gap) : 0;
+  const breakdown = financialPressure?.breakdown;
 
   if (!data.hasHousehold) {
     return (
@@ -60,6 +61,15 @@ export default async function DashboardPage() {
               <p>
                 <span className="font-medium text-slate-900">Estado:</span> {statusLabelMap[financialPressure.status]}
               </p>
+            <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              <p className="font-medium text-slate-900">¿De dónde sale este cálculo?</p>
+              <div className="mt-2 space-y-1">
+                <p><span className="font-medium text-slate-900">Deudas próximas:</span> ${Number(breakdown?.debts ?? 0).toLocaleString('es-MX')}</p>
+                <p><span className="font-medium text-slate-900">Gastos fijos próximos:</span> ${Number(breakdown?.fixedExpenses ?? 0).toLocaleString('es-MX')}</p>
+                <p><span className="font-medium text-slate-900">Gasto operativo estimado:</span> ${Number(breakdown?.operationalEstimate ?? 0).toLocaleString('es-MX')}</p>
+              </div>
+              <p className="mt-2 text-xs text-slate-600">Dinero necesario hoy = deudas + gastos fijos + gasto operativo estimado</p>
+            </div>
             </div>
           </Card>
         ) : null}
