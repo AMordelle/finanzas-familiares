@@ -355,7 +355,85 @@ describe('onboarding persistence', () => {
       requiredMoney: 3200,
       availableMoney: 2100,
       gap: 1100,
-      status: 'critical'
+      status: 'critical',
+      breakdown: {
+        debts: 0,
+        fixedExpenses: 0,
+        operationalEstimate: 0
+      }
+    });
+  });
+
+
+  it('dashboard normaliza breakdown de financialPressure cuando existe en snapshot', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-bd', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-bd', profile_id: 'profile-bd', household_id: 'house-bd' });
+    fakeClient.db.financial_snapshots.push({
+      id: 'snap-bd',
+      household_id: 'house-bd',
+      payload: JSON.stringify({
+        financialPressure: {
+          requiredMoney: 3200,
+          availableMoney: 2100,
+          gap: 1100,
+          status: 'warning',
+          breakdown: {
+            debts: 900,
+            fixedExpenses: 1400,
+            operationalEstimate: 900
+          }
+        }
+      }),
+      created_at: new Date().toISOString()
+    });
+
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getDashboardData } = await import('@/lib/db/queries');
+
+    const dashboard = await getDashboardData();
+    expect(dashboard.financialPressure?.breakdown).toEqual({
+      debts: 900,
+      fixedExpenses: 1400,
+      operationalEstimate: 900
+    });
+  });
+
+  it('dashboard usa fallback seguro cuando financialPressure no trae breakdown completo', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-bd-partial', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-bd-partial', profile_id: 'profile-bd-partial', household_id: 'house-bd-partial' });
+    fakeClient.db.financial_snapshots.push({
+      id: 'snap-bd-partial',
+      household_id: 'house-bd-partial',
+      payload: JSON.stringify({
+        financialPressure: {
+          requiredMoney: 1800,
+          availableMoney: 1600,
+          gap: 200,
+          status: 'warning',
+          breakdown: {
+            debts: 450
+          }
+        }
+      }),
+      created_at: new Date().toISOString()
+    });
+
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getDashboardData } = await import('@/lib/db/queries');
+
+    const dashboard = await getDashboardData();
+    expect(dashboard.financialPressure).toEqual({
+      requiredMoney: 1800,
+      availableMoney: 1600,
+      gap: 200,
+      status: 'warning',
+      breakdown: {
+        debts: 450,
+        fixedExpenses: 0,
+        operationalEstimate: 0
+      }
     });
   });
 

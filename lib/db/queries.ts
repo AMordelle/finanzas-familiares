@@ -134,6 +134,11 @@ type DashboardData = {
     availableMoney: number;
     gap: number;
     status: 'healthy' | 'warning' | 'critical';
+    breakdown: {
+      debts: number;
+      fixedExpenses: number;
+      operationalEstimate: number;
+    };
   } | null;
   financialInsight: {
     explanation: string;
@@ -449,13 +454,22 @@ function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
       ? (payload.financialPressure as Record<string, unknown>)
       : null;
   const normalizedStatus = rawFinancialPressure?.status;
+  const rawBreakdown =
+    rawFinancialPressure && typeof rawFinancialPressure.breakdown === 'object' && rawFinancialPressure.breakdown !== null
+      ? (rawFinancialPressure.breakdown as Record<string, unknown>)
+      : null;
   const financialPressure =
     rawFinancialPressure && (normalizedStatus === 'healthy' || normalizedStatus === 'warning' || normalizedStatus === 'critical')
       ? {
           requiredMoney: toFiniteNumber(rawFinancialPressure.requiredMoney, 0),
           availableMoney: toFiniteNumber(rawFinancialPressure.availableMoney, 0),
           gap: toFiniteNumber(rawFinancialPressure.gap, 0),
-          status: normalizedStatus
+          status: normalizedStatus,
+          breakdown: {
+            debts: toFiniteNumber(rawBreakdown?.debts, 0),
+            fixedExpenses: toFiniteNumber(rawBreakdown?.fixedExpenses, 0),
+            operationalEstimate: toFiniteNumber(rawBreakdown?.operationalEstimate, 0)
+          }
         }
       : null;
   const rawFinancialInsight =
