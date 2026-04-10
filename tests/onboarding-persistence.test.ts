@@ -575,9 +575,11 @@ describe('onboarding persistence', () => {
     expect(result.movements.length).toBe(2);
     expect(result.movements[0]?.id).toBe('g-reciente');
     expect(result.movements[0]?.tipoMovimiento).toBe('Transferencia');
+    expect(result.movements[0]?.categoria).toBe('transferencia');
     expect(result.movements[0]?.cuentaOrigen).toBe('Efectivo');
     expect(result.movements[0]?.cuentaDestino).toBe('Banco');
     expect(result.movements[1]?.tipoMovimiento).toBe('Gasto');
+    expect(result.movements[1]?.categoria).toBe('comida');
 
     delete process.env.DEV_PROFILE_ID;
   });
@@ -594,6 +596,24 @@ describe('onboarding persistence', () => {
     const result = await getMovementsHistory();
     expect(result.hasHousehold).toBe(true);
     expect(result.movements).toEqual([]);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('movimientos conserva categoría real sin sobreescribirla con etiquetas de presentación', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-category', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-category', profile_id: 'profile-category', household_id: 'house-category' });
+    fakeClient.db.accounts.push({ id: 'acc-banco-cat', household_id: 'house-category', name: 'Banco', type: 'operativa', balance: '2000' });
+    fakeClient.db.transaction_groups.push({ id: 'g-category', household_id: 'house-category', note: 'Ingreso adicional', created_at: '2024-03-01T10:00:00.000Z' });
+    fakeClient.db.transactions.push({ id: 't-cat', group_id: 'g-category', account_id: 'acc-banco-cat', type: 'debit', category: 'ingreso_extra', amount: '440.00', happened_at: '2024-03-01T10:00:00.000Z' });
+
+    process.env.DEV_PROFILE_ID = 'profile-category';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getMovementsHistory } = await import('@/lib/db/queries');
+
+    const result = await getMovementsHistory();
+    expect(result.movements[0]?.categoria).toBe('ingreso_extra');
 
     delete process.env.DEV_PROFILE_ID;
   });

@@ -67,9 +67,9 @@ function getMovementVisual(movement: MovementHistoryItem): MovementVisual {
 }
 
 function getAmountClass(impact: MovementVisual['impact']) {
-  if (impact === 'inflow') return 'text-emerald-700';
-  if (impact === 'outflow') return 'text-red-600';
-  return 'text-slate-700';
+  if (impact === 'inflow') return 'text-emerald-600';
+  if (impact === 'outflow') return 'text-red-700';
+  return 'text-slate-800';
 }
 
 function getAmountText(amount: number, impact: MovementVisual['impact']) {
@@ -133,7 +133,6 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
                         <span className="font-semibold">Categoría:</span>{' '}
                         <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{movement.categoria}</span>
                       </p>
-                      <p><span className="font-semibold">Tipo completo:</span> {movement.tipoMovimiento}</p>
                     </div>
 
                     <div className="mt-3 flex flex-wrap gap-2">
