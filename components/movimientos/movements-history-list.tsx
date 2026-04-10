@@ -113,7 +113,7 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">
                     <p className="truncate text-xs text-slate-500">{formatDate(movement.fecha)}</p>
-                    <p className="truncate font-medium text-slate-900">{visual.shortType}</p>
+                    <p className={`truncate font-medium ${getAmountClass(visual.impact)}`}>{visual.shortType}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <p className={`text-sm font-semibold ${getAmountClass(visual.impact)}`}>{getAmountText(movement.monto, visual.impact)}</p>
