@@ -718,7 +718,13 @@ function inferMovementType(lines: Array<{ type: string; category: string }>) {
 }
 
 function inferStoredMovementCategory(lines: Array<{ category: string }>) {
-  return lines.find((line) => Boolean(line.category))?.category ?? null;
+  const isSystemCategory = (category: string) =>
+    category === 'entrada_cuenta' || category === 'salida_cuenta' || category.startsWith('sistema_');
+
+  const userLevelCategory = lines.find((line) => Boolean(line.category) && !isSystemCategory(line.category));
+  if (userLevelCategory?.category) return userLevelCategory.category;
+
+  return null;
 }
 
 function inferMovementAction(lines: Array<{ type: string; category: string }>): SupportedMovementAction | null {

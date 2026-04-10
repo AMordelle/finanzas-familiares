@@ -618,6 +618,28 @@ describe('onboarding persistence', () => {
     delete process.env.DEV_PROFILE_ID;
   });
 
+  it('movimientos ignora categorías internas y prioriza la categoría visible del usuario', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-system-category', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-system-category', profile_id: 'profile-system-category', household_id: 'house-system-category' });
+    fakeClient.db.accounts.push({ id: 'acc-bank-system-category', household_id: 'house-system-category', name: 'Banco', type: 'operativa', balance: '2000' });
+    fakeClient.db.transaction_groups.push({ id: 'g-system-category', household_id: 'house-system-category', note: 'Ingreso extra', created_at: '2024-03-02T10:00:00.000Z' });
+    fakeClient.db.transactions.push(
+      { id: 't-system-internal', group_id: 'g-system-category', account_id: 'acc-bank-system-category', type: 'debit', category: 'entrada_cuenta', amount: '440.00', happened_at: '2024-03-02T10:00:00.000Z' },
+      { id: 't-system-visible', group_id: 'g-system-category', account_id: null, type: 'credit', category: 'ingreso_extra', amount: '440.00', happened_at: '2024-03-02T10:00:00.000Z' }
+    );
+
+    process.env.DEV_PROFILE_ID = 'profile-system-category';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getMovementsHistory } = await import('@/lib/db/queries');
+
+    const result = await getMovementsHistory();
+    expect(result.movements[0]?.categoria).toBe('ingreso_extra');
+    expect(result.movements[0]?.categoria).not.toBe('entrada_cuenta');
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
 
   it('actualiza saldos y conserva OFH de configuración tras gasto e ingreso', async () => {
     const fakeClient = createFakeSupabase();
