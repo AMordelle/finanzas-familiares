@@ -18,6 +18,17 @@ const DEFAULT_TIMEOUT_MS = 4500;
 
 let openaiClient: OpenAI | null = null;
 
+function logSemanticCategoryOpenAI(payload: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== 'development') return;
+  console.debug('[SemanticCategoryAI]', payload);
+}
+
+function toDebugError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  return 'unknown_error';
+}
+
 function getOpenAIClient() {
   if (!process.env.OPENAI_API_KEY) return null;
   if (!openaiClient) {
@@ -42,7 +53,18 @@ export async function inferSemanticCategoryWithOpenAI(
   timeoutMs: number = DEFAULT_TIMEOUT_MS
 ): Promise<SemanticCategoryAIResult | null> {
   const client = getOpenAIClient();
-  if (!client) return null;
+  if (!client) {
+    logSemanticCategoryOpenAI({
+      intent: input.intent,
+      openAICalled: false,
+      reason: 'missing_api_key'
+    });
+    return null;
+  }
+  logSemanticCategoryOpenAI({
+    intent: input.intent,
+    openAICalled: true
+  });
 
   const payload = {
     text: input.text,
@@ -95,12 +117,29 @@ export async function inferSemanticCategoryWithOpenAI(
     );
 
     const rawOutput = response.output_text;
-    if (!rawOutput) return null;
-    return JSON.parse(rawOutput) as SemanticCategoryAIResult;
-  } catch (error) {
-    if (process.env.NODE_ENV === 'development') {
-      console.warn('[semantic-category-ai] openai error', error);
+    if (!rawOutput) {
+      logSemanticCategoryOpenAI({
+        intent: input.intent,
+        openAICalled: true,
+        aiReturnedPayload: false
+      });
+      return null;
     }
+    const parsed = JSON.parse(rawOutput) as SemanticCategoryAIResult;
+    logSemanticCategoryOpenAI({
+      intent: input.intent,
+      openAICalled: true,
+      aiReturnedPayload: true,
+      aiCategory: parsed.category,
+      confidence: parsed.confidence
+    });
+    return parsed;
+  } catch (error) {
+    logSemanticCategoryOpenAI({
+      intent: input.intent,
+      openAICalled: true,
+      error: toDebugError(error)
+    });
     return null;
   } finally {
     clearTimeout(timer);

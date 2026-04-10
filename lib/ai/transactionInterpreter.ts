@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { localCategoryInference, semanticCategoryInferenceWithAI } from '@/lib/ai/semanticCategory';
+import { localCategoryInference, semanticCategoryInferenceWithAIDetails } from '@/lib/ai/semanticCategory';
 
 export const accountTypeSchema = z.enum([
   'operational_cash',
@@ -845,7 +845,19 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     destination = receivableRoles.destination ?? destination;
   }
   const finalIntent = inferFinalIntent(intent, source?.type, destination?.type, normalizedText);
-  const category = await semanticCategoryInferenceWithAI({ text, normalizedText, intent: finalIntent });
+  const categoryInference = await semanticCategoryInferenceWithAIDetails({ text, normalizedText, intent: finalIntent });
+  const category = categoryInference.category;
+  if (process.env.NODE_ENV === 'development') {
+    console.debug('[SemanticCategoryAI]', {
+      text,
+      intent: finalIntent,
+      finalCategory: categoryInference.category,
+      categorySource: categoryInference.categorySource,
+      confidence: categoryInference.categoryConfidence,
+      reason: categoryInference.categoryReason,
+      error: categoryInference.categoryDebugError
+    });
+  }
 
   const draftForConstraints: TransactionIntent = transactionIntentSchema.parse({
     rawText: text,
