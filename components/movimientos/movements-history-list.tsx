@@ -12,6 +12,11 @@ type Props = {
   accounts: AccountOption[];
 };
 
+type MovementVisual = {
+  shortType: 'Ingreso' | 'Gasto efectivo' | 'Gasto TDC' | 'Pago deuda' | 'Transferencia' | 'Traslado deuda';
+  impact: 'inflow' | 'outflow' | 'neutral';
+};
+
 function formatMoney(amount: number) {
   return `$${amount.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
@@ -28,7 +33,53 @@ function formatDate(value: string) {
   });
 }
 
+function isDebtAccount(name: string | null) {
+  if (!name) return false;
+  const normalized = name.toLowerCase();
+  return ['tdc', 'tarjeta', 'crédito', 'credito', 'deuda', 'loan'].some((keyword) => normalized.includes(keyword));
+}
+
+function getMovementVisual(movement: MovementHistoryItem): MovementVisual {
+  if (movement.tipoMovimiento === 'Ingreso' || movement.tipoMovimiento === 'Pago recibido') {
+    return { shortType: 'Ingreso', impact: 'inflow' };
+  }
+
+  if (movement.tipoMovimiento === 'Pago de deuda') {
+    return { shortType: 'Pago deuda', impact: 'outflow' };
+  }
+
+  if (movement.tipoMovimiento === 'Gasto') {
+    return {
+      shortType: isDebtAccount(movement.cuentaOrigen) ? 'Gasto TDC' : 'Gasto efectivo',
+      impact: 'outflow'
+    };
+  }
+
+  if (movement.tipoMovimiento === 'Transferencia') {
+    const isDebtTransfer = isDebtAccount(movement.cuentaOrigen) || isDebtAccount(movement.cuentaDestino);
+    return {
+      shortType: isDebtTransfer ? 'Traslado deuda' : 'Transferencia',
+      impact: 'neutral'
+    };
+  }
+
+  return { shortType: 'Transferencia', impact: 'neutral' };
+}
+
+function getAmountClass(impact: MovementVisual['impact']) {
+  if (impact === 'inflow') return 'text-emerald-700';
+  if (impact === 'outflow') return 'text-red-600';
+  return 'text-slate-700';
+}
+
+function getAmountText(amount: number, impact: MovementVisual['impact']) {
+  if (impact === 'inflow') return `+${formatMoney(amount)}`;
+  if (impact === 'outflow') return `-${formatMoney(amount)}`;
+  return `${formatMoney(amount)} ⇄`;
+}
+
 export function MovementsHistoryList({ movements, accounts }: Props) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -40,82 +91,113 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
       {successMessage && <Card><p className="text-sm text-emerald-700">{successMessage}</p></Card>}
       {errorMessage && <Card><p className="text-sm text-red-600">{errorMessage}</p></Card>}
 
-      <div className="mt-4 space-y-3">
+      <div className="mt-4 space-y-2">
         {movements.map((movement) => {
+          const isExpanded = expandedId === movement.id;
           const isEditing = editingId === movement.id;
+          const visual = getMovementVisual(movement);
 
           return (
-            <Card key={movement.id}>
-              <div className="flex flex-col gap-2 text-sm text-slate-700 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <p><span className="font-semibold">Fecha:</span> {formatDate(movement.fecha)}</p>
-                  <p><span className="font-semibold">Tipo de movimiento:</span> {movement.tipoMovimiento}</p>
-                  <p><span className="font-semibold">Descripción:</span> {movement.descripcion}</p>
-                  <p><span className="font-semibold">Cuenta origen:</span> {movement.cuentaOrigen ?? 'N/A'}</p>
-                  <p><span className="font-semibold">Cuenta destino:</span> {movement.cuentaDestino ?? 'N/A'}</p>
+            <Card key={movement.id} className="overflow-hidden p-0">
+              <button
+                type="button"
+                className="w-full p-3 text-left transition-colors hover:bg-slate-50"
+                onClick={() => {
+                  setErrorMessage(null);
+                  setSuccessMessage(null);
+                  setEditingId(null);
+                  setExpandedId((prev) => (prev === movement.id ? null : movement.id));
+                }}
+                aria-expanded={isExpanded}
+              >
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs text-slate-500">{formatDate(movement.fecha)}</p>
+                    <p className="truncate font-medium text-slate-900">{visual.shortType}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <p className={`text-sm font-semibold ${getAmountClass(visual.impact)}`}>{getAmountText(movement.monto, visual.impact)}</p>
+                    <span className={`text-slate-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`}>⌄</span>
+                  </div>
                 </div>
-                <p className="text-base font-semibold text-slate-900">{formatMoney(movement.monto)}</p>
+              </button>
+
+              <div className={`grid transition-all duration-200 ease-out ${isExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+                <div className="overflow-hidden">
+                  <div className="border-t border-slate-100 px-3 pb-3 pt-2 text-sm text-slate-700">
+                    <div className="space-y-1.5">
+                      <p><span className="font-semibold">Descripción:</span> {movement.descripcion}</p>
+                      <p><span className="font-semibold">Cuenta origen:</span> {movement.cuentaOrigen ?? 'N/A'}</p>
+                      <p><span className="font-semibold">Cuenta destino:</span> {movement.cuentaDestino ?? 'N/A'}</p>
+                      <p>
+                        <span className="font-semibold">Categoría:</span>{' '}
+                        <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{movement.categoria}</span>
+                      </p>
+                      <p><span className="font-semibold">Tipo completo:</span> {movement.tipoMovimiento}</p>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        disabled={isPending || !movement.puedeEditar}
+                        onClick={() => {
+                          setErrorMessage(null);
+                          setSuccessMessage(null);
+                          setEditingId((prev) => (prev === movement.id ? null : movement.id));
+                        }}
+                      >
+                        Editar
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={isPending}
+                        onClick={() => {
+                          setErrorMessage(null);
+                          setSuccessMessage(null);
+                          startTransition(async () => {
+                            try {
+                              const result = await deleteMovementAction({ movementId: movement.id });
+                              setSuccessMessage(result.message);
+                              router.refresh();
+                            } catch (error) {
+                              setErrorMessage(error instanceof Error ? error.message : 'No se pudo eliminar el movimiento.');
+                            }
+                          });
+                        }}
+                      >
+                        {isPending ? 'Procesando...' : 'Eliminar'}
+                      </Button>
+                    </div>
+
+                    {!movement.puedeEditar && movement.motivoNoEditable && (
+                      <p className="mt-2 text-xs text-amber-700">{movement.motivoNoEditable}</p>
+                    )}
+
+                    {isEditing && movement.puedeEditar && (
+                      <EditMovementForm
+                        movement={movement}
+                        accounts={accounts}
+                        disabled={isPending}
+                        onCancel={() => setEditingId(null)}
+                        onSubmit={(payload) => {
+                          setErrorMessage(null);
+                          setSuccessMessage(null);
+                          startTransition(async () => {
+                            try {
+                              const result = await updateMovementAction(payload);
+                              setSuccessMessage(result.message);
+                              setEditingId(null);
+                              router.refresh();
+                            } catch (error) {
+                              setErrorMessage(error instanceof Error ? error.message : 'No se pudo actualizar el movimiento.');
+                            }
+                          });
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
               </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  disabled={isPending || !movement.puedeEditar}
-                  onClick={() => {
-                    setErrorMessage(null);
-                    setSuccessMessage(null);
-                    setEditingId((prev) => (prev === movement.id ? null : movement.id));
-                  }}
-                >
-                  Editar
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={isPending}
-                  onClick={() => {
-                    setErrorMessage(null);
-                    setSuccessMessage(null);
-                    startTransition(async () => {
-                      try {
-                        const result = await deleteMovementAction({ movementId: movement.id });
-                        setSuccessMessage(result.message);
-                        router.refresh();
-                      } catch (error) {
-                        setErrorMessage(error instanceof Error ? error.message : 'No se pudo eliminar el movimiento.');
-                      }
-                    });
-                  }}
-                >
-                  {isPending ? 'Procesando...' : 'Eliminar'}
-                </Button>
-              </div>
-
-              {!movement.puedeEditar && movement.motivoNoEditable && (
-                <p className="mt-3 text-xs text-amber-700">{movement.motivoNoEditable}</p>
-              )}
-
-              {isEditing && movement.puedeEditar && (
-                <EditMovementForm
-                  movement={movement}
-                  accounts={accounts}
-                  disabled={isPending}
-                  onCancel={() => setEditingId(null)}
-                  onSubmit={(payload) => {
-                    setErrorMessage(null);
-                    setSuccessMessage(null);
-                    startTransition(async () => {
-                      try {
-                        const result = await updateMovementAction(payload);
-                        setSuccessMessage(result.message);
-                        setEditingId(null);
-                        router.refresh();
-                      } catch (error) {
-                        setErrorMessage(error instanceof Error ? error.message : 'No se pudo actualizar el movimiento.');
-                      }
-                    });
-                  }}
-                />
-              )}
             </Card>
           );
         })}

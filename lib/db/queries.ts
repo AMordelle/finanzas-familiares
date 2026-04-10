@@ -88,6 +88,7 @@ export type MovementHistoryItem = {
   id: string;
   fecha: string;
   tipoMovimiento: string;
+  categoria: string;
   descripcion: string;
   monto: number;
   cuentaOrigen: string | null;
@@ -716,6 +717,21 @@ function inferMovementType(lines: Array<{ type: string; category: string }>) {
   return 'Movimiento';
 }
 
+function inferMovementCategory(lines: Array<{ category: string }>) {
+  const categories = Array.from(new Set(lines.map((line) => line.category).filter(Boolean)));
+  if (!categories.length) return 'General';
+
+  const prettyLabel: Record<string, string> = {
+    deuda: 'Deuda',
+    por_cobrar: 'Por cobrar',
+    ahorro_meta: 'Objetivo',
+    entrada_cuenta: 'Ingreso',
+    salida_cuenta: 'Gasto'
+  };
+
+  return prettyLabel[categories[0]] ?? categories[0].replaceAll('_', ' ');
+}
+
 function inferMovementAction(lines: Array<{ type: string; category: string }>): SupportedMovementAction | null {
   const has = (type: string, category: string) => lines.some((line) => line.type === type && line.category === category);
 
@@ -791,6 +807,7 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
       id: group.id,
       fecha: happenedAt,
       tipoMovimiento: inferMovementType(lines),
+      categoria: inferMovementCategory(lines),
       descripcion: group.note?.trim() ? group.note : 'Movimiento sin descripción',
       monto: Number(debitLine?.amount ?? creditLine?.amount ?? 0),
       cuentaOrigen: creditLine?.account_id ? accountById.get(creditLine.account_id) ?? null : null,
