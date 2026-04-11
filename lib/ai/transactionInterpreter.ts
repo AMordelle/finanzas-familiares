@@ -1188,12 +1188,19 @@ export async function applyFollowUpAnswer(
     })();
     const reinterpreted = await interpretTransaction(rebuiltText, accounts);
     if (process.env.NODE_ENV === 'development') {
-      console.info('[FollowUpRebuild]', {
+      console.info('[FollowUpSecondPassDebug]', {
         originalText: current.rawText,
         followUpAnswer: answer,
         rebuiltText,
-        reinterpretedByAI: reinterpreted.interpretationSource === 'ai',
-        finalCategory: reinterpreted.category
+        secondPassStarted: true,
+        secondPassInterpretationSource: reinterpreted.interpretationSource ?? null,
+        secondPassAiIntent: reinterpreted.aiIntent ?? null,
+        secondPassAiCategory: reinterpreted.aiCategory ?? null,
+        secondPassAiConfidence: reinterpreted.aiConfidence ?? null,
+        finalCategoryUsed: reinterpreted.category ?? null,
+        finalDescriptionUsed: reinterpreted.description ?? null,
+        finalSourceAccount: reinterpreted.sourceAccountName ?? null,
+        finalMissingFields: reinterpreted.missingFieldKinds ?? []
       });
     }
     return reinterpreted;
