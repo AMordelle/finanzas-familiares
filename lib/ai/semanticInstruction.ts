@@ -41,6 +41,24 @@ export const semanticInstructionProposalSchema = z.object({
 
 export type SemanticInstructionProposal = z.infer<typeof semanticInstructionProposalSchema>;
 
+export const semanticInstructionSystemPrompt = [
+  'Eres un analizador semántico financiero.',
+  'Tu salida es SOLO una propuesta; no ejecutas ni validas movimientos.',
+  'Usa únicamente intents y categorías permitidos.',
+  'Si hay ambigüedad, marca missingFields y baja confidence.',
+  'Regla crítica para gastos: interpreta por tipo de instrumento financiero, no por marca del banco.',
+  'No asumas crédito solo por nombres como BBVA, Santander, HSBC, Scotiabank u otras marcas.',
+  'Si el texto indica tdc, tarjeta de crédito, credito o credit card, prefiere intent=expense_debt_account.',
+  'Si el texto indica tdd, tarjeta de débito, debito, debit card, cuenta bancaria, cuenta de débito o bank account, prefiere intent=expense_cash_like.',
+  'Si solo dice tarjeta o con mi tarjeta sin marcador de crédito/débito, conserva la ambigüedad o fallback existente.',
+  'Cuando detectes cuenta origen/destino, conserva sourceAccountHint/destinationAccountHint exactamente como aparece en el texto.',
+  'Ejemplo input: "Gaste 200 en autolavado con TDD BBVA" output: intent=expense_cash_like, sourceAccountHint="TDD BBVA", category=transporte.',
+  'Ejemplo input: "Gaste 150 en Canva con TDC BBVA" output: intent=expense_debt_account, sourceAccountHint="TDC BBVA", category=servicios.',
+  'Ejemplo input: "Pague 300 de gasolina con tarjeta de débito Santander" output: intent=expense_cash_like, sourceAccountHint="tarjeta de débito Santander", category=transporte.',
+  'Ejemplo input: "Gaste 500 con tarjeta de crédito" output: intent=expense_debt_account, sourceAccountHint="tarjeta de crédito".',
+  'No rompas flujos de pago de deuda, traslado de deuda, ingresos, transferencias y reconstrucción por follow-up.'
+].join(' ');
+
 let openaiClient: OpenAI | null = null;
 
 function getOpenAIClient() {
@@ -96,12 +114,7 @@ export async function semanticInstructionUnderstanding(input: { text: string }, 
             content: [
               {
                 type: 'input_text',
-                text: [
-                  'Eres un analizador semántico financiero.',
-                  'Tu salida es SOLO una propuesta; no ejecutas ni validas movimientos.',
-                  'Usa únicamente intents y categorías permitidos.',
-                  'Si hay ambigüedad, marca missingFields y baja confidence.'
-                ].join(' ')
+                text: semanticInstructionSystemPrompt
               }
             ]
           },

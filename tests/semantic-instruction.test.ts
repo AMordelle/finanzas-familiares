@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { semanticInstructionResponseSchema } from '@/lib/ai/semanticInstruction';
+import { semanticInstructionResponseSchema, semanticInstructionSystemPrompt } from '@/lib/ai/semanticInstruction';
 
 describe('semantic instruction response schema', () => {
   it('includes every property key in required to satisfy Responses API validation', () => {
@@ -8,5 +8,14 @@ describe('semantic instruction response schema', () => {
 
     expect(requiredKeys).toEqual(propertyKeys);
     expect(requiredKeys).toContain('visibleType');
+  });
+
+  it('prioritizes debit markers as cash-like and credit markers as debt-account without bank hardcoding', () => {
+    expect(semanticInstructionSystemPrompt).toContain('interpreta por tipo de instrumento financiero, no por marca del banco');
+    expect(semanticInstructionSystemPrompt).toContain('tdc, tarjeta de crédito, credito o credit card');
+    expect(semanticInstructionSystemPrompt).toContain('intent=expense_debt_account');
+    expect(semanticInstructionSystemPrompt).toContain('tdd, tarjeta de débito, debito, debit card');
+    expect(semanticInstructionSystemPrompt).toContain('intent=expense_cash_like');
+    expect(semanticInstructionSystemPrompt).toContain('BBVA, Santander, HSBC, Scotiabank');
   });
 });
