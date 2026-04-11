@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { isApprovedCategory } from '@/lib/ai/semanticCategory';
 import { applyFollowUpAnswer, enforceFinancialConsistency, interpretTransaction, transactionIntentSchema } from '@/lib/ai/transactionInterpreter';
 import { getAccountsForRegistration, saveConversationalTransaction } from '@/lib/db/queries';
 
@@ -20,7 +21,13 @@ export async function applyFollowUpAnswerAction(current: unknown, answer: string
 }
 
 export async function saveInterpretedTransactionAction(payload: unknown) {
-  const intent = enforceFinancialConsistency(transactionIntentSchema.parse(payload));
+  const parsedIntent = transactionIntentSchema.parse(payload);
+  const categoryOverride = extractCategoryOverride(payload);
+  const intent = enforceFinancialConsistency({
+    ...parsedIntent,
+    category: categoryOverride ?? parsedIntent.category
+  });
+
   await saveConversationalTransaction(intent, {
     happenedAt: resolveMovementDate(payload)
   });
@@ -53,4 +60,11 @@ function extractMovementDate(payload: unknown) {
   if (!payload || typeof payload !== 'object') return null;
   const maybeDate = (payload as Record<string, unknown>).movementDate;
   return typeof maybeDate === 'string' ? maybeDate : null;
+}
+
+function extractCategoryOverride(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return null;
+  const override = (payload as Record<string, unknown>).categoryOverride;
+  if (typeof override !== 'string' || !isApprovedCategory(override)) return null;
+  return override;
 }
