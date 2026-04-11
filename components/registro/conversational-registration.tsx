@@ -1,10 +1,11 @@
 'use client';
 
-import { useMemo, useRef, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { APPROVED_CATEGORY_CATALOG } from '@/lib/ai/semanticCategory';
 import { type TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import type { AccountOption } from '@/lib/db/queries';
 import { applyFollowUpAnswerAction, interpretTransactionAction, saveInterpretedTransactionAction } from '@/app/registro/actions';
@@ -25,12 +26,20 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
   const [intent, setIntent] = useState<TransactionIntent | null>(null);
   const [movementDate, setMovementDate] = useState(() => toDateInputValue(new Date()));
   const [isCustomDatePickerOpen, setIsCustomDatePickerOpen] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string>(APPROVED_CATEGORY_CATALOG[0]);
+  const [isManualCategoryOverride, setIsManualCategoryOverride] = useState(false);
   const [followUpValue, setFollowUpValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
   const isSavingRef = useRef(false);
+
+  useEffect(() => {
+    if (!intent?.category) return;
+    setSelectedCategory(intent.category);
+    setIsManualCategoryOverride(false);
+  }, [intent]);
 
   const isCreditExpenseSourceInvalid = useMemo(
     () => !!intent && intent.intent === 'expense_debt_account' && intent.sourceAccountType !== 'credit_card',
@@ -43,7 +52,15 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
   const hasAccounts = accounts.length > 0;
 
   if (!hasHousehold) {
-    return <Card><h2 className="text-xl font-semibold">Registro conversacional</h2><p className="mt-3 text-sm text-slate-700">Aún no has configurado tu hogar y tus cuentas. Primero completa la configuración inicial para poder registrar movimientos.</p><div className="mt-4"><Button asChild><Link href="/onboarding">Ir al onboarding</Link></Button></div></Card>;
+    return (
+      <Card>
+        <h2 className="text-xl font-semibold">Registro conversacional</h2>
+        <p className="mt-3 text-sm text-slate-700">Aún no has configurado tu hogar y tus cuentas. Primero completa la configuración inicial para poder registrar movimientos.</p>
+        <div className="mt-4">
+          <Button asChild><Link href="/onboarding">Ir al onboarding</Link></Button>
+        </div>
+      </Card>
+    );
   }
 
   const handleInterpret = () => {
@@ -56,6 +73,7 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
         setIntent(next);
         setMovementDate(toDateInputValue(new Date()));
         setIsCustomDatePickerOpen(false);
+        setIsManualCategoryOverride(false);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'No se pudo interpretar el movimiento.');
       }
@@ -68,6 +86,7 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
       const resolved = await applyFollowUpAnswerAction(intent, followUpValue.trim());
       setIntent(resolved);
       setFollowUpValue('');
+      setIsManualCategoryOverride(false);
     });
   };
 
@@ -97,11 +116,14 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
       try {
         const result = await saveInterpretedTransactionAction({
           ...intent,
-          movementDate
+          movementDate,
+          categoryOverride: isManualCategoryOverride ? selectedCategory : undefined
         });
         setInput('');
         setIntent(null);
         setMovementDate(toDateInputValue(new Date()));
+        setSelectedCategory(APPROVED_CATEGORY_CATALOG[0]);
+        setIsManualCategoryOverride(false);
         setIsCustomDatePickerOpen(false);
         setSuccessMessage(result.message);
         router.refresh();
@@ -112,6 +134,8 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
       }
     });
   };
+
+  const displayedCategory = selectedCategory || intent?.category || 'otros_gastos';
 
   return (
     <Card>
@@ -153,7 +177,49 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
         </div>
       )}
 
-      {isReadyToConfirm && intent && <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4"><h3 className="font-semibold">Confirmación</h3><ul className="mt-3 space-y-1 text-sm text-slate-700"><li>Tipo de movimiento: {intent.visibleType}</li><li>Monto: ${intent.amount.toLocaleString('es-MX')}</li><li>Descripción: {intent.description}</li><li>Cuenta origen: {intent.sourceAccountName ?? 'N/A'}</li><li>Cuenta destino: {intent.destinationAccountName ?? 'N/A'}</li><li>Categoría: {intent.category}</li><li className="pt-2 text-slate-900">Fecha del movimiento: <span className="font-medium">{formatMovementDateLabel(movementDate)}</span></li></ul><div className="mt-3 flex flex-wrap gap-2"><Button type="button" variant="outline" onClick={() => { setMovementDate(toDateInputValue(new Date())); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Hoy</Button><Button type="button" variant="outline" onClick={() => { setMovementDate(toDateInputValue(getRelativeDate(-1))); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Ayer</Button><Button type="button" variant="outline" onClick={() => setIsCustomDatePickerOpen((current) => !current)} disabled={isPending}>Elegir fecha</Button></div>{isCustomDatePickerOpen && <input className="mt-2 w-full rounded-md border border-slate-300 bg-white p-2 text-sm" type="date" value={movementDate} max={toDateInputValue(new Date())} onChange={(event) => setMovementDate(event.target.value)} />}<p className="mt-3 text-sm font-medium text-slate-900">{intent.humanConfirmation}</p><div className="mt-4 flex gap-2"><Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Confirmar'}</Button><Button variant="outline" onClick={() => { setIntent(null); setMovementDate(toDateInputValue(new Date())); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button></div></div>}
+      {isReadyToConfirm && intent && (
+        <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <h3 className="font-semibold">Confirmación</h3>
+          <ul className="mt-3 space-y-1 text-sm text-slate-700">
+            <li>Tipo de movimiento: {intent.visibleType}</li>
+            <li>Monto: ${intent.amount.toLocaleString('es-MX')}</li>
+            <li>Descripción: {intent.description}</li>
+            <li>Cuenta origen: {intent.sourceAccountName ?? 'N/A'}</li>
+            <li>Cuenta destino: {intent.destinationAccountName ?? 'N/A'}</li>
+            <li className="flex flex-wrap items-center gap-2">
+              <span>Categoría:</span>
+              <span className="font-medium">{displayedCategory}</span>
+              <span className="text-xs text-slate-500">({isManualCategoryOverride ? 'Manual' : 'IA'})</span>
+            </li>
+          </ul>
+
+          <select
+            className="mt-2 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+            value={displayedCategory}
+            onChange={(event) => {
+              setSelectedCategory(event.target.value);
+              setIsManualCategoryOverride(event.target.value !== (intent.category ?? ''));
+            }}
+          >
+            {APPROVED_CATEGORY_CATALOG.map((category) => (
+              <option key={category} value={category}>{category}</option>
+            ))}
+          </select>
+
+          <li className="mt-3 list-none pt-2 text-sm text-slate-900">Fecha del movimiento: <span className="font-medium">{formatMovementDateLabel(movementDate)}</span></li>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={() => { setMovementDate(toDateInputValue(new Date())); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Hoy</Button>
+            <Button type="button" variant="outline" onClick={() => { setMovementDate(toDateInputValue(getRelativeDate(-1))); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Ayer</Button>
+            <Button type="button" variant="outline" onClick={() => setIsCustomDatePickerOpen((current) => !current)} disabled={isPending}>Elegir fecha</Button>
+          </div>
+          {isCustomDatePickerOpen && <input className="mt-2 w-full rounded-md border border-slate-300 bg-white p-2 text-sm" type="date" value={movementDate} max={toDateInputValue(new Date())} onChange={(event) => setMovementDate(event.target.value)} />}
+          <p className="mt-3 text-sm font-medium text-slate-900">{intent.humanConfirmation}</p>
+          <div className="mt-4 flex gap-2">
+            <Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Confirmar'}</Button>
+            <Button variant="outline" onClick={() => { setIntent(null); setMovementDate(toDateInputValue(new Date())); setSelectedCategory(APPROVED_CATEGORY_CATALOG[0]); setIsManualCategoryOverride(false); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
+          </div>
+        </div>
+      )}
       {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
       {successMessage && <p className="mt-4 text-sm text-emerald-700">{successMessage}</p>}
     </Card>

@@ -18,6 +18,10 @@ describe('registro actions revalidation', () => {
       revalidatePath: revalidatePathMock
     }));
 
+    vi.doMock('@/lib/ai/semanticCategory', () => ({
+      isApprovedCategory: (category: string) => ['comida', 'transporte', 'servicios', 'otros_gastos'].includes(category)
+    }));
+
     vi.doMock('@/lib/ai/transactionInterpreter', () => ({
       interpretTransaction: vi.fn(),
       applyFollowUpAnswer: applyFollowUpAnswerMock,
@@ -104,5 +108,48 @@ describe('registro actions revalidation', () => {
       category: 'comida',
       sourceAccount: 'efectivo'
     }), expect.objectContaining({ happenedAt: '2026-04-10T12:00:00.000Z' }));
+  });
+
+  it('guarda categoría interpretada cuando no hay categoryOverride', async () => {
+    const { saveInterpretedTransactionAction } = await import('@/app/registro/actions');
+
+    await saveInterpretedTransactionAction({
+      action: 'gasto',
+      amount: 100,
+      category: 'servicios',
+      sourceAccount: 'banco',
+      destinationAccount: null
+    });
+
+    expect(enforceFinancialConsistencyMock).toHaveBeenCalledWith(expect.objectContaining({ category: 'servicios' }));
+  });
+
+  it('usa categoryOverride manual y conserva monto/cuentas/acción sin cambios', async () => {
+    const { saveInterpretedTransactionAction } = await import('@/app/registro/actions');
+
+    await saveInterpretedTransactionAction({
+      action: 'gasto',
+      amount: 455,
+      category: 'servicios',
+      categoryOverride: 'transporte',
+      sourceAccount: 'cuenta banco',
+      destinationAccount: null,
+      movementDate: '2026-04-09'
+    });
+
+    expect(enforceFinancialConsistencyMock).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'gasto',
+      amount: 455,
+      sourceAccount: 'cuenta banco',
+      destinationAccount: null,
+      category: 'transporte'
+    }));
+    expect(saveMock).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'gasto',
+      amount: 455,
+      sourceAccount: 'cuenta banco',
+      destinationAccount: null,
+      category: 'transporte'
+    }), expect.objectContaining({ happenedAt: '2026-04-09T12:00:00.000Z' }));
   });
 });
