@@ -51,7 +51,7 @@ describe('registro actions revalidation', () => {
 
     expect(parseMock).toHaveBeenCalledWith(intent);
     expect(enforceFinancialConsistencyMock).toHaveBeenCalledWith(intent);
-    expect(saveMock).toHaveBeenCalledWith(intent);
+    expect(saveMock).toHaveBeenCalledWith(intent, expect.objectContaining({ happenedAt: expect.any(String) }));
     expect(revalidatePathMock).toHaveBeenCalledWith('/dashboard');
     expect(revalidatePathMock).toHaveBeenCalledWith('/movimientos');
     expect(revalidatePathMock).toHaveBeenCalledWith('/cuentas');
@@ -75,5 +75,34 @@ describe('registro actions revalidation', () => {
     expect(getAccountsForRegistrationMock).toHaveBeenCalled();
     expect(applyFollowUpAnswerMock).toHaveBeenCalledWith(current, 'en Canva', [{ name: 'TDC BBVA', type: 'credit_card' }]);
     expect(response).toEqual({ ok: true });
+  });
+
+  it('usa la fecha de movimiento elegida para happened_at sin alterar interpretación', async () => {
+    const { saveInterpretedTransactionAction } = await import('@/app/registro/actions');
+
+    const intent = {
+      action: 'gasto',
+      amount: 200,
+      category: 'comida',
+      description: 'Comida atrasada',
+      sourceAccount: 'efectivo',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok',
+      movementDate: '2026-04-10'
+    };
+
+    await saveInterpretedTransactionAction(intent);
+
+    expect(enforceFinancialConsistencyMock).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'gasto',
+      category: 'comida',
+      sourceAccount: 'efectivo'
+    }));
+    expect(saveMock).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'gasto',
+      category: 'comida',
+      sourceAccount: 'efectivo'
+    }), expect.objectContaining({ happenedAt: '2026-04-10T12:00:00.000Z' }));
   });
 });

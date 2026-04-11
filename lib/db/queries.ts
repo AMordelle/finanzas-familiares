@@ -1064,7 +1064,12 @@ function buildJournalEntries(intent: TransactionIntent, accounts: AccountOption[
   }
 }
 
-export async function saveConversationalTransaction(intent: TransactionIntent) {
+export async function saveConversationalTransaction(
+  intent: TransactionIntent,
+  options?: {
+    happenedAt?: string;
+  }
+) {
   const householdId = await getDefaultHouseholdId();
   if (!householdId) {
     throw new Error('No existe un hogar configurado para registrar movimientos.');
@@ -1087,12 +1092,14 @@ export async function saveConversationalTransaction(intent: TransactionIntent) {
     throw new Error(groupError?.message ?? 'No fue posible crear el grupo de transacción.');
   }
 
+  const happenedAt = options?.happenedAt ?? new Date().toISOString();
   const transactionsPayload = lines.map((line) => ({
     group_id: group.id,
     account_id: line.accountId,
     type: line.type,
     category: line.category,
-    amount: line.amount.toFixed(2)
+    amount: line.amount.toFixed(2),
+    happened_at: happenedAt
   }));
 
   const { error: txError } = await supabaseAdmin.from('transactions').insert(transactionsPayload);

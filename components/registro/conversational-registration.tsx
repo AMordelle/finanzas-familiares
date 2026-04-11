@@ -23,6 +23,8 @@ const missingFieldQuestions: Record<string, string> = {
 export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
   const [input, setInput] = useState('');
   const [intent, setIntent] = useState<TransactionIntent | null>(null);
+  const [movementDate, setMovementDate] = useState(() => toDateInputValue(new Date()));
+  const [isCustomDatePickerOpen, setIsCustomDatePickerOpen] = useState(false);
   const [followUpValue, setFollowUpValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -52,6 +54,8 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
       try {
         const next = await interpretTransactionAction(input);
         setIntent(next);
+        setMovementDate(toDateInputValue(new Date()));
+        setIsCustomDatePickerOpen(false);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'No se pudo interpretar el movimiento.');
       }
@@ -91,9 +95,14 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
     isSavingRef.current = true;
     startTransition(async () => {
       try {
-        const result = await saveInterpretedTransactionAction(intent);
+        const result = await saveInterpretedTransactionAction({
+          ...intent,
+          movementDate
+        });
         setInput('');
         setIntent(null);
+        setMovementDate(toDateInputValue(new Date()));
+        setIsCustomDatePickerOpen(false);
         setSuccessMessage(result.message);
         router.refresh();
       } catch (err) {
@@ -144,9 +153,31 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
         </div>
       )}
 
-      {isReadyToConfirm && intent && <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4"><h3 className="font-semibold">Confirmación</h3><ul className="mt-3 space-y-1 text-sm text-slate-700"><li>Tipo de movimiento: {intent.visibleType}</li><li>Monto: ${intent.amount.toLocaleString('es-MX')}</li><li>Descripción: {intent.description}</li><li>Cuenta origen: {intent.sourceAccountName ?? 'N/A'}</li><li>Cuenta destino: {intent.destinationAccountName ?? 'N/A'}</li><li>Categoría: {intent.category}</li></ul><p className="mt-3 text-sm font-medium text-slate-900">{intent.humanConfirmation}</p><div className="mt-4 flex gap-2"><Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Confirmar'}</Button><Button variant="outline" onClick={() => setIntent(null)} disabled={isPending}>Cancelar</Button></div></div>}
+      {isReadyToConfirm && intent && <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4"><h3 className="font-semibold">Confirmación</h3><ul className="mt-3 space-y-1 text-sm text-slate-700"><li>Tipo de movimiento: {intent.visibleType}</li><li>Monto: ${intent.amount.toLocaleString('es-MX')}</li><li>Descripción: {intent.description}</li><li>Cuenta origen: {intent.sourceAccountName ?? 'N/A'}</li><li>Cuenta destino: {intent.destinationAccountName ?? 'N/A'}</li><li>Categoría: {intent.category}</li><li className="pt-2 text-slate-900">Fecha del movimiento: <span className="font-medium">{formatMovementDateLabel(movementDate)}</span></li></ul><div className="mt-3 flex flex-wrap gap-2"><Button type="button" variant="outline" onClick={() => { setMovementDate(toDateInputValue(new Date())); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Hoy</Button><Button type="button" variant="outline" onClick={() => { setMovementDate(toDateInputValue(getRelativeDate(-1))); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Ayer</Button><Button type="button" variant="outline" onClick={() => setIsCustomDatePickerOpen((current) => !current)} disabled={isPending}>Elegir fecha</Button></div>{isCustomDatePickerOpen && <input className="mt-2 w-full rounded-md border border-slate-300 bg-white p-2 text-sm" type="date" value={movementDate} max={toDateInputValue(new Date())} onChange={(event) => setMovementDate(event.target.value)} />}<p className="mt-3 text-sm font-medium text-slate-900">{intent.humanConfirmation}</p><div className="mt-4 flex gap-2"><Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Confirmar'}</Button><Button variant="outline" onClick={() => { setIntent(null); setMovementDate(toDateInputValue(new Date())); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button></div></div>}
       {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
       {successMessage && <p className="mt-4 text-sm text-emerald-700">{successMessage}</p>}
     </Card>
   );
+}
+
+function toDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getRelativeDate(daysOffset: number) {
+  const date = new Date();
+  date.setDate(date.getDate() + daysOffset);
+  return date;
+}
+
+function formatMovementDateLabel(value: string) {
+  const today = toDateInputValue(new Date());
+  if (value === today) return 'Hoy';
+  if (value === toDateInputValue(getRelativeDate(-1))) return 'Ayer';
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return 'Hoy';
+  return new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(year, month - 1, day));
 }
