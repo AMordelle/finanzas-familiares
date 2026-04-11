@@ -1,12 +1,17 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { applyFollowUpAnswer, enforceFinancialConsistency, interpretTransaction, transactionIntentSchema } from '@/lib/ai/transactionInterpreter';
 import { inferSemanticCategoryWithOpenAI } from '@/lib/ai/openai';
+import { semanticInstructionUnderstanding } from '@/lib/ai/semanticInstruction';
 
 vi.mock('@/lib/ai/openai', () => ({
   inferSemanticCategoryWithOpenAI: vi.fn()
 }));
+vi.mock('@/lib/ai/semanticInstruction', () => ({
+  semanticInstructionUnderstanding: vi.fn()
+}));
 
 const mockedInferSemanticCategoryWithOpenAI = vi.mocked(inferSemanticCategoryWithOpenAI);
+const mockedSemanticInstructionUnderstanding = vi.mocked(semanticInstructionUnderstanding);
 
 const accounts = [
   { id: 'acc-ef', name: 'Efectivo', type: 'operational_cash' },
@@ -23,6 +28,8 @@ const accounts = [
 beforeEach(() => {
   mockedInferSemanticCategoryWithOpenAI.mockReset();
   mockedInferSemanticCategoryWithOpenAI.mockResolvedValue(null);
+  mockedSemanticInstructionUnderstanding.mockReset();
+  mockedSemanticInstructionUnderstanding.mockResolvedValue(null);
 });
 
 describe('transaction interpreter semantic pipeline', () => {
@@ -667,6 +674,110 @@ describe('financial consistency layer (safe mode)', () => {
   });
 });
 
+describe('ai-first instruction understanding', () => {
+  it('uses AI proposal for explicit TDC purchase without follow-up', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'expense_debt_account',
+      visibleType: 'Gasto con tarjeta de crédito',
+      amount: 150,
+      sourceAccountHint: 'TDC BBVA',
+      destinationAccountHint: null,
+      category: 'entretenimiento',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Compra en servicio digital'
+    });
+
+    const result = await interpretTransaction('Gaste 150 en Canva con TDC BBVA', accounts as any);
+    expect(result.interpretationSource).toBe('ai');
+    expect(result.intent).toBe('expense_debt_account');
+    expect(result.sourceAccountName).toBe('TDC BBVA');
+    expect(result.missingFieldKinds).toEqual([]);
+  });
+
+  it('classifies "Pague ... en Canva con TDC" as purchase expense and not debt transfer', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'expense_debt_account',
+      visibleType: 'Gasto con tarjeta de crédito',
+      amount: 150,
+      sourceAccountHint: 'TDC BBVA',
+      destinationAccountHint: null,
+      category: 'entretenimiento',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Pago de servicio'
+    });
+
+    const result = await interpretTransaction('Pague 150 en Canva con TDC BBVA', accounts as any);
+    expect(result.intent).toBe('expense_debt_account');
+    expect(result.intent).not.toBe('debt_transfer');
+  });
+
+  it('keeps ambiguity path for "Gaste 500 con la BBVA"', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'expense_cash_like',
+      visibleType: 'Gasto con efectivo/banco',
+      amount: 500,
+      sourceAccountHint: 'BBVA',
+      destinationAccountHint: null,
+      category: 'otros_gastos',
+      missingFields: ['missingSourceAccount'],
+      confidence: 'medium',
+      reason: 'Referencia ambigua'
+    });
+
+    const result = await interpretTransaction('Gaste 500 con la BBVA', accounts as any);
+    expect(result.missingFieldKinds).toContain('missingSourceAccount');
+    expect(result.sourceAccountName).toBeNull();
+  });
+
+  it('keeps valid debt payment after deterministic validation', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'debt_payment',
+      visibleType: 'Pago de deuda',
+      amount: 500,
+      sourceAccountHint: 'TDD BBVA',
+      destinationAccountHint: 'TDC BBVA',
+      category: 'pago_deuda',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Pago de tarjeta'
+    });
+
+    const result = await interpretTransaction('Pague 500 a la TDC BBVA desde TDD BBVA', accounts as any);
+    expect(result.intent).toBe('debt_payment');
+    expect(result.sourceAccountType).toBe('operational_cash');
+    expect(result.destinationAccountType).toBe('credit_card');
+  });
+
+  it('falls back to deterministic interpreter when AI fails', async () => {
+    mockedSemanticInstructionUnderstanding.mockRejectedValueOnce(new Error('timeout'));
+    const result = await interpretTransaction('Gasté 600 en gasolina con efectivo.', accounts as any);
+    expect(result.interpretationSource).toBe('fallback');
+    expect(result.intent).toBe('expense_cash_like');
+    expect(result.sourceAccountName).toBe('Efectivo');
+  });
+
+  it('falls back safely when AI confidence is low', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'debt_transfer',
+      visibleType: 'Traslado de deuda',
+      amount: 300,
+      sourceAccountHint: 'TDD BBVA',
+      destinationAccountHint: 'TDC BBVA',
+      category: 'traslado_deuda',
+      missingFields: [],
+      confidence: 'low',
+      reason: 'poca confianza'
+    });
+
+    const result = await interpretTransaction('Pagué 300 de Liverpool con TDC BBVA', accounts as any);
+    expect(result.interpretationSource).toBe('fallback');
+    expect(result.intent).toBe('debt_transfer');
+    expect(result.sourceAccountType).toBe('credit_card');
+  });
+});
+
 it('semantic categories A-I: classifies representative phrases correctly', async () => {
     const camioneta = await interpretTransaction('Gaste 6100 de la mensualidad de mi camioneta con TDD BBVA', accounts as any);
     expect(camioneta.category).toBe('transporte');
@@ -717,5 +828,3 @@ it('semantic categories A-I: classifies representative phrases correctly', async
     const openAIFailure = await interpretTransaction('Gaste 180 en un imprevisto con efectivo', accounts as any);
     expect(openAIFailure.category).toBe('otros_gastos');
   });
-
-

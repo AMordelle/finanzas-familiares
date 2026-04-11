@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { localCategoryInference, semanticCategoryInferenceWithAI } from '@/lib/ai/semanticCategory';
+import { semanticInstructionUnderstanding } from '@/lib/ai/semanticInstruction';
 
 export const accountTypeSchema = z.enum([
   'operational_cash',
@@ -60,7 +61,12 @@ export const transactionIntentSchema = z.object({
   nextPromptInputType: nextPromptInputTypeSchema.nullable().optional().default(null),
   nextPromptAllowedAccountTypes: z.array(accountTypeSchema).nullable().optional().default(null),
   confidence: z.number().min(0).max(1).default(0.5),
-  humanConfirmation: z.string().nullable().optional().default(null)
+  humanConfirmation: z.string().nullable().optional().default(null),
+  interpretationSource: z.enum(['ai', 'fallback']).optional().default('fallback'),
+  aiIntent: z.string().nullable().optional().default(null),
+  aiCategory: z.string().nullable().optional().default(null),
+  aiConfidence: z.enum(['high', 'medium', 'low']).nullable().optional().default(null),
+  validationCorrections: z.array(z.string()).optional().default([])
 });
 
 export type TransactionIntent = z.infer<typeof transactionIntentSchema>;
@@ -127,6 +133,16 @@ type ReceivablePaymentResolution = {
 type FinancialConsistencySuggestion = Partial<Pick<TransactionIntent,
   'sourceAccountId' | 'sourceAccountName' | 'sourceAccountType' | 'sourceAccount'
   | 'destinationAccountId' | 'destinationAccountName' | 'destinationAccountType' | 'destinationAccount'>>;
+
+type AIConfidence = 'high' | 'medium' | 'low';
+
+type AiInterpretationMetadata = {
+  interpretationSource: 'ai' | 'fallback';
+  aiIntent: string | null;
+  aiCategory: string | null;
+  aiConfidence: AIConfidence | null;
+  validationCorrections: string[];
+};
 
 const visibleTypeMap: Record<z.infer<typeof financialIntentSchema>, string> = {
   income: 'Ingreso',
@@ -566,6 +582,40 @@ function hasExplicitDebitExpenseMarker(normalizedText: string) {
   return /(con)\s+([a-z0-9\s]*\b(?:tdd|debito|tarjeta de debito)\b[a-z0-9\s]*)$/.test(normalizedText);
 }
 
+function mapAiMissingFieldKindsToDeterministic(input: string[]) {
+  const allowed = new Set<z.infer<typeof missingFieldKindSchema>>([
+    'missingSourceAccount',
+    'missingDestinationAccount',
+    'missingDescription',
+    'missingIntent',
+    'missingWhatWasPaid'
+  ]);
+  return input.filter((item): item is z.infer<typeof missingFieldKindSchema> => allowed.has(item as z.infer<typeof missingFieldKindSchema>));
+}
+
+function resolveAccountFromAiHint(
+  hint: string | null | undefined,
+  role: 'source' | 'destination',
+  intent: z.infer<typeof financialIntentSchema>,
+  accounts: EnrichedAccount[]
+) {
+  if (!hint) return null;
+  const expectedKind: ExplicitAccountReference['expectedKind'] =
+    intent === 'debt_payment' && role === 'destination' ? 'debt'
+      : intent === 'expense_debt_account' && role === 'source' ? 'debt'
+        : intent === 'expense_cash_like' && role === 'source' ? 'operational'
+          : intent === 'income' && role === 'destination' ? 'operational'
+            : null;
+
+  return resolveExplicitReference({
+    raw: hint,
+    normalized: normalize(hint),
+    expectedKind,
+    isGeneric: /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|debito|tdd|ahorro|fondo|meta|bbva)$/.test(normalize(hint)),
+    role
+  }, accounts);
+}
+
 function inferIntent(normalizedText: string, matched: EnrichedAccount[]): z.infer<typeof financialIntentSchema> {
   if (/(me pago|pago recibido|me deposito)/.test(normalizedText)) return 'receivable_payment';
   if (/(preste|prestamo a|le di prestado)/.test(normalizedText)) return 'receivable_created';
@@ -765,9 +815,42 @@ export function enforceFinancialConsistency(result: TransactionIntent): Transact
 export async function interpretTransaction(text: string, accounts: InterpreterAccountContext[] = []): Promise<TransactionIntent> {
   const modelAccounts = enrichAccounts(accounts);
   const normalizedText = normalize(text);
-  const amount = parseAmount(text);
+  const fallbackAmount = parseAmount(text);
   const matched = matchAccounts(text, modelAccounts);
-  const intent = inferIntent(normalizedText, matched);
+
+  let aiProposal: Awaited<ReturnType<typeof semanticInstructionUnderstanding>> = null;
+  try {
+    aiProposal = await semanticInstructionUnderstanding({ text });
+  } catch (error) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[semantic-instruction-ai] fallback to deterministic parser', error);
+    }
+    aiProposal = null;
+  }
+  const shouldFallbackToDeterministic = !aiProposal || aiProposal.confidence === 'low';
+  const intent = shouldFallbackToDeterministic
+    ? inferIntent(normalizedText, matched)
+    : aiProposal.intent;
+  const amount = (!shouldFallbackToDeterministic && aiProposal?.amount && Number.isFinite(aiProposal.amount))
+    ? aiProposal.amount
+    : fallbackAmount;
+
+  const aiMetadata: AiInterpretationMetadata = {
+    interpretationSource: shouldFallbackToDeterministic ? 'fallback' : 'ai',
+    aiIntent: aiProposal?.intent ?? null,
+    aiCategory: aiProposal?.category ?? null,
+    aiConfidence: aiProposal?.confidence ?? null,
+    validationCorrections: []
+  };
+  if (process.env.NODE_ENV === 'development') {
+    console.info('[InstructionUnderstanding]', {
+      interpretationSource: aiMetadata.interpretationSource,
+      aiIntent: aiMetadata.aiIntent,
+      aiCategory: aiMetadata.aiCategory,
+      aiConfidence: aiMetadata.aiConfidence
+    });
+  }
+
   const explicitReference = extractExplicitAccountReference(normalizedText, intent);
   const explicitResolution = resolveExplicitReference(explicitReference, modelAccounts);
 
@@ -780,8 +863,11 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const receivableRoles = resolveReceivablePaymentRoles(normalizedText, modelAccounts);
   const hasExplicitDebitExpenseSource = hasExplicitDebitExpenseMarker(normalizedText);
 
-  let source = matched[0] ?? null;
-  let destination = matched[1] ?? (intent === 'income' ? matched[0] ?? null : null);
+  const aiSourceResolution = shouldFallbackToDeterministic ? null : resolveAccountFromAiHint(aiProposal?.sourceAccountHint, 'source', intent, modelAccounts);
+  const aiDestinationResolution = shouldFallbackToDeterministic ? null : resolveAccountFromAiHint(aiProposal?.destinationAccountHint, 'destination', intent, modelAccounts);
+
+  let source = aiSourceResolution?.account ?? matched[0] ?? null;
+  let destination = aiDestinationResolution?.account ?? matched[1] ?? (intent === 'income' ? matched[0] ?? null : null);
 
   if (intent === 'expense_debt_account' && !source) source = debtFromHint;
   if (intent === 'debt_payment') {
@@ -845,7 +931,10 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     destination = receivableRoles.destination ?? destination;
   }
   const finalIntent = inferFinalIntent(intent, source?.type, destination?.type, normalizedText);
-  const category = await semanticCategoryInferenceWithAI({ text, normalizedText, intent: finalIntent });
+  let category = await semanticCategoryInferenceWithAI({ text, normalizedText, intent: finalIntent });
+  if (!shouldFallbackToDeterministic && aiProposal?.category) {
+    category = aiProposal.category;
+  }
 
   const draftForConstraints: TransactionIntent = transactionIntentSchema.parse({
     rawText: text,
@@ -865,10 +954,13 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     sourceAccount: source?.name.toLowerCase(),
     destinationAccount: destination?.name.toLowerCase(),
     missingFields: [],
-    missingFieldKinds: []
+    missingFieldKinds: [],
+    ...aiMetadata
   });
   applyIntentAccountConstraints(draftForConstraints);
-  const missingKinds = recomputeMissingKinds(draftForConstraints, explicitResolution.unresolvedMessage);
+  const deterministicMissingKinds = recomputeMissingKinds(draftForConstraints, explicitResolution.unresolvedMessage);
+  const aiMissingKinds = shouldFallbackToDeterministic ? [] : mapAiMissingFieldKindsToDeterministic(aiProposal?.missingFields ?? []);
+  const missingKinds = Array.from(new Set([...aiMissingKinds, ...deterministicMissingKinds]));
 
   const prompt = choosePrompt(missingKinds, finalIntent, normalizedText);
   const confidence = Math.max(0.4, missingKinds.length === 0 ? 0.94 : 0.62, explicitResolution.confidence);
@@ -902,9 +994,18 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     nextPromptInputType: prompt.nextPromptInputType,
     nextPromptAllowedAccountTypes: prompt.nextPromptAllowedAccountTypes,
     confidence,
-    humanConfirmation
+    humanConfirmation,
+    ...aiMetadata
   });
-  return enforceFinancialConsistency(parsedResult);
+  const consistencyInput = { ...parsedResult };
+  const consistentResult = enforceFinancialConsistency(consistencyInput);
+  if (consistentResult.sourceAccountId !== parsedResult.sourceAccountId) aiMetadata.validationCorrections.push('sourceAccountAdjusted');
+  if (consistentResult.destinationAccountId !== parsedResult.destinationAccountId) aiMetadata.validationCorrections.push('destinationAccountAdjusted');
+  if (consistentResult.intent !== parsedResult.intent) aiMetadata.validationCorrections.push('intentAdjusted');
+  return {
+    ...consistentResult,
+    validationCorrections: aiMetadata.validationCorrections
+  };
 }
 
 function findAccountByName(accounts: EnrichedAccount[], value: string) {
