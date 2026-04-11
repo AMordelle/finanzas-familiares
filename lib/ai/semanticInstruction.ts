@@ -51,7 +51,7 @@ function getOpenAIClient() {
   return openaiClient;
 }
 
-const semanticInstructionSchema = {
+export const semanticInstructionResponseSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -67,6 +67,7 @@ const semanticInstructionSchema = {
   },
   required: [
     'intent',
+    'visibleType',
     'amount',
     'sourceAccountHint',
     'destinationAccountHint',
@@ -123,7 +124,7 @@ export async function semanticInstructionUnderstanding(input: { text: string }, 
           format: {
             type: 'json_schema',
             name: 'semantic_instruction_understanding',
-            schema: semanticInstructionSchema,
+            schema: semanticInstructionResponseSchema,
             strict: true
           }
         }
