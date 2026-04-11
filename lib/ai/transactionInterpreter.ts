@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { localCategoryInference, semanticCategoryInferenceWithAI } from '@/lib/ai/semanticCategory';
+import { isApprovedCategory, localCategoryInference, semanticCategoryInferenceWithAI } from '@/lib/ai/semanticCategory';
 import { semanticInstructionUnderstanding } from '@/lib/ai/semanticInstruction';
 
 export const accountTypeSchema = z.enum([
@@ -209,9 +209,10 @@ function parseAmount(input: string) {
   return Number(match?.[1] ?? 0) || 1;
 }
 
-function toCanonicalType(type: string): z.infer<typeof accountTypeSchema> {
+function toCanonicalType(type: string, subtype?: string | null): z.infer<typeof accountTypeSchema> {
+  const normalizedSubtype = (subtype ?? '').toLowerCase().trim();
   if (type === 'credit_card' || type === 'loan' || type === 'receivable' || type === 'investment' || type === 'savings_fund' || type === 'operational_cash') return type;
-  if (type === 'deuda') return 'loan';
+  if (type === 'deuda') return normalizedSubtype.includes('credit') || normalizedSubtype.includes('tarjeta') ? 'credit_card' : 'loan';
   if (type === 'fondo') return 'savings_fund';
   if (type === 'inversion') return 'investment';
   if (type === 'por_cobrar') return 'receivable';
@@ -220,7 +221,7 @@ function toCanonicalType(type: string): z.infer<typeof accountTypeSchema> {
 
 function enrichAccounts(accounts: InterpreterAccountContext[]): EnrichedAccount[] {
   return accounts.map((account, index) => {
-    const type = toCanonicalType(account.type);
+    const type = toCanonicalType(account.type, account.subtype);
     const normalizedName = normalize(account.name);
     const normalizedCompactName = normalizeAccountLabel(account.name);
     const normalizedCompactNoisy = stripReferenceNoise(account.name);
@@ -600,6 +601,7 @@ function resolveAccountFromAiHint(
   accounts: EnrichedAccount[]
 ) {
   if (!hint) return null;
+  const normalizedHint = normalize(hint);
   const expectedKind: ExplicitAccountReference['expectedKind'] =
     intent === 'debt_payment' && role === 'destination' ? 'debt'
       : intent === 'expense_debt_account' && role === 'source' ? 'debt'
@@ -609,9 +611,9 @@ function resolveAccountFromAiHint(
 
   return resolveExplicitReference({
     raw: hint,
-    normalized: normalize(hint),
+    normalized: normalizedHint,
     expectedKind,
-    isGeneric: /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|debito|tdd|ahorro|fondo|meta|bbva)$/.test(normalize(hint)),
+    isGeneric: /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|debito|tdd|ahorro|fondo|meta)$/.test(normalizedHint),
     role
   }, accounts);
 }
@@ -931,10 +933,12 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     destination = receivableRoles.destination ?? destination;
   }
   const finalIntent = inferFinalIntent(intent, source?.type, destination?.type, normalizedText);
-  let category = await semanticCategoryInferenceWithAI({ text, normalizedText, intent: finalIntent });
-  if (!shouldFallbackToDeterministic && aiProposal?.category) {
-    category = aiProposal.category;
-  }
+  const hasAcceptedAiCategory = !shouldFallbackToDeterministic
+    && aiProposal?.confidence !== 'low'
+    && isApprovedCategory(aiProposal?.category);
+  const category = hasAcceptedAiCategory
+    ? aiProposal!.category
+    : await semanticCategoryInferenceWithAI({ text, normalizedText, intent: finalIntent });
 
   const draftForConstraints: TransactionIntent = transactionIntentSchema.parse({
     rawText: text,

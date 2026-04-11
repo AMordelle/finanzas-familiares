@@ -675,6 +675,26 @@ describe('financial consistency layer (safe mode)', () => {
 });
 
 describe('ai-first instruction understanding', () => {
+  it('resolves source card from AI hint and asks only what was paid', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'expense_debt_account',
+      visibleType: 'Gasto con tarjeta de crédito',
+      amount: 150,
+      sourceAccountHint: 'TDC BBVA',
+      destinationAccountHint: null,
+      category: 'otros_gastos',
+      missingFields: ['missingWhatWasPaid'],
+      confidence: 'high',
+      reason: 'Falta concepto de compra'
+    });
+
+    const result = await interpretTransaction('Gasté 150 con TDC BBVA', accounts as any);
+    expect(result.sourceAccountName).toBe('TDC BBVA');
+    expect(result.missingFieldKinds).not.toContain('missingSourceAccount');
+    expect(result.nextPrompt).toBe('¿En qué gastaste ese dinero?');
+    expect(result.nextPromptInputType).toBe('text_input');
+  });
+
   it('uses AI proposal for explicit TDC purchase without follow-up', async () => {
     mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
       intent: 'expense_debt_account',
@@ -776,6 +796,47 @@ describe('ai-first instruction understanding', () => {
     expect(result.intent).toBe('debt_transfer');
     expect(result.sourceAccountType).toBe('credit_card');
   });
+
+  it('reuses accepted AI category and skips second category AI call', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'expense_debt_account',
+      visibleType: 'Gasto con tarjeta de crédito',
+      amount: 150,
+      sourceAccountHint: 'TDC BBVA',
+      destinationAccountHint: null,
+      category: 'entretenimiento',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Servicio digital'
+    });
+
+    const result = await interpretTransaction('Gasté 150 en Canva con TDC BBVA', accounts as any);
+    expect(result.category).toBe('entretenimiento');
+    expect(mockedInferSemanticCategoryWithOpenAI).not.toHaveBeenCalled();
+  });
+});
+
+it('resolves debt-typed credit cards (deuda + subtype credit_card) without empty selector loop', async () => {
+  const debtTypedAccounts = [
+    { id: 'acc-ef', name: 'Efectivo', type: 'operational_cash' },
+    { id: 'acc-tdc', name: 'TDC BBVA', type: 'deuda', subtype: 'credit_card' }
+  ];
+  mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+    intent: 'expense_debt_account',
+    visibleType: 'Gasto con tarjeta de crédito',
+    amount: 150,
+    sourceAccountHint: 'TDC BBVA',
+    destinationAccountHint: null,
+    category: 'otros_gastos',
+    missingFields: ['missingWhatWasPaid'],
+    confidence: 'high',
+    reason: 'Compra con tarjeta'
+  });
+
+  const result = await interpretTransaction('Gasté 150 con TDC BBVA', debtTypedAccounts as any);
+  expect(result.sourceAccountName).toBe('TDC BBVA');
+  expect(result.sourceAccountType).toBe('credit_card');
+  expect(result.missingFieldKinds).not.toContain('missingSourceAccount');
 });
 
 it('semantic categories A-I: classifies representative phrases correctly', async () => {

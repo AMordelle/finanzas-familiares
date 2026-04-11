@@ -67,9 +67,23 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
     });
   };
 
-  const allowedAccounts = intent?.nextPromptAllowedAccountTypes
-    ? accounts.filter((account) => intent.nextPromptAllowedAccountTypes?.includes(account.type as never))
-    : accounts;
+  const allowedAccounts = useMemo(() => {
+    if (!intent?.nextPromptAllowedAccountTypes) return accounts;
+    const normalizeType = (type: string) => {
+      if (type === 'deuda') return 'credit_card';
+      if (type === 'fondo') return 'savings_fund';
+      if (type === 'inversion') return 'investment';
+      if (type === 'por_cobrar') return 'receivable';
+      return type;
+    };
+    const filtered = accounts.filter((account) => intent.nextPromptAllowedAccountTypes?.includes(normalizeType(account.type) as never));
+    const needsCreditCardSelector = intent.nextPromptAllowedAccountTypes.includes('credit_card');
+    if (needsCreditCardSelector && filtered.length === 0) {
+      const fallbackCreditCards = accounts.filter((account) => normalizeType(account.type) === 'credit_card' || account.type === 'deuda');
+      if (fallbackCreditCards.length > 0) return fallbackCreditCards;
+    }
+    return filtered;
+  }, [accounts, intent]);
 
   const handleSave = () => {
     if (!intent || intent.missingFieldKinds.length > 0 || isCreditExpenseSourceInvalid || isSavingRef.current) return;
