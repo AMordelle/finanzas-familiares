@@ -833,6 +833,127 @@ describe('ai-first instruction understanding', () => {
     expect(result.nextPromptInputType).toBe('account_selector');
     expect(result.nextPromptAllowedAccountTypes).toEqual(['credit_card']);
   });
+
+  it('rebuilds full instruction after concept follow-up and keeps semantic category quality', async () => {
+    mockedSemanticInstructionUnderstanding
+      .mockResolvedValueOnce({
+        intent: 'expense_debt_account',
+        visibleType: 'Gasto con tarjeta de crédito',
+        amount: 150,
+        sourceAccountHint: 'TDC BBVA',
+        destinationAccountHint: null,
+        category: 'otros_gastos',
+        missingFields: ['missingWhatWasPaid'],
+        confidence: 'high',
+        reason: 'Falta concepto'
+      })
+      .mockResolvedValueOnce({
+        intent: 'expense_debt_account',
+        visibleType: 'Gasto con tarjeta de crédito',
+        amount: 150,
+        sourceAccountHint: 'TDC BBVA',
+        destinationAccountHint: null,
+        category: 'servicios',
+        missingFields: [],
+        confidence: 'high',
+        reason: 'Servicio digital'
+      });
+
+    const initial = await interpretTransaction('Gasté 150 con TDC BBVA', accounts as any);
+    expect(initial.missingFieldKinds).toEqual(['missingWhatWasPaid']);
+
+    const completed = await applyFollowUpAnswer(initial, 'en Canva', accounts as any);
+    expect(completed.description).toContain('Gasté 150 en Canva con TDC BBVA');
+    expect(completed.category).toBe('servicios');
+    expect(completed.missingFieldKinds).toEqual([]);
+  });
+
+  it('keeps category consistency between complete instruction and follow-up completed path', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValue({
+      intent: 'expense_debt_account',
+      visibleType: 'Gasto con tarjeta de crédito',
+      amount: 150,
+      sourceAccountHint: 'TDC BBVA',
+      destinationAccountHint: null,
+      category: 'servicios',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Servicio digital'
+    });
+
+    const complete = await interpretTransaction('Gasté 150 en Canva con TDC BBVA', accounts as any);
+
+    mockedSemanticInstructionUnderstanding
+      .mockResolvedValueOnce({
+        intent: 'expense_debt_account',
+        visibleType: 'Gasto con tarjeta de crédito',
+        amount: 150,
+        sourceAccountHint: 'TDC BBVA',
+        destinationAccountHint: null,
+        category: 'otros_gastos',
+        missingFields: ['missingWhatWasPaid'],
+        confidence: 'high',
+        reason: 'Falta concepto'
+      })
+      .mockResolvedValueOnce({
+        intent: 'expense_debt_account',
+        visibleType: 'Gasto con tarjeta de crédito',
+        amount: 150,
+        sourceAccountHint: 'TDC BBVA',
+        destinationAccountHint: null,
+        category: 'servicios',
+        missingFields: [],
+        confidence: 'high',
+        reason: 'Servicio digital'
+      });
+    const incomplete = await interpretTransaction('Gasté 150 con TDC BBVA', accounts as any);
+    const completed = await applyFollowUpAnswer(incomplete, 'en Canva', accounts as any);
+    expect(completed.category).toBe(complete.category);
+  });
+
+  it('rebuilds after concept + card selection flow for generic tarjeta', async () => {
+    mockedSemanticInstructionUnderstanding
+      .mockResolvedValueOnce({
+        intent: 'expense_debt_account',
+        visibleType: 'Gasto con tarjeta de crédito',
+        amount: 150,
+        sourceAccountHint: 'tarjeta de crédito',
+        destinationAccountHint: null,
+        category: 'otros_gastos',
+        missingFields: ['missingSourceAccount', 'missingWhatWasPaid'],
+        confidence: 'high',
+        reason: 'Falta tarjeta y concepto'
+      })
+      .mockResolvedValueOnce({
+        intent: 'expense_debt_account',
+        visibleType: 'Gasto con tarjeta de crédito',
+        amount: 150,
+        sourceAccountHint: 'tarjeta de crédito',
+        destinationAccountHint: null,
+        category: 'otros_gastos',
+        missingFields: ['missingSourceAccount'],
+        confidence: 'high',
+        reason: 'Falta tarjeta'
+      })
+      .mockResolvedValueOnce({
+        intent: 'expense_debt_account',
+        visibleType: 'Gasto con tarjeta de crédito',
+        amount: 150,
+        sourceAccountHint: 'TDC BBVA',
+        destinationAccountHint: null,
+        category: 'servicios',
+        missingFields: [],
+        confidence: 'high',
+        reason: 'Servicio digital con tarjeta'
+      });
+
+    const start = await interpretTransaction('Gasté 150 con tarjeta de crédito', accounts as any);
+    const withConcept = await applyFollowUpAnswer(start, 'en Canva', accounts as any);
+    expect(withConcept.missingFieldKinds).toContain('missingSourceAccount');
+    const withCard = await applyFollowUpAnswer(withConcept, 'TDC BBVA', accounts as any);
+    expect(withCard.category).toBe('servicios');
+    expect(withCard.description).toContain('Gasté 150 en Canva con TDC BBVA');
+  });
 });
 
 it('resolves debt-typed credit cards (deuda + subtype credit_card) without empty selector loop', async () => {

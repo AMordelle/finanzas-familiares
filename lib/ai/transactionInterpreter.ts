@@ -1074,9 +1074,13 @@ export async function applyFollowUpAnswer(
   accounts: InterpreterAccountContext[] = []
 ): TransactionIntent {
   const updated = { ...current };
-  const kind = updated.missingFieldKinds[0];
   const modelAccounts = enrichAccounts(accounts);
   const matchedAccount = findAccountByName(modelAccounts, answer);
+  const kind = matchedAccount
+    && ['expense_cash_like', 'expense_debt_account'].includes(updated.intent)
+    && updated.missingFieldKinds.includes('missingSourceAccount')
+    ? 'missingSourceAccount'
+    : updated.missingFieldKinds[0];
   const isAmbiguityClarification = (current.nextPrompt ?? '').startsWith('¿Te refieres a ');
   let resolvedSourceBySelection = false;
 
@@ -1143,6 +1147,56 @@ export async function applyFollowUpAnswer(
   if (kind === 'missingSourceAccount' && !matchedAccount && answer.trim()) {
     updated.description = answer.trim();
     updated.category = localCategoryInference(updated.intent, normalize(answer));
+  }
+
+  const shouldReinterpretExpense =
+    ['expense_cash_like', 'expense_debt_account'].includes(updated.intent)
+    && (
+      ((kind === 'missingDescription' || kind === 'missingWhatWasPaid') && answer.trim().length > 0)
+      || (kind === 'missingSourceAccount'
+        && !matchedAccount
+        && /^(en|de|del|para)\b/i.test(answer.trim()))
+      || (kind === 'missingSourceAccount'
+        && matchedAccount?.type === 'credit_card'
+        && (
+          Boolean(updated.description?.trim() && updated.description !== updated.rawText)
+          || /\bcon\s+(?:tarjeta(?:\s+de\s+(?:credito|crédito))?|tdc|credito|crédito)\b/i.test(updated.rawText)
+          || /\ben\s+[a-z0-9]/i.test(updated.rawText)
+        )
+      )
+    );
+
+  if (shouldReinterpretExpense) {
+    const sourceName = updated.sourceAccountName ?? matchedAccount?.name ?? null;
+    const hasMeaningfulDescription = Boolean(updated.description?.trim() && updated.description !== updated.rawText);
+    const rebuiltText = (() => {
+      if (kind === 'missingSourceAccount' && sourceName && hasMeaningfulDescription) {
+        const normalizedConcept = /^(en|de|del|para)\b/i.test(updated.description!.trim()) ? updated.description!.trim() : `en ${updated.description!.trim()}`;
+        return `Gasté ${updated.amount} ${normalizedConcept} con ${sourceName}`.replace(/\s+/g, ' ').trim();
+      }
+      if (kind === 'missingSourceAccount' && sourceName) {
+        return updated.rawText.replace(/\bcon\s+(?:tarjeta(?:\s+de\s+(?:credito|crédito))?|tdc|credito|crédito)\b(?:\s+\w+)?/i, `con ${sourceName}`);
+      }
+      const concept = (kind === 'missingDescription' || kind === 'missingWhatWasPaid')
+        ? answer.trim()
+        : (updated.description?.trim() || answer.trim());
+      const normalizedConcept = /^(en|de|del|para)\b/i.test(concept) ? concept : `en ${concept}`;
+      const genericSourceFragment = /\bcon\s+(?:tarjeta(?:\s+de\s+(?:credito|crédito))?|tdc|credito|crédito)\b/i.test(updated.rawText)
+        ? ' con tarjeta de crédito'
+        : '';
+      return `Gasté ${updated.amount} ${normalizedConcept}${sourceName ? ` con ${sourceName}` : genericSourceFragment}`.replace(/\s+/g, ' ').trim();
+    })();
+    const reinterpreted = await interpretTransaction(rebuiltText, accounts);
+    if (process.env.NODE_ENV === 'development') {
+      console.info('[FollowUpRebuild]', {
+        originalText: current.rawText,
+        followUpAnswer: answer,
+        rebuiltText,
+        reinterpretedByAI: reinterpreted.interpretationSource === 'ai',
+        finalCategory: reinterpreted.category
+      });
+    }
+    return reinterpreted;
   }
 
   const final = { ...updated };
