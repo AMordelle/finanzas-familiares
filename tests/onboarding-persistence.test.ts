@@ -546,6 +546,77 @@ describe('onboarding persistence', () => {
     delete process.env.DEV_PROFILE_ID;
   });
 
+  it('saveConversationalTransaction usa hoy por defecto en happened_at', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-date-default', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-date-default', profile_id: 'profile-date-default', household_id: 'house-date-default' });
+    fakeClient.db.accounts.push({ id: 'acc-date-default', household_id: 'house-date-default', name: 'Efectivo', type: 'operativa', balance: '1000' });
+
+    process.env.DEV_PROFILE_ID = 'profile-date-default';
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-11T09:30:00.000Z'));
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { saveConversationalTransaction } = await import('@/lib/db/queries');
+
+    await saveConversationalTransaction({
+      action: 'gasto',
+      amount: 120,
+      category: 'comida',
+      description: 'Desayuno',
+      sourceAccount: 'efectivo',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok'
+    } as any);
+
+    expect(fakeClient.db.transactions[0]?.happened_at).toBe('2026-04-11T09:30:00.000Z');
+    vi.useRealTimers();
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('saveConversationalTransaction respeta fecha custom/yesterday y mantiene created_at independiente', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-date-custom', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-date-custom', profile_id: 'profile-date-custom', household_id: 'house-date-custom' });
+    fakeClient.db.accounts.push({ id: 'acc-date-custom', household_id: 'house-date-custom', name: 'Efectivo', type: 'operativa', balance: '1000' });
+
+    process.env.DEV_PROFILE_ID = 'profile-date-custom';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { saveConversationalTransaction } = await import('@/lib/db/queries');
+
+    await saveConversationalTransaction({
+      action: 'gasto',
+      amount: 50,
+      category: 'transporte',
+      description: 'Taxi',
+      sourceAccount: 'efectivo',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok'
+    } as any, { happenedAt: '2026-04-10T12:00:00.000Z' });
+
+    await saveConversationalTransaction({
+      action: 'gasto',
+      amount: 70,
+      category: 'cafe',
+      description: 'Café',
+      sourceAccount: 'efectivo',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok'
+    } as any, { happenedAt: '2026-04-01T12:00:00.000Z' });
+
+    const firstMovementLines = fakeClient.db.transactions.filter((tx) => tx.group_id === fakeClient.db.transaction_groups[0]?.id);
+    const secondMovementLines = fakeClient.db.transactions.filter((tx) => tx.group_id === fakeClient.db.transaction_groups[1]?.id);
+
+    expect(firstMovementLines.every((tx) => tx.happened_at === '2026-04-10T12:00:00.000Z')).toBe(true);
+    expect(secondMovementLines.every((tx) => tx.happened_at === '2026-04-01T12:00:00.000Z')).toBe(true);
+    expect(firstMovementLines.every((tx) => tx.created_at !== tx.happened_at)).toBe(true);
+    expect(secondMovementLines.every((tx) => tx.created_at !== tx.happened_at)).toBe(true);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
 
   it('movimientos devuelve historial real en orden cronológico inverso', async () => {
     const fakeClient = createFakeSupabase();

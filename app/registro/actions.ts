@@ -21,7 +21,9 @@ export async function applyFollowUpAnswerAction(current: unknown, answer: string
 
 export async function saveInterpretedTransactionAction(payload: unknown) {
   const intent = enforceFinancialConsistency(transactionIntentSchema.parse(payload));
-  await saveConversationalTransaction(intent);
+  await saveConversationalTransaction(intent, {
+    happenedAt: resolveMovementDate(payload)
+  });
   revalidatePath('/dashboard');
   revalidatePath('/movimientos');
   revalidatePath('/cuentas');
@@ -31,4 +33,24 @@ export async function saveInterpretedTransactionAction(payload: unknown) {
     success: true,
     message: 'Movimiento registrado correctamente.'
   };
+}
+
+function resolveMovementDate(payload: unknown) {
+  const movementDate = extractMovementDate(payload);
+  if (!movementDate) {
+    return new Date().toISOString();
+  }
+
+  const [year, month, day] = movementDate.split('-').map(Number);
+  if (!year || !month || !day) {
+    return new Date().toISOString();
+  }
+
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0)).toISOString();
+}
+
+function extractMovementDate(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return null;
+  const maybeDate = (payload as Record<string, unknown>).movementDate;
+  return typeof maybeDate === 'string' ? maybeDate : null;
 }
