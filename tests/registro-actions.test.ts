@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const parseMock = vi.fn();
 const enforceFinancialConsistencyMock = vi.fn();
+const applyFollowUpAnswerMock = vi.fn();
 const saveMock = vi.fn();
 const revalidatePathMock = vi.fn();
 
@@ -19,6 +20,7 @@ describe('registro actions revalidation', () => {
 
     vi.doMock('@/lib/ai/transactionInterpreter', () => ({
       interpretTransaction: vi.fn(),
+      applyFollowUpAnswer: applyFollowUpAnswerMock,
       enforceFinancialConsistency: enforceFinancialConsistencyMock,
       transactionIntentSchema: {
         parse: parseMock
@@ -55,5 +57,23 @@ describe('registro actions revalidation', () => {
     expect(revalidatePathMock).toHaveBeenCalledWith('/cuentas');
     expect(revalidatePathMock).toHaveBeenCalledWith('/registro');
     expect(response).toEqual({ success: true, message: 'Movimiento registrado correctamente.' });
+  });
+
+  it('aplica follow-up en servidor usando cuentas del hogar', async () => {
+    const getAccountsForRegistrationMock = vi.fn().mockResolvedValue([{ name: 'TDC BBVA', type: 'credit_card' }]);
+    vi.doMock('@/lib/db/queries', () => ({
+      getAccountsForRegistration: getAccountsForRegistrationMock,
+      saveConversationalTransaction: saveMock
+    }));
+
+    applyFollowUpAnswerMock.mockResolvedValue({ ok: true });
+    const { applyFollowUpAnswerAction } = await import('@/app/registro/actions');
+    const current = { rawText: 'Gasté 150 con TDC BBVA', missingFieldKinds: ['missingWhatWasPaid'] };
+
+    const response = await applyFollowUpAnswerAction(current, 'en Canva');
+    expect(parseMock).toHaveBeenCalledWith(current);
+    expect(getAccountsForRegistrationMock).toHaveBeenCalled();
+    expect(applyFollowUpAnswerMock).toHaveBeenCalledWith(current, 'en Canva', [{ name: 'TDC BBVA', type: 'credit_card' }]);
+    expect(response).toEqual({ ok: true });
   });
 });

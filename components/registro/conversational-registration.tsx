@@ -5,9 +5,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { applyFollowUpAnswer, type TransactionIntent } from '@/lib/ai/transactionInterpreter';
+import { type TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import type { AccountOption } from '@/lib/db/queries';
-import { interpretTransactionAction, saveInterpretedTransactionAction } from '@/app/registro/actions';
+import { applyFollowUpAnswerAction, interpretTransactionAction, saveInterpretedTransactionAction } from '@/app/registro/actions';
 
 type Props = {
   accounts: AccountOption[];
@@ -61,7 +61,7 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
   const handleMissingFieldApply = () => {
     if (!intent || !followUpValue.trim()) return;
     startTransition(async () => {
-      const resolved = await applyFollowUpAnswer(intent, followUpValue.trim(), accounts);
+      const resolved = await applyFollowUpAnswerAction(intent, followUpValue.trim());
       setIntent(resolved);
       setFollowUpValue('');
     });

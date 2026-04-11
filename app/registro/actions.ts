@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { enforceFinancialConsistency, interpretTransaction, transactionIntentSchema } from '@/lib/ai/transactionInterpreter';
+import { applyFollowUpAnswer, enforceFinancialConsistency, interpretTransaction, transactionIntentSchema } from '@/lib/ai/transactionInterpreter';
 import { getAccountsForRegistration, saveConversationalTransaction } from '@/lib/db/queries';
 
 export async function getRegistrationAccountsAction() {
@@ -11,6 +11,12 @@ export async function getRegistrationAccountsAction() {
 export async function interpretTransactionAction(text: string) {
   const accounts = await getAccountsForRegistration();
   return interpretTransaction(text, accounts);
+}
+
+export async function applyFollowUpAnswerAction(current: unknown, answer: string) {
+  const intent = transactionIntentSchema.parse(current);
+  const accounts = await getAccountsForRegistration();
+  return applyFollowUpAnswer(intent, answer, accounts);
 }
 
 export async function saveInterpretedTransactionAction(payload: unknown) {

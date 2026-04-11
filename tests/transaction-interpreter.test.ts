@@ -866,6 +866,7 @@ describe('ai-first instruction understanding', () => {
     expect(completed.description).toContain('Gasté 150 en Canva con TDC BBVA');
     expect(completed.category).toBe('servicios');
     expect(completed.missingFieldKinds).toEqual([]);
+    expect(mockedSemanticInstructionUnderstanding).toHaveBeenCalledTimes(2);
   });
 
   it('keeps category consistency between complete instruction and follow-up completed path', async () => {
@@ -953,6 +954,7 @@ describe('ai-first instruction understanding', () => {
     const withCard = await applyFollowUpAnswer(withConcept, 'TDC BBVA', accounts as any);
     expect(withCard.category).toBe('servicios');
     expect(withCard.description).toContain('Gasté 150 en Canva con TDC BBVA');
+    expect(mockedSemanticInstructionUnderstanding).toHaveBeenCalledTimes(3);
   });
 });
 
