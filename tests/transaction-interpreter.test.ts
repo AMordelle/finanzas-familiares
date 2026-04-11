@@ -703,7 +703,7 @@ describe('ai-first instruction understanding', () => {
       sourceAccountHint: 'TDC BBVA',
       destinationAccountHint: null,
       category: 'entretenimiento',
-      missingFields: [],
+      missingFields: ['missingSourceAccount'],
       confidence: 'high',
       reason: 'Compra en servicio digital'
     });
@@ -813,6 +813,25 @@ describe('ai-first instruction understanding', () => {
     const result = await interpretTransaction('Gasté 150 en Canva con TDC BBVA', accounts as any);
     expect(result.category).toBe('entretenimiento');
     expect(mockedInferSemanticCategoryWithOpenAI).not.toHaveBeenCalled();
+  });
+
+  it('keeps card follow-up when hint is generic and offers credit-card selector types', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'expense_debt_account',
+      visibleType: 'Gasto con tarjeta de crédito',
+      amount: 150,
+      sourceAccountHint: 'tarjeta de crédito',
+      destinationAccountHint: null,
+      category: 'otros_gastos',
+      missingFields: ['missingSourceAccount'],
+      confidence: 'high',
+      reason: 'Tarjeta no especificada'
+    });
+
+    const result = await interpretTransaction('Gasté 150 con tarjeta de crédito', accounts as any);
+    expect(result.missingFieldKinds).toContain('missingSourceAccount');
+    expect(result.nextPromptInputType).toBe('account_selector');
+    expect(result.nextPromptAllowedAccountTypes).toEqual(['credit_card']);
   });
 });
 

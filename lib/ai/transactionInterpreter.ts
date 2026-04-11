@@ -594,6 +594,17 @@ function mapAiMissingFieldKindsToDeterministic(input: string[]) {
   return input.filter((item): item is z.infer<typeof missingFieldKindSchema> => allowed.has(item as z.infer<typeof missingFieldKindSchema>));
 }
 
+function pruneResolvedMissingKinds(
+  draft: TransactionIntent,
+  aiMissingKinds: z.infer<typeof missingFieldKindSchema>[]
+) {
+  return aiMissingKinds.filter((kind) => {
+    if (kind === 'missingSourceAccount') return !draft.sourceAccountId;
+    if (kind === 'missingDestinationAccount' || kind === 'missingDebtTarget') return !draft.destinationAccountId;
+    return true;
+  });
+}
+
 function resolveAccountFromAiHint(
   hint: string | null | undefined,
   role: 'source' | 'destination',
@@ -602,6 +613,13 @@ function resolveAccountFromAiHint(
 ) {
   if (!hint) return null;
   const normalizedHint = normalize(hint);
+  if (intent === 'expense_debt_account' && role === 'source') {
+    const creditCards = accounts.filter((account) => account.type === 'credit_card');
+    const exact = creditCards.filter((account) => account.normalized_name === normalizedHint || account.aliases.includes(normalizedHint));
+    if (exact.length === 1) {
+      return { account: exact[0], confidence: 0.98, unresolvedMessage: null };
+    }
+  }
   const expectedKind: ExplicitAccountReference['expectedKind'] =
     intent === 'debt_payment' && role === 'destination' ? 'debt'
       : intent === 'expense_debt_account' && role === 'source' ? 'debt'
@@ -609,13 +627,17 @@ function resolveAccountFromAiHint(
           : intent === 'income' && role === 'destination' ? 'operational'
             : null;
 
-  return resolveExplicitReference({
+  const resolved = resolveExplicitReference({
     raw: hint,
     normalized: normalizedHint,
     expectedKind,
     isGeneric: /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|debito|tdd|ahorro|fondo|meta)$/.test(normalizedHint),
     role
   }, accounts);
+  if (intent === 'expense_debt_account' && role === 'source' && resolved.account && resolved.account.type !== 'credit_card') {
+    return { account: null, confidence: resolved.confidence, unresolvedMessage: resolved.unresolvedMessage };
+  }
+  return resolved;
 }
 
 function inferIntent(normalizedText: string, matched: EnrichedAccount[]): z.infer<typeof financialIntentSchema> {
@@ -963,7 +985,9 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   });
   applyIntentAccountConstraints(draftForConstraints);
   const deterministicMissingKinds = recomputeMissingKinds(draftForConstraints, explicitResolution.unresolvedMessage);
-  const aiMissingKinds = shouldFallbackToDeterministic ? [] : mapAiMissingFieldKindsToDeterministic(aiProposal?.missingFields ?? []);
+  const aiMissingKinds = shouldFallbackToDeterministic
+    ? []
+    : pruneResolvedMissingKinds(draftForConstraints, mapAiMissingFieldKindsToDeterministic(aiProposal?.missingFields ?? []));
   const missingKinds = Array.from(new Set([...aiMissingKinds, ...deterministicMissingKinds]));
 
   const prompt = choosePrompt(missingKinds, finalIntent, normalizedText);
