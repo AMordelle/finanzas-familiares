@@ -858,6 +858,28 @@ it('resolves debt-typed credit cards (deuda + subtype credit_card) without empty
   expect(result.missingFieldKinds).not.toContain('missingSourceAccount');
 });
 
+it('exact account name match wins before alias/fallback matching', async () => {
+  const exactPriorityAccounts = [
+    { id: 'acc-tdc-bbva', name: 'TDC BBVA', type: 'credit_card', aliases: ['BBVA'] },
+    { id: 'acc-tdc-banamex', name: 'TDC Banamex', type: 'credit_card', aliases: ['TDC BBVA alias'] }
+  ];
+  mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+    intent: 'expense_debt_account',
+    visibleType: 'Gasto con tarjeta de crédito',
+    amount: 150,
+    sourceAccountHint: 'TDC BBVA',
+    destinationAccountHint: null,
+    category: 'entretenimiento',
+    missingFields: [],
+    confidence: 'high',
+    reason: 'Compra explícita'
+  });
+
+  const result = await interpretTransaction('Gasté 150 en Canva con TDC BBVA', exactPriorityAccounts as any);
+  expect(result.sourceAccountName).toBe('TDC BBVA');
+  expect(result.missingFieldKinds).not.toContain('missingSourceAccount');
+});
+
 it('semantic categories A-I: classifies representative phrases correctly', async () => {
     const camioneta = await interpretTransaction('Gaste 6100 de la mensualidad de mi camioneta con TDD BBVA', accounts as any);
     expect(camioneta.category).toBe('transporte');

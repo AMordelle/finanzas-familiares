@@ -209,10 +209,16 @@ function parseAmount(input: string) {
   return Number(match?.[1] ?? 0) || 1;
 }
 
-function toCanonicalType(type: string, subtype?: string | null): z.infer<typeof accountTypeSchema> {
+function toCanonicalType(type: string, subtype?: string | null, name?: string): z.infer<typeof accountTypeSchema> {
   const normalizedSubtype = (subtype ?? '').toLowerCase().trim();
+  const normalizedName = normalize(name ?? '');
   if (type === 'credit_card' || type === 'loan' || type === 'receivable' || type === 'investment' || type === 'savings_fund' || type === 'operational_cash') return type;
-  if (type === 'deuda') return normalizedSubtype.includes('credit') || normalizedSubtype.includes('tarjeta') ? 'credit_card' : 'loan';
+  if (type === 'deuda') {
+    const looksLikeCreditCard = normalizedSubtype.includes('credit')
+      || normalizedSubtype.includes('tarjeta')
+      || /\b(tdc|tarjeta)\b/.test(normalizedName);
+    return looksLikeCreditCard ? 'credit_card' : 'loan';
+  }
   if (type === 'fondo') return 'savings_fund';
   if (type === 'inversion') return 'investment';
   if (type === 'por_cobrar') return 'receivable';
@@ -221,7 +227,7 @@ function toCanonicalType(type: string, subtype?: string | null): z.infer<typeof 
 
 function enrichAccounts(accounts: InterpreterAccountContext[]): EnrichedAccount[] {
   return accounts.map((account, index) => {
-    const type = toCanonicalType(account.type, account.subtype);
+    const type = toCanonicalType(account.type, account.subtype, account.name);
     const normalizedName = normalize(account.name);
     const normalizedCompactName = normalizeAccountLabel(account.name);
     const normalizedCompactNoisy = stripReferenceNoise(account.name);
@@ -615,7 +621,18 @@ function resolveAccountFromAiHint(
   const normalizedHint = normalize(hint);
   if (intent === 'expense_debt_account' && role === 'source') {
     const creditCards = accounts.filter((account) => account.type === 'credit_card');
-    const exact = creditCards.filter((account) => account.normalized_name === normalizedHint || account.aliases.includes(normalizedHint));
+    const exactByName = creditCards.filter((account) => account.name.trim().toLowerCase() === hint.trim().toLowerCase());
+    const exactByNormalized = creditCards.filter((account) => account.normalized_name === normalizedHint);
+    const exactByAlias = creditCards.filter((account) => account.aliases.includes(normalizedHint));
+    const exact = exactByName.length ? exactByName : exactByNormalized.length ? exactByNormalized : exactByAlias;
+    if (process.env.NODE_ENV === 'development') {
+      console.info('[AIHintResolver]', {
+        sourceAccountHint: hint,
+        candidateNames: creditCards.map((account) => account.name),
+        matchedAccountName: exact.length === 1 ? exact[0].name : null,
+        matchedAccountType: exact.length === 1 ? exact[0].type : null
+      });
+    }
     if (exact.length === 1) {
       return { account: exact[0], confidence: 0.98, unresolvedMessage: null };
     }
