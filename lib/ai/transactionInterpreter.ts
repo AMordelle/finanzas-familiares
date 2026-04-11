@@ -989,6 +989,16 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     ? []
     : pruneResolvedMissingKinds(draftForConstraints, mapAiMissingFieldKindsToDeterministic(aiProposal?.missingFields ?? []));
   const missingKinds = Array.from(new Set([...aiMissingKinds, ...deterministicMissingKinds]));
+  if (process.env.NODE_ENV === 'development') {
+    console.info('[AIAccountDebug]', {
+      text,
+      aiIntent: aiProposal?.intent ?? null,
+      sourceAccountHint: aiProposal?.sourceAccountHint ?? null,
+      destinationAccountHint: aiProposal?.destinationAccountHint ?? null,
+      resolvedSourceAccount: draftForConstraints.sourceAccountName ?? null,
+      finalMissingFields: missingKinds
+    });
+  }
 
   const prompt = choosePrompt(missingKinds, finalIntent, normalizedText);
   const confidence = Math.max(0.4, missingKinds.length === 0 ? 0.94 : 0.62, explicitResolution.confidence);
