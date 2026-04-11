@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { localCategoryInference, semanticCategoryInferenceWithAI } from '@/lib/ai/semanticCategory';
+import { isApprovedCategory, localCategoryInference, semanticCategoryInferenceWithAI } from '@/lib/ai/semanticCategory';
+import { semanticInstructionUnderstanding } from '@/lib/ai/semanticInstruction';
 
 export const accountTypeSchema = z.enum([
   'operational_cash',
@@ -60,7 +61,12 @@ export const transactionIntentSchema = z.object({
   nextPromptInputType: nextPromptInputTypeSchema.nullable().optional().default(null),
   nextPromptAllowedAccountTypes: z.array(accountTypeSchema).nullable().optional().default(null),
   confidence: z.number().min(0).max(1).default(0.5),
-  humanConfirmation: z.string().nullable().optional().default(null)
+  humanConfirmation: z.string().nullable().optional().default(null),
+  interpretationSource: z.enum(['ai', 'fallback']).optional().default('fallback'),
+  aiIntent: z.string().nullable().optional().default(null),
+  aiCategory: z.string().nullable().optional().default(null),
+  aiConfidence: z.enum(['high', 'medium', 'low']).nullable().optional().default(null),
+  validationCorrections: z.array(z.string()).optional().default([])
 });
 
 export type TransactionIntent = z.infer<typeof transactionIntentSchema>;
@@ -128,6 +134,16 @@ type FinancialConsistencySuggestion = Partial<Pick<TransactionIntent,
   'sourceAccountId' | 'sourceAccountName' | 'sourceAccountType' | 'sourceAccount'
   | 'destinationAccountId' | 'destinationAccountName' | 'destinationAccountType' | 'destinationAccount'>>;
 
+type AIConfidence = 'high' | 'medium' | 'low';
+
+type AiInterpretationMetadata = {
+  interpretationSource: 'ai' | 'fallback';
+  aiIntent: string | null;
+  aiCategory: string | null;
+  aiConfidence: AIConfidence | null;
+  validationCorrections: string[];
+};
+
 const visibleTypeMap: Record<z.infer<typeof financialIntentSchema>, string> = {
   income: 'Ingreso',
   expense_cash_like: 'Gasto con efectivo/banco',
@@ -193,9 +209,16 @@ function parseAmount(input: string) {
   return Number(match?.[1] ?? 0) || 1;
 }
 
-function toCanonicalType(type: string): z.infer<typeof accountTypeSchema> {
+function toCanonicalType(type: string, subtype?: string | null, name?: string): z.infer<typeof accountTypeSchema> {
+  const normalizedSubtype = (subtype ?? '').toLowerCase().trim();
+  const normalizedName = normalize(name ?? '');
   if (type === 'credit_card' || type === 'loan' || type === 'receivable' || type === 'investment' || type === 'savings_fund' || type === 'operational_cash') return type;
-  if (type === 'deuda') return 'loan';
+  if (type === 'deuda') {
+    const looksLikeCreditCard = normalizedSubtype.includes('credit')
+      || normalizedSubtype.includes('tarjeta')
+      || /\b(tdc|tarjeta)\b/.test(normalizedName);
+    return looksLikeCreditCard ? 'credit_card' : 'loan';
+  }
   if (type === 'fondo') return 'savings_fund';
   if (type === 'inversion') return 'investment';
   if (type === 'por_cobrar') return 'receivable';
@@ -204,7 +227,7 @@ function toCanonicalType(type: string): z.infer<typeof accountTypeSchema> {
 
 function enrichAccounts(accounts: InterpreterAccountContext[]): EnrichedAccount[] {
   return accounts.map((account, index) => {
-    const type = toCanonicalType(account.type);
+    const type = toCanonicalType(account.type, account.subtype, account.name);
     const normalizedName = normalize(account.name);
     const normalizedCompactName = normalizeAccountLabel(account.name);
     const normalizedCompactNoisy = stripReferenceNoise(account.name);
@@ -566,6 +589,74 @@ function hasExplicitDebitExpenseMarker(normalizedText: string) {
   return /(con)\s+([a-z0-9\s]*\b(?:tdd|debito|tarjeta de debito)\b[a-z0-9\s]*)$/.test(normalizedText);
 }
 
+function mapAiMissingFieldKindsToDeterministic(input: string[]) {
+  const allowed = new Set<z.infer<typeof missingFieldKindSchema>>([
+    'missingSourceAccount',
+    'missingDestinationAccount',
+    'missingDescription',
+    'missingIntent',
+    'missingWhatWasPaid'
+  ]);
+  return input.filter((item): item is z.infer<typeof missingFieldKindSchema> => allowed.has(item as z.infer<typeof missingFieldKindSchema>));
+}
+
+function pruneResolvedMissingKinds(
+  draft: TransactionIntent,
+  aiMissingKinds: z.infer<typeof missingFieldKindSchema>[]
+) {
+  return aiMissingKinds.filter((kind) => {
+    if (kind === 'missingSourceAccount') return !draft.sourceAccountId;
+    if (kind === 'missingDestinationAccount' || kind === 'missingDebtTarget') return !draft.destinationAccountId;
+    return true;
+  });
+}
+
+function resolveAccountFromAiHint(
+  hint: string | null | undefined,
+  role: 'source' | 'destination',
+  intent: z.infer<typeof financialIntentSchema>,
+  accounts: EnrichedAccount[]
+) {
+  if (!hint) return null;
+  const normalizedHint = normalize(hint);
+  if (intent === 'expense_debt_account' && role === 'source') {
+    const creditCards = accounts.filter((account) => account.type === 'credit_card');
+    const exactByName = creditCards.filter((account) => account.name.trim().toLowerCase() === hint.trim().toLowerCase());
+    const exactByNormalized = creditCards.filter((account) => account.normalized_name === normalizedHint);
+    const exactByAlias = creditCards.filter((account) => account.aliases.includes(normalizedHint));
+    const exact = exactByName.length ? exactByName : exactByNormalized.length ? exactByNormalized : exactByAlias;
+    if (process.env.NODE_ENV === 'development') {
+      console.info('[AIHintResolver]', {
+        sourceAccountHint: hint,
+        candidateNames: creditCards.map((account) => account.name),
+        matchedAccountName: exact.length === 1 ? exact[0].name : null,
+        matchedAccountType: exact.length === 1 ? exact[0].type : null
+      });
+    }
+    if (exact.length === 1) {
+      return { account: exact[0], confidence: 0.98, unresolvedMessage: null };
+    }
+  }
+  const expectedKind: ExplicitAccountReference['expectedKind'] =
+    intent === 'debt_payment' && role === 'destination' ? 'debt'
+      : intent === 'expense_debt_account' && role === 'source' ? 'debt'
+        : intent === 'expense_cash_like' && role === 'source' ? 'operational'
+          : intent === 'income' && role === 'destination' ? 'operational'
+            : null;
+
+  const resolved = resolveExplicitReference({
+    raw: hint,
+    normalized: normalizedHint,
+    expectedKind,
+    isGeneric: /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|debito|tdd|ahorro|fondo|meta)$/.test(normalizedHint),
+    role
+  }, accounts);
+  if (intent === 'expense_debt_account' && role === 'source' && resolved.account && resolved.account.type !== 'credit_card') {
+    return { account: null, confidence: resolved.confidence, unresolvedMessage: resolved.unresolvedMessage };
+  }
+  return resolved;
+}
+
 function inferIntent(normalizedText: string, matched: EnrichedAccount[]): z.infer<typeof financialIntentSchema> {
   if (/(me pago|pago recibido|me deposito)/.test(normalizedText)) return 'receivable_payment';
   if (/(preste|prestamo a|le di prestado)/.test(normalizedText)) return 'receivable_created';
@@ -765,9 +856,42 @@ export function enforceFinancialConsistency(result: TransactionIntent): Transact
 export async function interpretTransaction(text: string, accounts: InterpreterAccountContext[] = []): Promise<TransactionIntent> {
   const modelAccounts = enrichAccounts(accounts);
   const normalizedText = normalize(text);
-  const amount = parseAmount(text);
+  const fallbackAmount = parseAmount(text);
   const matched = matchAccounts(text, modelAccounts);
-  const intent = inferIntent(normalizedText, matched);
+
+  let aiProposal: Awaited<ReturnType<typeof semanticInstructionUnderstanding>> = null;
+  try {
+    aiProposal = await semanticInstructionUnderstanding({ text });
+  } catch (error) {
+    if (process.env.NODE_ENV === 'development') {
+      console.warn('[semantic-instruction-ai] fallback to deterministic parser', error);
+    }
+    aiProposal = null;
+  }
+  const shouldFallbackToDeterministic = !aiProposal || aiProposal.confidence === 'low';
+  const intent = shouldFallbackToDeterministic
+    ? inferIntent(normalizedText, matched)
+    : aiProposal.intent;
+  const amount = (!shouldFallbackToDeterministic && aiProposal?.amount && Number.isFinite(aiProposal.amount))
+    ? aiProposal.amount
+    : fallbackAmount;
+
+  const aiMetadata: AiInterpretationMetadata = {
+    interpretationSource: shouldFallbackToDeterministic ? 'fallback' : 'ai',
+    aiIntent: aiProposal?.intent ?? null,
+    aiCategory: aiProposal?.category ?? null,
+    aiConfidence: aiProposal?.confidence ?? null,
+    validationCorrections: []
+  };
+  if (process.env.NODE_ENV === 'development') {
+    console.info('[InstructionUnderstanding]', {
+      interpretationSource: aiMetadata.interpretationSource,
+      aiIntent: aiMetadata.aiIntent,
+      aiCategory: aiMetadata.aiCategory,
+      aiConfidence: aiMetadata.aiConfidence
+    });
+  }
+
   const explicitReference = extractExplicitAccountReference(normalizedText, intent);
   const explicitResolution = resolveExplicitReference(explicitReference, modelAccounts);
 
@@ -780,8 +904,11 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const receivableRoles = resolveReceivablePaymentRoles(normalizedText, modelAccounts);
   const hasExplicitDebitExpenseSource = hasExplicitDebitExpenseMarker(normalizedText);
 
-  let source = matched[0] ?? null;
-  let destination = matched[1] ?? (intent === 'income' ? matched[0] ?? null : null);
+  const aiSourceResolution = shouldFallbackToDeterministic ? null : resolveAccountFromAiHint(aiProposal?.sourceAccountHint, 'source', intent, modelAccounts);
+  const aiDestinationResolution = shouldFallbackToDeterministic ? null : resolveAccountFromAiHint(aiProposal?.destinationAccountHint, 'destination', intent, modelAccounts);
+
+  let source = aiSourceResolution?.account ?? matched[0] ?? null;
+  let destination = aiDestinationResolution?.account ?? matched[1] ?? (intent === 'income' ? matched[0] ?? null : null);
 
   if (intent === 'expense_debt_account' && !source) source = debtFromHint;
   if (intent === 'debt_payment') {
@@ -845,7 +972,12 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     destination = receivableRoles.destination ?? destination;
   }
   const finalIntent = inferFinalIntent(intent, source?.type, destination?.type, normalizedText);
-  const category = await semanticCategoryInferenceWithAI({ text, normalizedText, intent: finalIntent });
+  const hasAcceptedAiCategory = !shouldFallbackToDeterministic
+    && aiProposal?.confidence !== 'low'
+    && isApprovedCategory(aiProposal?.category);
+  const category = hasAcceptedAiCategory
+    ? aiProposal!.category
+    : await semanticCategoryInferenceWithAI({ text, normalizedText, intent: finalIntent });
 
   const draftForConstraints: TransactionIntent = transactionIntentSchema.parse({
     rawText: text,
@@ -865,10 +997,25 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     sourceAccount: source?.name.toLowerCase(),
     destinationAccount: destination?.name.toLowerCase(),
     missingFields: [],
-    missingFieldKinds: []
+    missingFieldKinds: [],
+    ...aiMetadata
   });
   applyIntentAccountConstraints(draftForConstraints);
-  const missingKinds = recomputeMissingKinds(draftForConstraints, explicitResolution.unresolvedMessage);
+  const deterministicMissingKinds = recomputeMissingKinds(draftForConstraints, explicitResolution.unresolvedMessage);
+  const aiMissingKinds = shouldFallbackToDeterministic
+    ? []
+    : pruneResolvedMissingKinds(draftForConstraints, mapAiMissingFieldKindsToDeterministic(aiProposal?.missingFields ?? []));
+  const missingKinds = Array.from(new Set([...aiMissingKinds, ...deterministicMissingKinds]));
+  if (process.env.NODE_ENV === 'development') {
+    console.info('[AIAccountDebug]', {
+      text,
+      aiIntent: aiProposal?.intent ?? null,
+      sourceAccountHint: aiProposal?.sourceAccountHint ?? null,
+      destinationAccountHint: aiProposal?.destinationAccountHint ?? null,
+      resolvedSourceAccount: draftForConstraints.sourceAccountName ?? null,
+      finalMissingFields: missingKinds
+    });
+  }
 
   const prompt = choosePrompt(missingKinds, finalIntent, normalizedText);
   const confidence = Math.max(0.4, missingKinds.length === 0 ? 0.94 : 0.62, explicitResolution.confidence);
@@ -902,9 +1049,18 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     nextPromptInputType: prompt.nextPromptInputType,
     nextPromptAllowedAccountTypes: prompt.nextPromptAllowedAccountTypes,
     confidence,
-    humanConfirmation
+    humanConfirmation,
+    ...aiMetadata
   });
-  return enforceFinancialConsistency(parsedResult);
+  const consistencyInput = { ...parsedResult };
+  const consistentResult = enforceFinancialConsistency(consistencyInput);
+  if (consistentResult.sourceAccountId !== parsedResult.sourceAccountId) aiMetadata.validationCorrections.push('sourceAccountAdjusted');
+  if (consistentResult.destinationAccountId !== parsedResult.destinationAccountId) aiMetadata.validationCorrections.push('destinationAccountAdjusted');
+  if (consistentResult.intent !== parsedResult.intent) aiMetadata.validationCorrections.push('intentAdjusted');
+  return {
+    ...consistentResult,
+    validationCorrections: aiMetadata.validationCorrections
+  };
 }
 
 function findAccountByName(accounts: EnrichedAccount[], value: string) {
@@ -918,9 +1074,13 @@ export async function applyFollowUpAnswer(
   accounts: InterpreterAccountContext[] = []
 ): TransactionIntent {
   const updated = { ...current };
-  const kind = updated.missingFieldKinds[0];
   const modelAccounts = enrichAccounts(accounts);
   const matchedAccount = findAccountByName(modelAccounts, answer);
+  const kind = matchedAccount
+    && ['expense_cash_like', 'expense_debt_account'].includes(updated.intent)
+    && updated.missingFieldKinds.includes('missingSourceAccount')
+    ? 'missingSourceAccount'
+    : updated.missingFieldKinds[0];
   const isAmbiguityClarification = (current.nextPrompt ?? '').startsWith('¿Te refieres a ');
   let resolvedSourceBySelection = false;
 
@@ -987,6 +1147,63 @@ export async function applyFollowUpAnswer(
   if (kind === 'missingSourceAccount' && !matchedAccount && answer.trim()) {
     updated.description = answer.trim();
     updated.category = localCategoryInference(updated.intent, normalize(answer));
+  }
+
+  const shouldReinterpretExpense =
+    ['expense_cash_like', 'expense_debt_account'].includes(updated.intent)
+    && (
+      ((kind === 'missingDescription' || kind === 'missingWhatWasPaid') && answer.trim().length > 0)
+      || (kind === 'missingSourceAccount'
+        && !matchedAccount
+        && /^(en|de|del|para)\b/i.test(answer.trim()))
+      || (kind === 'missingSourceAccount'
+        && matchedAccount?.type === 'credit_card'
+        && (
+          Boolean(updated.description?.trim() && updated.description !== updated.rawText)
+          || /\bcon\s+(?:tarjeta(?:\s+de\s+(?:credito|crédito))?|tdc|credito|crédito)\b/i.test(updated.rawText)
+          || /\ben\s+[a-z0-9]/i.test(updated.rawText)
+        )
+      )
+    );
+
+  if (shouldReinterpretExpense) {
+    const sourceName = updated.sourceAccountName ?? matchedAccount?.name ?? null;
+    const hasMeaningfulDescription = Boolean(updated.description?.trim() && updated.description !== updated.rawText);
+    const rebuiltText = (() => {
+      if (kind === 'missingSourceAccount' && sourceName && hasMeaningfulDescription) {
+        const normalizedConcept = /^(en|de|del|para)\b/i.test(updated.description!.trim()) ? updated.description!.trim() : `en ${updated.description!.trim()}`;
+        return `Gasté ${updated.amount} ${normalizedConcept} con ${sourceName}`.replace(/\s+/g, ' ').trim();
+      }
+      if (kind === 'missingSourceAccount' && sourceName) {
+        return updated.rawText.replace(/\bcon\s+(?:tarjeta(?:\s+de\s+(?:credito|crédito))?|tdc|credito|crédito)\b(?:\s+\w+)?/i, `con ${sourceName}`);
+      }
+      const concept = (kind === 'missingDescription' || kind === 'missingWhatWasPaid')
+        ? answer.trim()
+        : (updated.description?.trim() || answer.trim());
+      const normalizedConcept = /^(en|de|del|para)\b/i.test(concept) ? concept : `en ${concept}`;
+      const genericSourceFragment = /\bcon\s+(?:tarjeta(?:\s+de\s+(?:credito|crédito))?|tdc|credito|crédito)\b/i.test(updated.rawText)
+        ? ' con tarjeta de crédito'
+        : '';
+      return `Gasté ${updated.amount} ${normalizedConcept}${sourceName ? ` con ${sourceName}` : genericSourceFragment}`.replace(/\s+/g, ' ').trim();
+    })();
+    const reinterpreted = await interpretTransaction(rebuiltText, accounts);
+    if (process.env.NODE_ENV === 'development') {
+      console.info('[FollowUpSecondPassDebug]', {
+        originalText: current.rawText,
+        followUpAnswer: answer,
+        rebuiltText,
+        secondPassStarted: true,
+        secondPassInterpretationSource: reinterpreted.interpretationSource ?? null,
+        secondPassAiIntent: reinterpreted.aiIntent ?? null,
+        secondPassAiCategory: reinterpreted.aiCategory ?? null,
+        secondPassAiConfidence: reinterpreted.aiConfidence ?? null,
+        finalCategoryUsed: reinterpreted.category ?? null,
+        finalDescriptionUsed: reinterpreted.description ?? null,
+        finalSourceAccount: reinterpreted.sourceAccountName ?? null,
+        finalMissingFields: reinterpreted.missingFieldKinds ?? []
+      });
+    }
+    return reinterpreted;
   }
 
   const final = { ...updated };

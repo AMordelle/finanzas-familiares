@@ -5,9 +5,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { applyFollowUpAnswer, type TransactionIntent } from '@/lib/ai/transactionInterpreter';
+import { type TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import type { AccountOption } from '@/lib/db/queries';
-import { interpretTransactionAction, saveInterpretedTransactionAction } from '@/app/registro/actions';
+import { applyFollowUpAnswerAction, interpretTransactionAction, saveInterpretedTransactionAction } from '@/app/registro/actions';
 
 type Props = {
   accounts: AccountOption[];
@@ -61,15 +61,29 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
   const handleMissingFieldApply = () => {
     if (!intent || !followUpValue.trim()) return;
     startTransition(async () => {
-      const resolved = await applyFollowUpAnswer(intent, followUpValue.trim(), accounts);
+      const resolved = await applyFollowUpAnswerAction(intent, followUpValue.trim());
       setIntent(resolved);
       setFollowUpValue('');
     });
   };
 
-  const allowedAccounts = intent?.nextPromptAllowedAccountTypes
-    ? accounts.filter((account) => intent.nextPromptAllowedAccountTypes?.includes(account.type as never))
-    : accounts;
+  const allowedAccounts = useMemo(() => {
+    if (!intent?.nextPromptAllowedAccountTypes) return accounts;
+    const normalizeType = (type: string) => {
+      if (type === 'deuda') return 'credit_card';
+      if (type === 'fondo') return 'savings_fund';
+      if (type === 'inversion') return 'investment';
+      if (type === 'por_cobrar') return 'receivable';
+      return type;
+    };
+    const filtered = accounts.filter((account) => intent.nextPromptAllowedAccountTypes?.includes(normalizeType(account.type) as never));
+    const needsCreditCardSelector = intent.nextPromptAllowedAccountTypes.includes('credit_card');
+    if (needsCreditCardSelector && filtered.length === 0) {
+      const fallbackCreditCards = accounts.filter((account) => normalizeType(account.type) === 'credit_card' || account.type === 'deuda');
+      if (fallbackCreditCards.length > 0) return fallbackCreditCards;
+    }
+    return filtered;
+  }, [accounts, intent]);
 
   const handleSave = () => {
     if (!intent || intent.missingFieldKinds.length > 0 || isCreditExpenseSourceInvalid || isSavingRef.current) return;
