@@ -51,6 +51,8 @@ export const semanticInstructionSystemPrompt = [
   'Si el texto indica tdc, tarjeta de crédito, credito o credit card, prefiere intent=expense_debt_account.',
   'Si el texto indica tdd, tarjeta de débito, debito, debit card, cuenta bancaria, cuenta de débito o bank account, prefiere intent=expense_cash_like.',
   'Si solo dice tarjeta o con mi tarjeta sin marcador de crédito/débito, conserva la ambigüedad o fallback existente.',
+  'Para frases de entrada de dinero como "recibi", "me depositaron" o "deposito recibido", si el dinero entra en una cuenta operativa de negocio/ingresos (por ejemplo cuenta de caja de negocio), prefiere intent=income y category=ingreso_extra.',
+  'Evita clasificar esas frases como receivable_payment/pago_recibido salvo que exista evidencia clara de pago de una cuenta por cobrar de una persona específica.',
   'Cuando detectes cuenta origen/destino, conserva sourceAccountHint/destinationAccountHint exactamente como aparece en el texto.',
   'Ejemplo input: "Gaste 200 en autolavado con TDD BBVA" output: intent=expense_cash_like, sourceAccountHint="TDD BBVA", category=transporte.',
   'Ejemplo input: "Gaste 150 en Canva con TDC BBVA" output: intent=expense_debt_account, sourceAccountHint="TDC BBVA", category=servicios.',

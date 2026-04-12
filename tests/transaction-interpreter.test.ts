@@ -17,6 +17,7 @@ const accounts = [
   { id: 'acc-ef', name: 'Efectivo', type: 'operational_cash' },
   { id: 'acc-ban', name: 'Banco BBVA', type: 'operational_cash' },
   { id: 'acc-tdd', name: 'TDD BBVA', type: 'operational_cash', aliases: ['Débito BBVA'] },
+  { id: 'acc-prime', name: 'PrimeIPTV', type: 'operational_cash' },
   { id: 'acc-tdc', name: 'TDC BBVA', type: 'credit_card' },
   { id: 'acc-liv', name: 'Tarjeta Liverpool', type: 'credit_card', aliases: ['TDC Liverpool'] },
   { id: 'acc-loan', name: 'Préstamo auto', type: 'loan' },
@@ -189,6 +190,57 @@ describe('transaction interpreter semantic pipeline', () => {
     const missingDesc = await interpretTransaction('Gasté 300 con efectivo', accounts as any);
     expect(missingDesc.missingFieldKinds).toContain('missingWhatWasPaid');
     expect(missingDesc.nextPromptInputType).toBe('text_input');
+  });
+
+  it('reclassifies false receivable payment into income for business destination account', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'receivable_payment',
+      visibleType: 'Pago recibido',
+      amount: 220,
+      sourceAccountHint: 'PrimeIPTV',
+      destinationAccountHint: 'PrimeIPTV',
+      category: 'pago_recibido',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Interpretación inicial ambigua'
+    });
+
+    const result = await interpretTransaction('Recibi 220 del usuario MCarrillo en PrimeIPTV', accounts as any);
+    expect(result.intent).toBe('income');
+    expect(result.category).toBe('ingreso_extra');
+    expect(result.sourceAccountName).toBeNull();
+    expect(result.sourceAccountId).toBeNull();
+    expect(result.destinationAccountName).toBe('PrimeIPTV');
+  });
+
+  it('keeps business deposit phrasing as normal income (regression)', async () => {
+    const result = await interpretTransaction('Me depositaron 220 del usuario MCarrillo en PrimeIPTV', accounts as any);
+    expect(result.intent).toBe('income');
+    expect(result.category).toBe('ingreso_extra');
+    expect(result.destinationAccountName).toBe('PrimeIPTV');
+  });
+
+  it('preserves true receivable payment from person', async () => {
+    const result = await interpretTransaction('Juan Perez me pago 300 en efectivo', accounts as any);
+    expect(result.intent).toBe('receivable_payment');
+    expect(result.category).toBe('pago_recibido');
+    expect(result.destinationAccountName).toBe('Efectivo');
+  });
+
+  it('safety: prevents receivable source and destination from collapsing to the same account', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'receivable_payment',
+      visibleType: 'Pago recibido',
+      amount: 220,
+      sourceAccountHint: 'PrimeIPTV',
+      destinationAccountHint: 'PrimeIPTV',
+      category: 'pago_recibido',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Ambiguo'
+    });
+    const result = await interpretTransaction('Recibi 220 en PrimeIPTV', accounts as any);
+    expect(result.sourceAccountId).not.toBe(result.destinationAccountId);
   });
 
   it('D: unknown explicit credit card never auto-maps and asks clarification', async () => {

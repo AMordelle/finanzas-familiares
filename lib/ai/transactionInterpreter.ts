@@ -144,6 +144,16 @@ type AiInterpretationMetadata = {
   validationCorrections: string[];
 };
 
+function isCategoryCompatibleWithIntent(
+  intent: z.infer<typeof financialIntentSchema>,
+  category: string | null | undefined
+) {
+  if (!category) return false;
+  if (intent === 'income') return ['ingreso_fijo', 'ingreso_extra', 'reembolso', 'otros_gastos'].includes(category);
+  if (intent === 'receivable_payment') return category === 'pago_recibido';
+  return true;
+}
+
 const visibleTypeMap: Record<z.infer<typeof financialIntentSchema>, string> = {
   income: 'Ingreso',
   expense_cash_like: 'Gasto con efectivo/banco',
@@ -589,6 +599,15 @@ function hasExplicitDebitExpenseMarker(normalizedText: string) {
   return /(con)\s+([a-z0-9\s]*\b(?:tdd|debito|tarjeta de debito)\b[a-z0-9\s]*)$/.test(normalizedText);
 }
 
+function hasIncomeReceiveLanguage(normalizedText: string) {
+  return /\b(recibi|recibo|me depositaron|depositaron|deposito recibido)\b/.test(normalizedText);
+}
+
+function isBusinessIncomeAccount(account: EnrichedAccount | null | undefined) {
+  if (!account || account.type !== 'operational_cash') return false;
+  return /\b(primeiptv|iptv|negocio|business|empresa|ventas|caja)\b/.test(account.normalized_name);
+}
+
 function mapAiMissingFieldKindsToDeterministic(input: string[]) {
   const allowed = new Set<z.infer<typeof missingFieldKindSchema>>([
     'missingSourceAccount',
@@ -869,7 +888,7 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     aiProposal = null;
   }
   const shouldFallbackToDeterministic = !aiProposal || aiProposal.confidence === 'low';
-  const intent = shouldFallbackToDeterministic
+  let intent = shouldFallbackToDeterministic
     ? inferIntent(normalizedText, matched)
     : aiProposal.intent;
   const amount = (!shouldFallbackToDeterministic && aiProposal?.amount && Number.isFinite(aiProposal.amount))
@@ -946,6 +965,37 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
       ? receivableRoles.destination
       : (destination ?? sourceFromHint);
   }
+  const shouldReclassifyReceivableAsIncome =
+    intent === 'receivable_payment'
+    && !receivableRoles.receivableSource
+    && hasIncomeReceiveLanguage(normalizedText)
+    && isBusinessIncomeAccount(destination);
+  if (shouldReclassifyReceivableAsIncome) {
+    if (process.env.NODE_ENV === 'development') {
+      console.info('[ReceivableReclassify]', {
+        reason: 'no receivable source + income language + business destination',
+        originalIntent: 'receivable_payment',
+        destinationAccountName: destination?.name ?? null
+      });
+    }
+    intent = 'income';
+    source = null;
+  }
+  if (intent === 'receivable_payment' && source?.id && destination?.id && source.id === destination.id) {
+    if (isBusinessIncomeAccount(destination) && hasIncomeReceiveLanguage(normalizedText)) {
+      if (process.env.NODE_ENV === 'development') {
+        console.info('[ReceivableReclassify]', {
+          reason: 'source/destination collapsed to same account with income-like language',
+          originalIntent: 'receivable_payment',
+          destinationAccountName: destination.name
+        });
+      }
+      intent = 'income';
+      source = null;
+    } else {
+      source = null;
+    }
+  }
   if (explicitResolution.account && explicitResolution.confidence >= 0.85) {
     if (intent === 'income' || explicitReference?.role === 'destination') destination = explicitResolution.account;
     else source = explicitResolution.account;
@@ -974,7 +1024,8 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const finalIntent = inferFinalIntent(intent, source?.type, destination?.type, normalizedText);
   const hasAcceptedAiCategory = !shouldFallbackToDeterministic
     && aiProposal?.confidence !== 'low'
-    && isApprovedCategory(aiProposal?.category);
+    && isApprovedCategory(aiProposal?.category)
+    && isCategoryCompatibleWithIntent(finalIntent, aiProposal?.category);
   const category = hasAcceptedAiCategory
     ? aiProposal!.category
     : await semanticCategoryInferenceWithAI({ text, normalizedText, intent: finalIntent });
