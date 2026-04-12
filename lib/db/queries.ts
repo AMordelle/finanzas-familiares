@@ -727,6 +727,16 @@ function inferStoredMovementCategory(lines: Array<{ category: string }>) {
   return null;
 }
 
+function inferSemanticMovementCategory(action: SupportedMovementAction | null, lines: Array<{ category: string }>) {
+  if (action === 'prestamo_otorgado') return 'prestamo_otorgado';
+  if (action === 'pago_recibido') return 'pago_recibido';
+  if (action === 'pago_deuda') return 'pago_deuda';
+  if (action === 'transferencia') return 'transferencia';
+  if (action === 'objetivo_aporte') return 'objetivo_aporte';
+
+  return inferStoredMovementCategory(lines) ?? 'general';
+}
+
 function inferMovementAction(lines: Array<{ type: string; category: string }>): SupportedMovementAction | null {
   const has = (type: string, category: string) => lines.some((line) => line.type === type && line.category === category);
 
@@ -744,6 +754,68 @@ function inferMovementAction(lines: Array<{ type: string; category: string }>): 
   }
 
   return null;
+}
+
+type GroupAccountContext = {
+  groupNote?: string | null;
+  sourceAccountName: string | null;
+  destinationAccountName: string | null;
+  action: SupportedMovementAction | null;
+  householdAccounts: Array<{ id: string; name: string; type: string }>;
+};
+
+function inferCounterpartyAccountFromNote(
+  note: string | null | undefined,
+  candidateAccounts: Array<{ id: string; name: string }>
+) {
+  if (!note?.trim() || !candidateAccounts.length) return null;
+  const normalizedNote = note.toLowerCase();
+
+  const matchedByLength = [...candidateAccounts]
+    .sort((left, right) => right.name.length - left.name.length)
+    .find((account) => normalizedNote.includes(account.name.toLowerCase()));
+
+  return matchedByLength ?? null;
+}
+
+function reconstructMovementAccounts({
+  groupNote,
+  sourceAccountName,
+  destinationAccountName,
+  action,
+  householdAccounts
+}: GroupAccountContext) {
+  if (!action) {
+    return { sourceAccountName, destinationAccountName };
+  }
+
+  if (destinationAccountName && sourceAccountName) {
+    return { sourceAccountName, destinationAccountName };
+  }
+
+  if (action === 'prestamo_otorgado') {
+    const receivableAccount = inferCounterpartyAccountFromNote(
+      groupNote,
+      householdAccounts.filter((account) => isReceivableType(account.type))
+    );
+    return {
+      sourceAccountName,
+      destinationAccountName: destinationAccountName ?? receivableAccount?.name ?? null
+    };
+  }
+
+  if (action === 'pago_recibido') {
+    const receivableAccount = inferCounterpartyAccountFromNote(
+      groupNote,
+      householdAccounts.filter((account) => isReceivableType(account.type))
+    );
+    return {
+      sourceAccountName: sourceAccountName ?? receivableAccount?.name ?? null,
+      destinationAccountName
+    };
+  }
+
+  return { sourceAccountName, destinationAccountName };
 }
 
 export async function getMovementsHistory(client: SupabaseClientLike = supabaseAdmin): Promise<MovementsHistoryData> {
@@ -785,30 +857,41 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
     happened_at?: string;
   }>;
 
-  const accountIds = Array.from(new Set(transactions.map((tx) => tx.account_id).filter((id): id is string => Boolean(id))));
-  const { data: accountsData } = accountIds.length
-    ? await client.from('accounts').select('id,name').in('id', accountIds)
-    : { data: [] as Array<{ id: string; name: string }> };
+  const { data: accountsData } = await client
+    .from('accounts')
+    .select('id,name,type')
+    .eq('household_id', householdId);
 
-  const accountById = new Map((accountsData ?? []).map((account: { id: string; name: string }) => [account.id, account.name]));
+  const householdAccounts = (accountsData ?? []) as Array<{ id: string; name: string; type: string }>;
+  const accountById = new Map(householdAccounts.map((account) => [account.id, account.name]));
 
   const movements = groups.map<MovementHistoryItem>((group) => {
     const lines = transactions.filter((tx) => tx.group_id === group.id);
+    const action = inferMovementAction(lines);
     const debitLine = lines.find((tx) => tx.type === 'debit');
     const creditLine = lines.find((tx) => tx.type === 'credit');
     const happenedAt = lines.find((tx) => Boolean(tx.happened_at))?.happened_at ?? group.created_at;
+    const baseSourceAccountName = creditLine?.account_id ? accountById.get(creditLine.account_id) ?? null : null;
+    const baseDestinationAccountName = debitLine?.account_id ? accountById.get(debitLine.account_id) ?? null : null;
+    const reconstructedAccounts = reconstructMovementAccounts({
+      groupNote: group.note,
+      sourceAccountName: baseSourceAccountName,
+      destinationAccountName: baseDestinationAccountName,
+      action,
+      householdAccounts
+    });
 
     return {
       id: group.id,
       fecha: happenedAt,
       tipoMovimiento: inferMovementType(lines),
-      categoria: inferStoredMovementCategory(lines) ?? 'general',
+      categoria: inferSemanticMovementCategory(action, lines),
       descripcion: group.note?.trim() ? group.note : 'Movimiento sin descripción',
       monto: Number(debitLine?.amount ?? creditLine?.amount ?? 0),
-      cuentaOrigen: creditLine?.account_id ? accountById.get(creditLine.account_id) ?? null : null,
-      cuentaDestino: debitLine?.account_id ? accountById.get(debitLine.account_id) ?? null : null,
-      puedeEditar: Boolean(inferMovementAction(lines)),
-      motivoNoEditable: inferMovementAction(lines) ? null : 'Este tipo de movimiento aún no se puede editar de forma segura.'
+      cuentaOrigen: reconstructedAccounts.sourceAccountName,
+      cuentaDestino: reconstructedAccounts.destinationAccountName,
+      puedeEditar: Boolean(action),
+      motivoNoEditable: action ? null : 'Este tipo de movimiento aún no se puede editar de forma segura.'
     };
   });
 
