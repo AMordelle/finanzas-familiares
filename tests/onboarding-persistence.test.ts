@@ -711,6 +711,67 @@ describe('onboarding persistence', () => {
     delete process.env.DEV_PROFILE_ID;
   });
 
+  it('movimientos reconstruye préstamo otorgado agrupado con destino y categoría semántica', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-loan-history', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-loan-history', profile_id: 'profile-loan-history', household_id: 'house-loan-history' });
+    fakeClient.db.accounts.push(
+      { id: 'acc-cash-loan-history', household_id: 'house-loan-history', name: 'Efectivo', type: 'operativa', balance: '5000' },
+      { id: 'acc-silvia-loan-history', household_id: 'house-loan-history', name: 'Silvia', type: 'por_cobrar', balance: '3000' }
+    );
+    fakeClient.db.transaction_groups.push({
+      id: 'g-loan-history',
+      household_id: 'house-loan-history',
+      note: 'Le preste 3000 a Silvia con Efectivo',
+      created_at: '2024-03-03T10:00:00.000Z'
+    });
+    fakeClient.db.transactions.push(
+      { id: 't-loan-history-1', group_id: 'g-loan-history', account_id: null, type: 'debit', category: 'por_cobrar', amount: '3000.00', happened_at: '2024-03-03T10:00:00.000Z' },
+      { id: 't-loan-history-2', group_id: 'g-loan-history', account_id: 'acc-cash-loan-history', type: 'credit', category: 'salida_cuenta', amount: '3000.00', happened_at: '2024-03-03T10:00:00.000Z' }
+    );
+
+    process.env.DEV_PROFILE_ID = 'profile-loan-history';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getMovementsHistory } = await import('@/lib/db/queries');
+
+    const result = await getMovementsHistory();
+    expect(result.movements[0]?.cuentaOrigen).toBe('Efectivo');
+    expect(result.movements[0]?.cuentaDestino).toBe('Silvia');
+    expect(result.movements[0]?.categoria).toBe('prestamo_otorgado');
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('movimientos no muestra por_cobrar cuando existe categoría semántica de préstamo otorgado', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-loan-category', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-loan-category', profile_id: 'profile-loan-category', household_id: 'house-loan-category' });
+    fakeClient.db.accounts.push(
+      { id: 'acc-cash-loan-category', household_id: 'house-loan-category', name: 'Efectivo', type: 'operativa', balance: '5000' },
+      { id: 'acc-silvia-loan-category', household_id: 'house-loan-category', name: 'Silvia', type: 'por_cobrar', balance: '3000' }
+    );
+    fakeClient.db.transaction_groups.push({
+      id: 'g-loan-category',
+      household_id: 'house-loan-category',
+      note: 'Préstamo a Silvia',
+      created_at: '2024-03-04T10:00:00.000Z'
+    });
+    fakeClient.db.transactions.push(
+      { id: 't-loan-category-1', group_id: 'g-loan-category', account_id: null, type: 'debit', category: 'por_cobrar', amount: '700.00', happened_at: '2024-03-04T10:00:00.000Z' },
+      { id: 't-loan-category-2', group_id: 'g-loan-category', account_id: 'acc-cash-loan-category', type: 'credit', category: 'salida_cuenta', amount: '700.00', happened_at: '2024-03-04T10:00:00.000Z' }
+    );
+
+    process.env.DEV_PROFILE_ID = 'profile-loan-category';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getMovementsHistory } = await import('@/lib/db/queries');
+
+    const result = await getMovementsHistory();
+    expect(result.movements[0]?.categoria).toBe('prestamo_otorgado');
+    expect(result.movements[0]?.categoria).not.toBe('por_cobrar');
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
 
   it('actualiza saldos y conserva OFH de configuración tras gasto e ingreso', async () => {
     const fakeClient = createFakeSupabase();
