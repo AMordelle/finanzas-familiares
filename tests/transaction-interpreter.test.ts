@@ -442,6 +442,13 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(result.nextPrompt).not.toBe('¿Con qué tarjeta de crédito pagaste?');
   });
 
+  it('hotfix A2: autolavado con TDD se clasifica como expense_cash_like (no deuda)', async () => {
+    const result = await interpretTransaction('Gaste 200 en autolavado de la camioneta con TDD BBVA', accounts as any);
+    expect(result.intent).toBe('expense_cash_like');
+    expect(result.sourceAccountName).toBe('TDD BBVA');
+    expect(result.category).toBe('transporte');
+  });
+
   it('hotfix B: gasto con tarjeta de débito explícita se mantiene cash-like', async () => {
     const result = await interpretTransaction('Gaste 250 en taxi con tarjeta de débito BBVA', accounts as any);
     expect(result.visibleType).toBe('Gasto con efectivo/banco');
@@ -449,6 +456,12 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(result.sourceAccountName).toBe('TDD BBVA');
     expect(result.destinationAccountName).toBeNull();
     expect(result.nextPrompt).not.toBe('¿Con qué tarjeta de crédito pagaste?');
+  });
+
+  it('hotfix B1: gasto con tarjeta de débito genérica se mantiene cash-like', async () => {
+    const result = await interpretTransaction('Gaste 250 en taxi con tarjeta de débito', accounts as any);
+    expect(result.intent).toBe('expense_cash_like');
+    expect(result.sourceAccountType).toBe('operational_cash');
   });
 
   it('hotfix B2: gasto con débito BBVA resuelve cuenta operacional existente', async () => {
