@@ -17,5 +17,7 @@ describe('semantic instruction response schema', () => {
     expect(semanticInstructionSystemPrompt).toContain('tdd, tarjeta de débito, debito, debit card');
     expect(semanticInstructionSystemPrompt).toContain('intent=expense_cash_like');
     expect(semanticInstructionSystemPrompt).toContain('BBVA, Santander, HSBC, Scotiabank');
+    expect(semanticInstructionSystemPrompt).toContain('si el dinero entra en una cuenta operativa de negocio/ingresos');
+    expect(semanticInstructionSystemPrompt).toContain('prefiere intent=income y category=ingreso_extra');
   });
 });
