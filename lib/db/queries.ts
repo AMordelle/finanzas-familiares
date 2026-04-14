@@ -561,7 +561,7 @@ export async function getFinancialRadar(householdId?: string, client: SupabaseCl
 
   const [accountsResult, obligationsResult, variableSpendingResult, groupsResult] = await Promise.all([
     client.from('accounts').select('name,type,balance').eq('household_id', resolvedHouseholdId).eq('is_active', true),
-    client.from('obligations').select('amount,due_day').eq('household_id', resolvedHouseholdId),
+    client.from('obligations').select('name,amount,due_day').eq('household_id', resolvedHouseholdId),
     client.from('variable_spending_profiles').select('monthly_estimate').eq('household_id', resolvedHouseholdId),
     client.from('transaction_groups').select('id').eq('household_id', resolvedHouseholdId)
   ]);
@@ -582,8 +582,9 @@ export async function getFinancialRadar(householdId?: string, client: SupabaseCl
       balance: toFiniteNumber(account.balance, 0)
     }));
 
-  const obligations = ((obligationsResult.data ?? []) as Array<{ amount: string | number; due_day: number | null }>)
+  const obligations = ((obligationsResult.data ?? []) as Array<{ name?: string; amount: string | number; due_day: number | null }>)
     .map((obligation) => ({
+      name: obligation.name ?? '',
       amount: toFiniteNumber(obligation.amount, 0),
       dueDay: obligation.due_day
     }));

@@ -61,7 +61,7 @@ function createFakeSupabase() {
     household_members: [{ id: 'hm-1', profile_id: 'profile-1', household_id: 'house-1' }],
     financial_snapshots: [{ id: 'snap-1', household_id: 'house-1', payload: JSON.stringify({ monthlyOFH: 10000, weeklyOFH: 2300, availableMoney: 5000, diagnoses: [], recommendations: [] }) }],
     accounts: [{ id: 'acc-1', household_id: 'house-1', name: 'Cuenta TDD', type: 'operational_cash', balance: '3000', is_active: true }],
-    obligations: [{ id: 'ob-1', household_id: 'house-1', amount: '1200', due_day: 18 }],
+    obligations: [{ id: 'ob-1', household_id: 'house-1', name: 'BBVA', amount: '1200', due_day: 18 }],
     variable_spending_profiles: [{ id: 'v-1', household_id: 'house-1', monthly_estimate: '2600' }],
     transaction_groups: [{ id: 'tg-1', household_id: 'house-1' }],
     transactions: [{ id: 'tx-1', group_id: 'tg-1', type: 'debit', amount: '800', happened_at: '2026-04-13T00:00:00Z' }]
@@ -90,5 +90,6 @@ describe('dashboard data regression with radar', () => {
     expect(dashboard.recommendations.length).toBeGreaterThan(0);
     expect(dashboard.financialRadar).not.toBeNull();
     expect(dashboard.financialRadar?.upcomingLoad).toBeGreaterThan(0);
+    expect(dashboard.financialRadar?.windowDays).toBe(7);
   });
 });

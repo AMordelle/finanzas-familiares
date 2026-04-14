@@ -66,4 +66,30 @@ describe('financial radar calculation', () => {
     expect(presion.riskText).toContain('Riesgo');
     expect(presion.nextBestStep.length).toBeGreaterThan(20);
   });
+
+  it('usa contexto real de obligaciones próximas en el mensaje', () => {
+    const radar = calculateFinancialRadar({
+      accounts: [{ type: 'operativa', balance: 3500 }],
+      recentTransactions: [{ type: 'debit', amount: 700 }],
+      obligations: [{ name: 'BBVA', amount: 1800, dueDay: 16 }],
+      now: new Date('2026-04-14T12:00:00Z')
+    });
+
+    expect(radar.windowDays).toBe(7);
+    expect(radar.upcoming).toContain('BBVA');
+    expect(radar.upcoming).toContain('vence');
+  });
+
+  it('mantiene narrativa coherente entre margen y estado', () => {
+    const estable = calculateFinancialRadar({
+      accounts: [{ type: 'operativa', balance: 6000 }],
+      recentTransactions: [{ type: 'debit', amount: 700 }],
+      obligations: [{ amount: 500, dueDay: 22 }],
+      now: new Date('2026-04-14T12:00:00Z')
+    });
+
+    expect(estable.estimatedMargin).toBeGreaterThan(0);
+    expect(estable.status).toBe('estable');
+    expect(estable.statusReason).toContain('margen');
+  });
 });
