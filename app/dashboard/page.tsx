@@ -1,15 +1,11 @@
+import React from 'react';
 import Link from 'next/link';
 import { AppShell } from '@/components/app-shell';
 import { MetricCard } from '@/components/metric-card';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { getDashboardData } from '@/lib/db/queries';
-
-const statusLabelMap = {
-  healthy: 'Saludable',
-  warning: 'Atención',
-  critical: 'Crítico'
-} as const;
+import { AnalyticsAdvisorCards } from '@/components/dashboard/analytics-advisor-cards';
 
 export default async function DashboardPage() {
   const data = await getDashboardData();
@@ -20,9 +16,7 @@ export default async function DashboardPage() {
   const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
   const financialPressure = data.financialPressure;
   const financialInsight = data.financialInsight;
-  const hasCoverage = financialPressure ? financialPressure.gap <= 0 : false;
-  const absoluteGap = financialPressure ? Math.abs(financialPressure.gap) : 0;
-  const breakdown = financialPressure?.breakdown;
+  const financialRadar = data.financialRadar;
 
   if (!data.hasHousehold) {
     return (
@@ -47,32 +41,8 @@ export default async function DashboardPage() {
         <MetricCard label="Objetivo semanal" value={`$${weeklyOFH.toLocaleString('es-MX')}`} />
         <MetricCard label="Dinero disponible hoy" value={`$${availableMoney.toLocaleString('es-MX')}`} />
       </section>
+      <AnalyticsAdvisorCards radar={financialRadar} financialPressure={financialPressure} />
       <section className="mt-4 grid gap-4 md:grid-cols-2">
-        {financialPressure ? (
-          <Card>
-            <h3 className="font-semibold">Estado financiero actual</h3>
-            <div className="mt-3 space-y-2 text-sm text-slate-700">
-              <p><span className="font-medium text-slate-900">Dinero necesario hoy:</span> ${financialPressure.requiredMoney.toLocaleString('es-MX')}</p>
-              <p><span className="font-medium text-slate-900">Dinero disponible:</span> ${financialPressure.availableMoney.toLocaleString('es-MX')}</p>
-              <p className={hasCoverage ? 'text-emerald-700' : 'text-rose-700'}>
-                <span className="font-medium">Brecha actual:</span>{' '}
-                {hasCoverage ? `Estás cubierto. Te sobran $${absoluteGap.toLocaleString('es-MX')}.` : `Te faltan $${absoluteGap.toLocaleString('es-MX')}.`}
-              </p>
-              <p>
-                <span className="font-medium text-slate-900">Estado:</span> {statusLabelMap[financialPressure.status]}
-              </p>
-            <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-              <p className="font-medium text-slate-900">¿De dónde sale este cálculo?</p>
-              <div className="mt-2 space-y-1">
-                <p><span className="font-medium text-slate-900">Deudas próximas:</span> ${Number(breakdown?.debts ?? 0).toLocaleString('es-MX')}</p>
-                <p><span className="font-medium text-slate-900">Gastos fijos próximos:</span> ${Number(breakdown?.fixedExpenses ?? 0).toLocaleString('es-MX')}</p>
-                <p><span className="font-medium text-slate-900">Gasto operativo estimado:</span> ${Number(breakdown?.operationalEstimate ?? 0).toLocaleString('es-MX')}</p>
-              </div>
-              <p className="mt-2 text-xs text-slate-600">Dinero necesario hoy = deudas + gastos fijos + gasto operativo estimado</p>
-            </div>
-            </div>
-          </Card>
-        ) : null}
         {financialInsight ? (
           <Card>
             <h3 className="font-semibold">Explicación financiera</h3>

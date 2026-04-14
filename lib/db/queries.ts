@@ -12,6 +12,7 @@ import {
   calculateWeeklyOFH
 } from '@/lib/financial/engine';
 import { calculateFinancialPressure, generateFinancialInsight } from '@/lib/finance/financialPressure';
+import { calculateFinancialRadar, type FinancialRadar } from '@/lib/finance/financialRadar';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
 
@@ -146,6 +147,7 @@ type DashboardData = {
     topCauses: string[];
     suggestions: string[];
   } | null;
+  financialRadar: FinancialRadar | null;
 };
 
 type SupabaseClientLike = typeof supabaseAdmin;
@@ -498,7 +500,8 @@ function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
     diagnoses: diagnoses.length ? diagnoses : ['Sin diagnósticos disponibles por el momento.'],
     recommendations: recommendations.length ? recommendations : ['Aún no hay recomendaciones; registra movimientos para enriquecer el análisis.'],
     financialPressure,
-    financialInsight
+    financialInsight,
+    financialRadar: null
   };
 }
 
@@ -516,7 +519,8 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
       diagnoses: ['Completa tu onboarding para obtener diagnóstico.'],
       recommendations: ['Configura hogar, cuentas e ingresos iniciales para activar recomendaciones.'],
       financialPressure: null,
-      financialInsight: null
+      financialInsight: null,
+      financialRadar: null
     };
   }
 
@@ -540,12 +544,67 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
       diagnoses: ['Sin snapshot financiero inicial todavía.'],
       recommendations: ['Finaliza onboarding para generar indicadores automáticos.'],
       financialPressure: null,
-      financialInsight: null
+      financialInsight: null,
+      financialRadar: null
     };
   }
 
   const parsed = normalizeSnapshotPayload(data.payload);
+  const financialRadar = await getFinancialRadar(householdId, client);
+  parsed.financialRadar = financialRadar;
   return parsed;
+}
+
+export async function getFinancialRadar(householdId?: string, client: SupabaseClientLike = supabaseAdmin): Promise<FinancialRadar | null> {
+  const resolvedHouseholdId = householdId ?? await getDefaultHouseholdId(client);
+  if (!resolvedHouseholdId) return null;
+
+  const [accountsResult, obligationsResult, variableSpendingResult, groupsResult] = await Promise.all([
+    client.from('accounts').select('name,type,balance').eq('household_id', resolvedHouseholdId).eq('is_active', true),
+    client.from('obligations').select('name,amount,due_day').eq('household_id', resolvedHouseholdId),
+    client.from('variable_spending_profiles').select('monthly_estimate').eq('household_id', resolvedHouseholdId),
+    client.from('transaction_groups').select('id').eq('household_id', resolvedHouseholdId)
+  ]);
+  const groupIds = ((groupsResult.data ?? []) as Array<{ id: string }>).map((group) => group.id);
+  const transactionsResult = groupIds.length
+    ? await client
+        .from('transactions')
+        .select('type,amount,happened_at')
+        .in('group_id', groupIds)
+        .order('happened_at', { ascending: false })
+        .limit(60)
+    : { data: [], error: null };
+
+  const accounts = ((accountsResult.data ?? []) as Array<{ name?: string | null; type: string; balance: string | number }>)
+    .map((account) => ({
+      name: account.name ?? '',
+      type: account.type,
+      balance: toFiniteNumber(account.balance, 0)
+    }));
+
+  const obligations = ((obligationsResult.data ?? []) as Array<{ name?: string; amount: string | number; due_day: number | null }>)
+    .map((obligation) => ({
+      name: obligation.name ?? '',
+      amount: toFiniteNumber(obligation.amount, 0),
+      dueDay: obligation.due_day
+    }));
+
+  const recentTransactions = ((transactionsResult.data ?? []) as Array<{ type: string; amount: string | number; happened_at?: string | null }>)
+    .map((tx) => ({
+      type: tx.type,
+      amount: toFiniteNumber(tx.amount, 0),
+      happenedAt: tx.happened_at ?? null
+    }));
+
+  const fallbackMonthlyEstimate = ((variableSpendingResult.data ?? []) as Array<{ monthly_estimate: string | number }>)
+    .reduce((acc, item) => acc + toFiniteNumber(item.monthly_estimate, 0), 0);
+
+  return calculateFinancialRadar({
+    accounts,
+    obligations,
+    recentTransactions,
+    fallbackMonthlyEstimate
+  });
 }
 
 export async function getAccountsForRegistration(client: SupabaseClientLike = supabaseAdmin): Promise<AccountOption[]> {
