@@ -12,6 +12,7 @@ export type FinancialRadar = {
   statusReason: string;
   availableNow: number;
   upcomingLoad: number;
+  nearFutureLoad: number;
   estimatedMargin: number;
 };
 
@@ -34,6 +35,7 @@ export type RadarTransaction = {
 };
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
+const WINDOW_DAYS = 7;
 
 function roundMoney(value: number) {
   return Number(value.toFixed(2));
@@ -51,17 +53,8 @@ function isUsableMoneyAccount(account: RadarAccount) {
   const type = normalizeType(account.type);
   const name = normalizeName(account.name);
   if (['deuda', 'credit_card', 'loan', 'por_cobrar', 'receivable'].includes(type)) return false;
-
   if (['operativa', 'operational_cash', 'fondo', 'savings_fund', 'investment', 'inversion'].includes(type)) return true;
-
   return ['tdd', 'banco', 'efectivo', 'primeiptv', 'caja', 'ahorro'].some((token) => name.includes(token));
-}
-
-function isImmediateLiquidityAccount(account: RadarAccount) {
-  const type = normalizeType(account.type);
-  const name = normalizeName(account.name);
-  if (['operativa', 'operational_cash'].includes(type)) return true;
-  return ['tdd', 'banco', 'efectivo', 'caja'].some((token) => name.includes(token));
 }
 
 function isExpenseTransaction(tx: RadarTransaction) {
@@ -81,44 +74,56 @@ function estimateWeeklyBaseSpending(recentTransactions: RadarTransaction[], fall
     })
     .reduce((acc, tx) => acc + Math.max(Number(tx.amount) || 0, 0), 0);
 
-  if (recentExpenseTotal > 0) {
-    return roundMoney(recentExpenseTotal / 4);
-  }
-
+  if (recentExpenseTotal > 0) return roundMoney(recentExpenseTotal / 4);
   return roundMoney(Math.max(fallbackMonthlyEstimate, 0) / 4.33);
 }
 
-function estimateDueSoonObligations(obligations: RadarObligation[], now: Date) {
-  if (!obligations.length) return { total: 0, highlights: [] as string[] };
-
+function daysUntilDue(dueDay: number, now: Date) {
   const today = now.getDate();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const safeDueDay = Math.min(Math.max(dueDay, 1), daysInMonth);
+  if (safeDueDay >= today) return safeDueDay - today;
+  return daysInMonth - today + safeDueDay;
+}
 
-  const details = obligations.reduce((acc, obligation) => {
-      const amount = Math.max(Number(obligation.amount) || 0, 0);
-      if (amount <= 0) return acc;
+function splitObligationsByHorizon(obligations: RadarObligation[], now: Date) {
+  const output = {
+    mandatoryTotal: 0,
+    nearFutureTotal: 0,
+    mandatoryHighlights: [] as string[],
+    nearFutureHighlights: [] as string[]
+  };
 
-      if (!obligation.dueDay || obligation.dueDay < 1 || obligation.dueDay > 31) {
-        acc.total += amount / 4.33;
-        return acc;
-      }
+  for (const obligation of obligations) {
+    const amount = Math.max(Number(obligation.amount) || 0, 0);
+    if (amount <= 0) continue;
 
-      const safeDueDay = Math.min(obligation.dueDay, daysInMonth);
-      const dueSoonThisMonth = safeDueDay >= today && safeDueDay - today <= 10;
-      const dueSoonNextMonth = safeDueDay < today && (daysInMonth - today + safeDueDay) <= 10;
+    if (!obligation.dueDay || obligation.dueDay < 1 || obligation.dueDay > 31) {
+      output.mandatoryTotal += amount / 4.33;
+      continue;
+    }
 
-      if (dueSoonThisMonth || dueSoonNextMonth) {
-        const daysUntil = dueSoonThisMonth ? safeDueDay - today : (daysInMonth - today + safeDueDay);
-        acc.total += amount;
-        if (obligation.name) {
-          acc.highlights.push(`En ${daysUntil} días vence ${obligation.name}.`);
-        }
-      }
+    const dueInDays = daysUntilDue(obligation.dueDay, now);
+    const named = obligation.name?.trim();
 
-      return acc;
-    }, { total: 0, highlights: [] as string[] });
+    if (dueInDays <= WINDOW_DAYS) {
+      output.mandatoryTotal += amount;
+      if (named) output.mandatoryHighlights.push(`En ${dueInDays} días vence ${named}.`);
+      continue;
+    }
 
-  return { total: roundMoney(details.total), highlights: details.highlights.slice(0, 2) };
+    if (dueInDays <= 14) {
+      output.nearFutureTotal += amount;
+      if (named) output.nearFutureHighlights.push(`En ${dueInDays} días viene ${named}.`);
+    }
+  }
+
+  return {
+    mandatoryTotal: roundMoney(output.mandatoryTotal),
+    nearFutureTotal: roundMoney(output.nearFutureTotal),
+    mandatoryHighlights: output.mandatoryHighlights.slice(0, 2),
+    nearFutureHighlights: output.nearFutureHighlights.slice(0, 2)
+  };
 }
 
 export function calculateFinancialRadar(input: {
@@ -135,67 +140,61 @@ export function calculateFinancialRadar(input: {
     usableAccounts.reduce((acc, account) => acc + Math.max(Number(account.balance) || 0, 0), 0)
   );
 
-  const immediateLiquidity = roundMoney(
-    usableAccounts
-      .filter((account) => isImmediateLiquidityAccount(account))
-      .reduce((acc, account) => acc + Math.max(Number(account.balance) || 0, 0), 0)
-  );
-
-  const reserveLiquidity = roundMoney(Math.max(availableNow - immediateLiquidity, 0));
-
   const weeklyBaseSpending = estimateWeeklyBaseSpending(input.recentTransactions, input.fallbackMonthlyEstimate ?? 0);
-  const dueSoon = estimateDueSoonObligations(input.obligations, now);
-  const upcomingLoad = roundMoney(weeklyBaseSpending + dueSoon.total);
+  const obligations = splitObligationsByHorizon(input.obligations, now);
 
+  const upcomingLoad = roundMoney(weeklyBaseSpending + obligations.mandatoryTotal);
+  const nearFutureLoad = obligations.nearFutureTotal;
   const estimatedMargin = roundMoney(availableNow - upcomingLoad);
-  const marginRatio = upcomingLoad > 0 ? estimatedMargin / upcomingLoad : 1;
 
-  let status: FinancialRadarStatus = 'estable';
-  if (estimatedMargin < 0 || marginRatio < 0.1) {
+  const healthyMargin = Math.max(upcomingLoad * 0.2, 500);
+
+  let status: FinancialRadarStatus = 'atencion';
+  if (availableNow >= upcomingLoad + healthyMargin) {
+    status = 'estable';
+  } else if (availableNow < upcomingLoad) {
     status = 'presion';
-  } else if (marginRatio < 0.35) {
-    status = 'atencion';
   }
 
   const actionTodayByStatus: Record<FinancialRadarStatus, string> = {
-    estable: 'Hoy: puedes apartar una parte a colchón.',
-    atencion: 'Hoy: evita gastos extra y cuida liquidez.',
-    presion: 'Hoy: protege caja y prioriza pagos clave.'
+    estable: 'Hoy: puedes separar una parte para colchón.',
+    atencion: 'Hoy: cubre lo esencial y evita extras.',
+    presion: 'Hoy: enfócate en cubrir lo inmediato.'
   };
 
   const actionTodayDetailByStatus: Record<FinancialRadarStatus, string> = {
-    estable: 'Si mantienes el ritmo, puedes separar una parte sin desbalancearte.',
-    atencion: 'Mantén solo gastos esenciales hasta pasar esta ventana corta.',
-    presion: 'Ordena pagos críticos primero y mueve lo no urgente.'
+    estable: 'Con este margen, puedes avanzar un poco sin apretar tu semana.',
+    atencion: 'Alcanzas esta semana, pero conviene no mover reservas sin necesidad.',
+    presion: 'Conviene enfocarte en lo esencial esta semana y postergar lo movible.'
   };
 
   const upcomingByStatus: Record<FinancialRadarStatus, string> = {
-    estable: dueSoon.highlights[0] ?? 'La semana viene controlada por ahora.',
-    atencion: dueSoon.highlights[0] ?? 'Viene una semana más pesada de lo normal.',
-    presion: dueSoon.highlights[0] ?? 'Se acerca una semana exigente; conviene ajustar hoy.'
+    estable: obligations.nearFutureHighlights[0] ?? obligations.mandatoryHighlights[0] ?? 'La siguiente semana también se ve manejable.',
+    atencion: obligations.nearFutureHighlights[0] ?? obligations.mandatoryHighlights[0] ?? 'Viene una semana sensible; vale cuidar liquidez.',
+    presion: obligations.mandatoryHighlights[0] ?? obligations.nearFutureHighlights[0] ?? 'Hay compromisos cercanos que presionan esta ventana.'
   };
 
   const riskByStatus: Record<FinancialRadarStatus, string> = {
-    estable: reserveLiquidity > immediateLiquidity ? 'Buen respaldo: hay reserva para imprevistos.' : 'Riesgo bajo si mantienes disciplina semanal.',
-    atencion: 'Riesgo medio: cualquier gasto no planeado te aprieta.',
-    presion: 'Riesgo alto: la liquidez no alcanza con margen seguro.'
+    estable: nearFutureLoad > 0 ? 'Estás bien en lo inmediato; conviene anticiparte a lo que sigue.' : 'Tu semana está controlada con holgura.',
+    atencion: 'Cubres lo inmediato, pero con poco margen.',
+    presion: 'La carga inmediata supera tu disponible actual.'
   };
 
   const nextStepByStatus: Record<FinancialRadarStatus, string> = {
-    estable: 'Aparta una parte del margen para fortalecer tu reserva.',
-    atencion: 'Reordena pagos de los próximos 7 días y recorta variable.',
-    presion: 'Activa plan de emergencia: prioriza esenciales y difiere no críticos.'
+    estable: 'Busca cerrar la semana con margen positivo y sin tocar reservas.',
+    atencion: 'Intenta cerrar la semana con margen positivo, aunque sea pequeño.',
+    presion: 'Reordena pagos cercanos y evita gastos no esenciales por ahora.'
   };
 
   const statusReasonByStatus: Record<FinancialRadarStatus, string> = {
-    estable: 'Tu disponible cubre la carga de la ventana con margen saludable.',
-    atencion: 'Sí cubres la carga, pero con poco margen de seguridad.',
-    presion: 'La carga próxima supera tu disponible o deja margen muy bajo.'
+    estable: 'Tu disponible cubre el periodo con holgura.',
+    atencion: 'Cubres el periodo, pero con poco margen.',
+    presion: 'La carga inmediata supera tu disponible.'
   };
 
   return {
     status,
-    windowDays: 7,
+    windowDays: WINDOW_DAYS,
     windowLabel: 'próximos 7 días',
     actionToday: actionTodayByStatus[status],
     actionTodayDetail: actionTodayDetailByStatus[status],
@@ -205,6 +204,7 @@ export function calculateFinancialRadar(input: {
     statusReason: statusReasonByStatus[status],
     availableNow,
     upcomingLoad,
+    nearFutureLoad,
     estimatedMargin
   };
 }

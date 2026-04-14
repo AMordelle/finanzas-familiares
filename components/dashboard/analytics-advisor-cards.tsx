@@ -72,6 +72,11 @@ export function AnalyticsAdvisorCards({ radar, financialPressure, initialOpenCar
                 <p><span className="font-medium text-slate-900">Carga {radar.windowLabel}:</span> {formatMoney(radar.upcomingLoad)}</p>
                 <p><span className="font-medium text-slate-900">Margen estimado:</span> {formatMoney(radar.estimatedMargin)}</p>
               </div>
+              {radar.nearFutureLoad > 0 ? (
+                <p className="mt-2 text-xs text-slate-600">
+                  <span className="font-medium text-slate-800">Presión cercana (8-14 días):</span> {formatMoney(radar.nearFutureLoad)}
+                </p>
+              ) : null}
             </div>
           ) : null}
         </Card>

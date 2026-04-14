@@ -15,6 +15,7 @@ const radar = {
   statusReason: 'Sí cubres la carga, pero con poco margen de seguridad.',
   availableNow: 5000,
   upcomingLoad: 4200,
+  nearFutureLoad: 1300,
   estimatedMargin: 800
 };
 
@@ -43,6 +44,7 @@ describe('AnalyticsAdvisorCards', () => {
   it('expande solo la card seleccionada', () => {
     const radarExpanded = renderToStaticMarkup(<AnalyticsAdvisorCards radar={radar} financialPressure={pressure} initialOpenCard="radar" />);
     expect(radarExpanded).toContain('Qué hacer hoy:');
+    expect(radarExpanded).toContain('Presión cercana (8-14 días):');
     expect(radarExpanded).not.toContain('Interpretación:');
 
     const estadoExpanded = renderToStaticMarkup(<AnalyticsAdvisorCards radar={radar} financialPressure={pressure} initialOpenCard="estado" />);

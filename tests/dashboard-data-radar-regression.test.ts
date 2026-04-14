@@ -91,5 +91,6 @@ describe('dashboard data regression with radar', () => {
     expect(dashboard.financialRadar).not.toBeNull();
     expect(dashboard.financialRadar?.upcomingLoad).toBeGreaterThan(0);
     expect(dashboard.financialRadar?.windowDays).toBe(7);
+    expect(dashboard.financialRadar?.nearFutureLoad).toBeGreaterThanOrEqual(0);
   });
 });

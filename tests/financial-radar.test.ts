@@ -2,94 +2,84 @@ import { describe, expect, it } from 'vitest';
 import { calculateFinancialRadar } from '@/lib/finance/financialRadar';
 
 describe('financial radar calculation', () => {
-  it('combina balances, gasto base y obligaciones próximas', () => {
+  it('separa carga obligatoria de próximos 7 días y presión cercana', () => {
     const radar = calculateFinancialRadar({
       now: new Date('2026-04-14T12:00:00Z'),
-      accounts: [
-        { type: 'operational_cash', name: 'Cuenta TDD', balance: 4000 },
-        { type: 'savings_fund', name: 'Caja de ahorro', balance: 2000 },
-        { type: 'credit_card', name: 'Tarjeta', balance: 15000 }
-      ],
-      recentTransactions: [
-        { type: 'debit', amount: 1200, happenedAt: '2026-04-12T00:00:00Z' },
-        { type: 'debit', amount: 800, happenedAt: '2026-04-10T00:00:00Z' },
-        { type: 'debit', amount: 1000, happenedAt: '2026-04-05T00:00:00Z' },
-        { type: 'debit', amount: 1000, happenedAt: '2026-03-30T00:00:00Z' }
-      ],
+      accounts: [{ type: 'operativa', balance: 7000 }],
+      recentTransactions: [{ type: 'debit', amount: 1400 }],
       obligations: [
-        { amount: 1800, dueDay: 18 },
-        { amount: 900, dueDay: null }
+        { name: 'Pago TDC BBVA', amount: 2200, dueDay: 16 },
+        { name: 'Colegiatura', amount: 1600, dueDay: 23 }
       ]
     });
 
-    expect(radar.availableNow).toBe(6000);
-    expect(radar.upcomingLoad).toBeGreaterThan(2700);
-    expect(radar.upcomingLoad).toBeLessThan(4300);
+    expect(radar.upcomingLoad).toBe(2550); // 350 base + 2200 obligatorio
+    expect(radar.nearFutureLoad).toBe(1600); // no infla carga principal
+    expect(radar.upcoming).toContain('Colegiatura');
   });
 
-  it('clasifica estado estable, atención y presión', () => {
-    const estable = calculateFinancialRadar({
+  it('clasifica estado en cómodo, ajustado y faltante', () => {
+    const confortable = calculateFinancialRadar({
+      now: new Date('2026-04-14T12:00:00Z'),
       accounts: [{ type: 'operativa', balance: 5000 }],
-      recentTransactions: [{ type: 'debit', amount: 500 }],
-      obligations: [{ amount: 200, dueDay: 25 }],
-      now: new Date('2026-04-14T12:00:00Z')
+      recentTransactions: [{ type: 'debit', amount: 1200 }],
+      obligations: [{ amount: 1000, dueDay: 16 }]
     });
 
-    const atencion = calculateFinancialRadar({
+    const ajustado = calculateFinancialRadar({
+      now: new Date('2026-04-14T12:00:00Z'),
       accounts: [{ type: 'operativa', balance: 1800 }],
-      recentTransactions: [{ type: 'debit', amount: 900 }],
-      obligations: [{ amount: 1200, dueDay: 18 }],
-      now: new Date('2026-04-14T12:00:00Z')
+      recentTransactions: [{ type: 'debit', amount: 1200 }],
+      obligations: [{ amount: 1400, dueDay: 16 }]
     });
 
-    const presion = calculateFinancialRadar({
-      accounts: [{ type: 'operativa', balance: 900 }],
-      recentTransactions: [{ type: 'debit', amount: 1000 }],
-      obligations: [{ amount: 1200, dueDay: 17 }],
-      now: new Date('2026-04-14T12:00:00Z')
+    const faltante = calculateFinancialRadar({
+      now: new Date('2026-04-14T12:00:00Z'),
+      accounts: [{ type: 'operativa', balance: 1200 }],
+      recentTransactions: [{ type: 'debit', amount: 1200 }],
+      obligations: [{ amount: 1800, dueDay: 16 }]
     });
 
-    expect(estable.status).toBe('estable');
-    expect(atencion.status).toBe('atencion');
-    expect(presion.status).toBe('presion');
+    expect(confortable.status).toBe('estable');
+    expect(ajustado.status).toBe('atencion');
+    expect(faltante.status).toBe('presion');
   });
 
-  it('retorna recomendaciones humanas en español por estado', () => {
-    const presion = calculateFinancialRadar({
-      accounts: [{ type: 'operativa', balance: 700 }],
-      recentTransactions: [{ type: 'debit', amount: 1300 }],
-      obligations: [{ amount: 1200, dueDay: 15 }],
-      now: new Date('2026-04-14T12:00:00Z')
-    });
-
-    expect(presion.actionToday).toContain('Hoy');
-    expect(presion.riskText).toContain('Riesgo');
-    expect(presion.nextBestStep.length).toBeGreaterThan(20);
-  });
-
-  it('usa contexto real de obligaciones próximas en el mensaje', () => {
+  it('usa redacción humana y calmada', () => {
     const radar = calculateFinancialRadar({
-      accounts: [{ type: 'operativa', balance: 3500 }],
-      recentTransactions: [{ type: 'debit', amount: 700 }],
-      obligations: [{ name: 'BBVA', amount: 1800, dueDay: 16 }],
-      now: new Date('2026-04-14T12:00:00Z')
+      now: new Date('2026-04-14T12:00:00Z'),
+      accounts: [{ type: 'operativa', balance: 1700 }],
+      recentTransactions: [{ type: 'debit', amount: 1000 }],
+      obligations: [{ name: 'Pago TDC BBVA', amount: 1200, dueDay: 16 }]
     });
 
-    expect(radar.windowDays).toBe(7);
-    expect(radar.upcoming).toContain('BBVA');
-    expect(radar.upcoming).toContain('vence');
+    expect(radar.riskText).toBe('Cubres lo inmediato, pero con poco margen.');
+    expect(radar.actionToday).toContain('Hoy:');
+    expect(radar.statusReason).toBe('Cubres el periodo, pero con poco margen.');
   });
 
-  it('mantiene narrativa coherente entre margen y estado', () => {
-    const estable = calculateFinancialRadar({
-      accounts: [{ type: 'operativa', balance: 6000 }],
-      recentTransactions: [{ type: 'debit', amount: 700 }],
-      obligations: [{ amount: 500, dueDay: 22 }],
-      now: new Date('2026-04-14T12:00:00Z')
+  it('incluye nombres de obligaciones en recomendaciones contextuales', () => {
+    const radar = calculateFinancialRadar({
+      now: new Date('2026-04-14T12:00:00Z'),
+      accounts: [{ type: 'operativa', balance: 1500 }],
+      recentTransactions: [{ type: 'debit', amount: 800 }],
+      obligations: [{ name: 'Pago TDC BBVA', amount: 1500, dueDay: 17 }]
     });
 
-    expect(estable.estimatedMargin).toBeGreaterThan(0);
-    expect(estable.status).toBe('estable');
-    expect(estable.statusReason).toContain('margen');
+    expect(radar.upcoming).toContain('BBVA');
+    expect(radar.upcoming).toContain('días');
+  });
+
+  it('mantiene consistencia narrativa: si hay margen pequeño no comunica colapso', () => {
+    const radar = calculateFinancialRadar({
+      now: new Date('2026-04-14T12:00:00Z'),
+      accounts: [{ type: 'operativa', balance: 1800 }],
+      recentTransactions: [{ type: 'debit', amount: 1200 }],
+      obligations: [{ amount: 1400, dueDay: 16 }]
+    });
+
+    expect(radar.status).toBe('atencion');
+    expect(radar.estimatedMargin).toBeGreaterThan(0);
+    expect(radar.riskText.toLowerCase()).not.toContain('supera');
   });
 });
