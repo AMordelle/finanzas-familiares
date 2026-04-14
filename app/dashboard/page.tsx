@@ -1,9 +1,11 @@
+import React from 'react';
 import Link from 'next/link';
 import { AppShell } from '@/components/app-shell';
 import { MetricCard } from '@/components/metric-card';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { getDashboardData } from '@/lib/db/queries';
+import { FinancialRadarCard } from '@/components/dashboard/financial-radar-card';
 
 const statusLabelMap = {
   healthy: 'Saludable',
@@ -20,6 +22,7 @@ export default async function DashboardPage() {
   const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
   const financialPressure = data.financialPressure;
   const financialInsight = data.financialInsight;
+  const financialRadar = data.financialRadar;
   const hasCoverage = financialPressure ? financialPressure.gap <= 0 : false;
   const absoluteGap = financialPressure ? Math.abs(financialPressure.gap) : 0;
   const breakdown = financialPressure?.breakdown;
@@ -48,6 +51,7 @@ export default async function DashboardPage() {
         <MetricCard label="Dinero disponible hoy" value={`$${availableMoney.toLocaleString('es-MX')}`} />
       </section>
       <section className="mt-4 grid gap-4 md:grid-cols-2">
+        {financialRadar ? <FinancialRadarCard radar={financialRadar} /> : null}
         {financialPressure ? (
           <Card>
             <h3 className="font-semibold">Estado financiero actual</h3>
