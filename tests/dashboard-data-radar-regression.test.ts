@@ -72,13 +72,13 @@ function createFakeSupabase() {
   };
 }
 
-describe('dashboard data regression with radar', () => {
+describe('dashboard data regression with radar y estado estructural', () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.DEV_PROFILE_ID = 'profile-1';
   });
 
-  it('mantiene dashboard y agrega financialRadar sin romper campos existentes', async () => {
+  it('mantiene dashboard y agrega módulos táctico + estructural sin romper campos existentes', async () => {
     const fakeClient = createFakeSupabase();
     vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
 
@@ -92,5 +92,8 @@ describe('dashboard data regression with radar', () => {
     expect(dashboard.financialRadar?.upcomingLoad).toBeGreaterThan(0);
     expect(dashboard.financialRadar?.windowDays).toBe(7);
     expect(dashboard.financialRadar?.nearFutureLoad).toBeGreaterThanOrEqual(0);
+    expect(dashboard.financialStatus).not.toBeNull();
+    expect(dashboard.financialStatus?.interpretation.toLowerCase()).not.toContain('7 días');
+    expect(dashboard.financialStatus?.strengths.length).toBeGreaterThan(0);
   });
 });

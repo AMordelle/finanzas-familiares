@@ -15,6 +15,7 @@ export default async function DashboardPage() {
   const diagnoses = Array.isArray(data.diagnoses) ? data.diagnoses : [];
   const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
   const financialPressure = data.financialPressure;
+  const financialStatus = data.financialStatus;
   const financialInsight = data.financialInsight;
   const financialRadar = data.financialRadar;
 
@@ -41,7 +42,7 @@ export default async function DashboardPage() {
         <MetricCard label="Objetivo semanal" value={`$${weeklyOFH.toLocaleString('es-MX')}`} />
         <MetricCard label="Dinero disponible hoy" value={`$${availableMoney.toLocaleString('es-MX')}`} />
       </section>
-      <AnalyticsAdvisorCards radar={financialRadar} financialPressure={financialPressure} />
+      <AnalyticsAdvisorCards radar={financialRadar} financialPressure={financialPressure} financialStatus={financialStatus} />
       <section className="mt-4 grid gap-4 md:grid-cols-2">
         {financialInsight ? (
           <Card>

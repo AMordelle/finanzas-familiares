@@ -13,6 +13,7 @@ import {
 } from '@/lib/financial/engine';
 import { calculateFinancialPressure, generateFinancialInsight } from '@/lib/finance/financialPressure';
 import { calculateFinancialRadar, type FinancialRadar } from '@/lib/finance/financialRadar';
+import { calculateFinancialStatus, type FinancialStatus } from '@/lib/finance/financialStatus';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
 
@@ -148,6 +149,7 @@ type DashboardData = {
     suggestions: string[];
   } | null;
   financialRadar: FinancialRadar | null;
+  financialStatus: FinancialStatus | null;
 };
 
 type SupabaseClientLike = typeof supabaseAdmin;
@@ -491,6 +493,23 @@ function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
             : []
         }
       : null;
+  const rawFinancialInput =
+    payload && typeof payload.financialInput === 'object' && payload.financialInput !== null
+      ? (payload.financialInput as Record<string, unknown>)
+      : null;
+  const recurringObligationsMonthly =
+    toFiniteNumber(rawFinancialInput?.fixedExpenses, 0)
+    + toFiniteNumber(rawFinancialInput?.debtPayments, 0)
+    + toFiniteNumber(rawFinancialInput?.avgVariableExpenses, 0);
+  const financialStatus = calculateFinancialStatus({
+    regularIncomeMonthly: toFiniteNumber(rawFinancialInput?.regularIncomeMonthly, payload?.regularIncomeMonthly as number ?? 0),
+    annualExtraIncome: toFiniteNumber(rawFinancialInput?.annualExtraIncome, 0),
+    recurringObligationsMonthly,
+    debtPaymentsMonthly: toFiniteNumber(rawFinancialInput?.debtPayments, rawBreakdown?.debts),
+    debtBalance: toFiniteNumber(rawFinancialInput?.debtBalance, 0),
+    protectedSavings: toFiniteNumber(rawFinancialInput?.liquidFunds, 0) + toFiniteNumber(rawFinancialInput?.liquidInvestments, 0),
+    operativeMoney: toFiniteNumber(rawFinancialInput?.operativeMoney, payload?.availableMoney as number ?? 0)
+  });
 
   return {
     hasHousehold: true,
@@ -501,7 +520,8 @@ function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
     recommendations: recommendations.length ? recommendations : ['Aún no hay recomendaciones; registra movimientos para enriquecer el análisis.'],
     financialPressure,
     financialInsight,
-    financialRadar: null
+    financialRadar: null,
+    financialStatus
   };
 }
 
@@ -520,7 +540,8 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
       recommendations: ['Configura hogar, cuentas e ingresos iniciales para activar recomendaciones.'],
       financialPressure: null,
       financialInsight: null,
-      financialRadar: null
+      financialRadar: null,
+      financialStatus: null
     };
   }
 
@@ -545,7 +566,8 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
       recommendations: ['Finaliza onboarding para generar indicadores automáticos.'],
       financialPressure: null,
       financialInsight: null,
-      financialRadar: null
+      financialRadar: null,
+      financialStatus: null
     };
   }
 
