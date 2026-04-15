@@ -31,25 +31,48 @@ const pressure = {
   }
 };
 
+const financialStatus = {
+  status: 'ajustado' as const,
+  stage: 'estabilizacion' as const,
+  headline: 'Estructura ajustada',
+  interpretation: 'Tu hogar cubre lo esencial, pero aún depende de maniobras para respirar con holgura.',
+  shortLine: 'La base alcanza, aunque la holgura sigue siendo limitada.',
+  strengths: ['El ingreso base sí cubre lo esencial del mes.'],
+  risks: ['El ahorro protegido todavía no alcanza para blindar el mes.'],
+  nextFocus: 'Tu siguiente enfoque debe ser convertir deuda en margen.',
+  metrics: {
+    coverageRatio: 1.02,
+    debtPressureRatio: 0.31,
+    reserveMonths: 0.6,
+    extraordinaryIncomeDependency: 0.12
+  },
+  assumptions: []
+};
+
 describe('AnalyticsAdvisorCards', () => {
   it('renderiza ambas cards compactas y balanceadas al estar colapsadas', () => {
-    const html = renderToStaticMarkup(<AnalyticsAdvisorCards radar={radar} financialPressure={pressure} />);
+    const html = renderToStaticMarkup(<AnalyticsAdvisorCards radar={radar} financialPressure={pressure} financialStatus={financialStatus} />);
     expect(html).toContain('Radar Financiero');
     expect(html).toContain('Estado financiero actual');
+    expect(html).toContain('La base alcanza, aunque la holgura sigue siendo limitada.');
     expect((html.match(/min-h-\[148px\]/g) ?? []).length).toBe(2);
     expect(html).not.toContain('Qué hacer hoy');
-    expect(html).not.toContain('Interpretación:');
+    expect(html).not.toContain('Interpretación general:');
   });
 
   it('expande solo la card seleccionada', () => {
-    const radarExpanded = renderToStaticMarkup(<AnalyticsAdvisorCards radar={radar} financialPressure={pressure} initialOpenCard="radar" />);
+    const radarExpanded = renderToStaticMarkup(<AnalyticsAdvisorCards radar={radar} financialPressure={pressure} financialStatus={financialStatus} initialOpenCard="radar" />);
     expect(radarExpanded).toContain('Qué hacer hoy:');
     expect(radarExpanded).toContain('Presión cercana (8-14 días):');
-    expect(radarExpanded).not.toContain('Interpretación:');
+    expect(radarExpanded).not.toContain('Interpretación general:');
 
-    const estadoExpanded = renderToStaticMarkup(<AnalyticsAdvisorCards radar={radar} financialPressure={pressure} initialOpenCard="estado" />);
-    expect(estadoExpanded).toContain('Interpretación:');
+    const estadoExpanded = renderToStaticMarkup(<AnalyticsAdvisorCards radar={radar} financialPressure={pressure} financialStatus={financialStatus} initialOpenCard="estado" />);
+    expect(estadoExpanded).toContain('Interpretación general:');
+    expect(estadoExpanded).toContain('Fortalezas actuales');
+    expect(estadoExpanded).toContain('Riesgos actuales');
+    expect(estadoExpanded).toContain('En qué enfocarse ahora:');
     expect(estadoExpanded).not.toContain('Qué hacer hoy:');
+    expect(estadoExpanded).not.toContain('Necesidad próximos 7 días');
   });
 
   it('aplica comportamiento accordion en helper de estado', () => {
@@ -58,9 +81,11 @@ describe('AnalyticsAdvisorCards', () => {
     expect(toggleAnalyticsCard('estado', 'estado')).toBeNull();
   });
 
-  it('usa la misma ventana temporal en ambas cards', () => {
-    const html = renderToStaticMarkup(<AnalyticsAdvisorCards radar={radar} financialPressure={pressure} initialOpenCard="estado" />);
-    expect(html).toContain('próximos 7 días');
-    expect(html).toContain('Necesidad próximos 7 días');
+  it('mantiene separación entre estado estructural y radar táctico', () => {
+    const html = renderToStaticMarkup(<AnalyticsAdvisorCards radar={radar} financialPressure={pressure} financialStatus={financialStatus} initialOpenCard="estado" />);
+    expect(html).toContain('Tu hogar cubre lo esencial, pero aún depende de maniobras para respirar con holgura.');
+    expect(html).not.toContain('Presión cercana (8-14 días):');
+    expect(html).not.toContain('Necesidad próximos 7 días');
+    expect(html).not.toContain('Qué hacer hoy:');
   });
 });
