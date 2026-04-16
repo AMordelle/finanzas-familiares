@@ -172,15 +172,20 @@ function normalize(input: string) {
   return input.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[¿?¡!.,;:]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeAccountReference(input: string) {
+  return normalize(input)
+    .replace(/\b(mi|mis|la|el|las|los|de|del|al|a|en|para|por)\b/g, ' ')
+    .replace(/\bcaja de ahorro\b/g, 'caja ahorro')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function normalizeAccountLabel(input: string) {
   return normalize(input).replace(/\b(tarjeta|cuenta|banco|tdc)\b/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function stripReferenceNoise(input: string) {
-  return normalize(input)
-    .replace(/\b(mi|mis|la|el|las|los|de|del|al|a|en|para|por)\b/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return normalizeAccountReference(input);
 }
 
 function hasStrongDebitMarker(input: string) {
@@ -212,6 +217,10 @@ function buildOperationalDebitAliases(normalizedName: string) {
     `tarjeta de debito ${institutionPart}`,
     `tarjeta debito ${institutionPart}`
   ].map((alias) => normalize(alias));
+}
+
+function hintImpliesSavings(normalizedHint: string) {
+  return /(caja ahorro|ahorro|fondo|meta)/.test(normalizedHint);
 }
 
 function parseAmount(input: string) {
@@ -259,7 +268,9 @@ function enrichAccounts(accounts: InterpreterAccountContext[]): EnrichedAccount[
     const aliases = Array.from(new Set([
       ...(account.aliases ?? []).map((alias) => normalize(alias)),
       normalizedName,
+      normalizeAccountReference(account.name),
       normalizedCompactName,
+      normalizeAccountReference(normalizedCompactName),
       ...naturalAliases,
       ...debitAliases
     ])).filter(Boolean);
@@ -306,7 +317,7 @@ function extractExplicitAccountReference(
 ): ExplicitAccountReference | null {
   const withMatch = intent === 'income'
     ? normalizedText.match(/(en)\s+([a-z0-9\s]+)$/)
-    : normalizedText.match(/(con|desde|a la|al)\s+([a-z0-9\s]+?)(?=\s+(?:desde|con|en|a la|al)\b|$)/);
+    : normalizedText.match(/(con|desde|a la|al|hacia)\s+([a-z0-9\s]+?)(?=\s+(?:desde|con|en|a la|al|hacia)\b|$)/);
   const preposition = withMatch?.[1]?.trim() ?? '';
   const raw = withMatch?.[2]?.trim();
   if (!raw) return null;
@@ -326,7 +337,7 @@ function extractExplicitAccountReference(
     normalized: normalizedCleaned,
     expectedKind,
     isGeneric,
-    role: ['a la', 'al', 'en'].includes(preposition) ? 'destination' : 'source'
+    role: ['a la', 'al', 'en', 'hacia'].includes(preposition) ? 'destination' : 'source'
   };
 }
 
@@ -638,6 +649,8 @@ function resolveAccountFromAiHint(
 ) {
   if (!hint) return null;
   const normalizedHint = normalize(hint);
+  const normalizedHintReference = normalizeAccountReference(hint);
+  const genericHintRegex = /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|debito|tdd|ahorro|fondo|meta)$/
   if (intent === 'expense_debt_account' && role === 'source') {
     const creditCards = accounts.filter((account) => account.type === 'credit_card');
     const exactByName = creditCards.filter((account) => account.name.trim().toLowerCase() === hint.trim().toLowerCase());
@@ -656,20 +669,52 @@ function resolveAccountFromAiHint(
       return { account: exact[0], confidence: 0.98, unresolvedMessage: null };
     }
   }
+  const expectedKindByHint: ExplicitAccountReference['expectedKind'] = hasStrongDebitMarker(normalizedHintReference)
+    ? 'operational'
+    : hintImpliesSavings(normalizedHintReference)
+      ? 'savings'
+      : /(tarjeta|tdc|prestamo|hipoteca|credito)/.test(normalizedHintReference)
+        ? 'debt'
+        : /(banco|efectivo|debito|tdd)/.test(normalizedHintReference)
+          ? 'operational'
+          : null;
   const expectedKind: ExplicitAccountReference['expectedKind'] =
     intent === 'debt_payment' && role === 'destination' ? 'debt'
       : intent === 'expense_debt_account' && role === 'source' ? 'debt'
         : intent === 'expense_cash_like' && role === 'source' ? 'operational'
-          : intent === 'income' && role === 'destination' ? 'operational'
-            : null;
+          : intent === 'income' && role === 'destination'
+            ? (expectedKindByHint === 'savings' ? 'savings' : 'operational')
+            : intent === 'transfer_between_own_accounts' || intent === 'savings_contribution' || intent === 'savings_withdrawal'
+              ? expectedKindByHint
+              : expectedKindByHint;
 
   const resolved = resolveExplicitReference({
     raw: hint,
-    normalized: normalizedHint,
+    normalized: normalizedHintReference,
     expectedKind,
-    isGeneric: /^(tarjeta|tarjeta de credito|tarjeta credito|tdc|banco|efectivo|debito|tdd|ahorro|fondo|meta)$/.test(normalizedHint),
+    isGeneric: genericHintRegex.test(normalizedHintReference),
     role
   }, accounts);
+  if (process.env.NODE_ENV === 'development') {
+    const filteredCandidates = expectedKind
+      ? accounts.filter((account) => expectedKind === 'debt'
+        ? account.is_debt
+        : expectedKind === 'operational'
+          ? account.type === 'operational_cash'
+          : account.type === 'savings_fund')
+      : accounts;
+    console.info('[AIHintResolver]', {
+      intent,
+      role,
+      sourceHint: hint,
+      normalizedHint,
+      normalizedHintReference,
+      expectedKind,
+      candidateNames: filteredCandidates.map((account) => account.name),
+      matchedAccountName: resolved.account?.name ?? null,
+      unresolvedReason: resolved.unresolvedMessage ?? (resolved.account ? null : 'no_strong_match')
+    });
+  }
   if (intent === 'expense_debt_account' && role === 'source' && resolved.account && resolved.account.type !== 'credit_card') {
     return { account: null, confidence: resolved.confidence, unresolvedMessage: resolved.unresolvedMessage };
   }
@@ -801,6 +846,12 @@ function choosePrompt(
     return { nextPrompt: '¿A qué tarjeta o préstamo pagaste?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['credit_card', 'loan'] as const };
   }
   if (first === 'missingDestinationAccount') {
+    if (intent === 'transfer_between_own_accounts') {
+      return { nextPrompt: '¿A qué cuenta moviste el dinero?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['operational_cash', 'savings_fund', 'investment'] as const };
+    }
+    if (intent === 'savings_contribution' || intent === 'savings_withdrawal') {
+      return { nextPrompt: '¿A qué cuenta de ahorro entró el dinero?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['savings_fund'] as const };
+    }
     return { nextPrompt: '¿A qué cuenta entró el dinero?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['operational_cash', 'savings_fund', 'investment', 'receivable'] as const };
   }
   if (first === 'missingSourceAccount' && intent === 'expense_debt_account' && /(tarjeta|tdc|credito|prestamo|hipoteca)/.test(normalizedText ?? '')) {
@@ -808,6 +859,12 @@ function choosePrompt(
   }
   if (first === 'missingSourceAccount' && intent === 'debt_transfer' && normalizedText?.includes('de ')) {
     return { nextPrompt: '¿Con qué cuenta pagaste esa deuda?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['credit_card', 'loan', 'operational_cash'] as const };
+  }
+  if (first === 'missingSourceAccount' && intent === 'transfer_between_own_accounts') {
+    return { nextPrompt: '¿De qué cuenta propia salió el dinero?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['operational_cash', 'savings_fund', 'investment'] as const };
+  }
+  if (first === 'missingSourceAccount' && (intent === 'savings_contribution' || intent === 'savings_withdrawal')) {
+    return { nextPrompt: '¿Desde qué cuenta salió el dinero para el ahorro?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['operational_cash', 'savings_fund', 'investment'] as const };
   }
   return { nextPrompt: '¿De qué cuenta salió el dinero?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['operational_cash', 'savings_fund', 'investment', 'credit_card', 'loan'] as const };
 }
