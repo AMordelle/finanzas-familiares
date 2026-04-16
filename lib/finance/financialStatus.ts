@@ -30,8 +30,16 @@ function toPositive(value: unknown) {
   return Math.max(numeric, 0);
 }
 
-function pushIf(list: string[], condition: boolean, message: string) {
-  if (condition) list.push(message);
+function toPercent(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function toMonths(value: number) {
+  return `${value.toFixed(1)} meses`;
+}
+
+function formatMoney(value: number) {
+  return `$${Math.round(value).toLocaleString('es-MX')}`;
 }
 
 export function calculateFinancialStatus(input: {
@@ -62,13 +70,19 @@ export function calculateFinancialStatus(input: {
   const debtPressureRatio = roundMetric(debtPaymentsMonthly / Math.max(regularIncomeMonthly, 1));
   const reserveMonths = roundMetric(protectedSavings / safeObligations);
   const extraordinaryIncomeDependency = roundMetric((annualExtraIncome / 12) / Math.max(totalMonthlyIncome, 1));
+  const baseMonthlyMargin = roundMetric(regularIncomeMonthly - safeObligations - debtPaymentsMonthly);
+
+  const hasWeakCoverage = coverageRatio < 1;
+  const hasHighDebtPressure = debtPressureRatio >= 0.35;
+  const hasLowReserve = reserveMonths < 1;
+  const hasHighExtraDependency = extraordinaryIncomeDependency >= 0.25;
 
   let status: HouseholdStructuralStatus = 'ajustado';
-  if (coverageRatio >= 1.15 && debtPressureRatio < 0.25 && reserveMonths >= 2 && extraordinaryIncomeDependency < 0.25) {
+  if (coverageRatio >= 1.15 && debtPressureRatio < 0.25 && reserveMonths >= 2 && extraordinaryIncomeDependency < 0.2) {
     status = 'solido';
-  } else if (coverageRatio >= 1 && debtPressureRatio < 0.35 && reserveMonths >= 1) {
+  } else if (coverageRatio >= 1 && debtPressureRatio < 0.33 && reserveMonths >= 0.9 && extraordinaryIncomeDependency < 0.3) {
     status = 'en_transicion';
-  } else if (coverageRatio < 0.9 || reserveMonths < 0.4) {
+  } else if (coverageRatio < 0.95 || reserveMonths < 0.45 || (hasHighDebtPressure && hasLowReserve)) {
     status = 'vulnerable';
   }
 
@@ -76,49 +90,99 @@ export function calculateFinancialStatus(input: {
   if (coverageRatio >= 1 && reserveMonths >= 0.8) stage = 'estabilizacion';
   if (coverageRatio >= 1.1 && reserveMonths >= 2 && debtPressureRatio < 0.28) stage = 'optimizacion';
 
+  const strengthsPool = {
+    liquidity: 'Hoy existe liquidez operativa para sostener la semana sin fricción mayor.',
+    obligations: 'El hogar sigue cubriendo obligaciones base del mes.',
+    weeklyManeuver: 'Ya existe capacidad de maniobra semanal para ordenar pagos.',
+    reserve: 'Ya hay una base de ahorro protector en construcción.',
+    lowExtraDependency: 'La estructura depende más del ingreso recurrente que de eventos aislados.'
+  };
+
+  const riskPool = {
+    weakCoverage: 'La estructura mensual sigue frágil: el ingreso base no cubre todo con consistencia.',
+    highDebt: 'La deuda reduce demasiado el margen mensual.',
+    lowReserve: 'Falta ahorro protector suficiente para absorber un imprevisto relevante.',
+    highExtraDependency: 'Parte del equilibrio depende de ingresos no recurrentes.',
+    highDebtBalance: 'El tamaño de la deuda mantiene una presión estructural alta.'
+  };
+
   const strengths: string[] = [];
-  pushIf(strengths, coverageRatio >= 1, 'El ingreso base sí cubre lo esencial del mes.');
-  pushIf(strengths, debtPressureRatio < 0.3, 'La deuda no está capturando la mayor parte del ingreso.');
-  pushIf(strengths, reserveMonths >= 1, 'Ya existe un colchón que ayuda a absorber sobresaltos.');
-  pushIf(strengths, extraordinaryIncomeDependency < 0.3, 'La estabilidad no depende tanto de ingresos extraordinarios.');
-  pushIf(strengths, operativeMoney > safeObligations * 0.4, 'La liquidez operativa da margen para maniobrar sin fricción.');
-  if (!strengths.length) strengths.push('Hay señales de orden, pero aún no son suficientes para dar estabilidad constante.');
-
   const risks: string[] = [];
-  pushIf(risks, coverageRatio < 1, 'La presión no está en la semana, sino en que el ingreso base no alcanza de forma consistente.');
-  pushIf(risks, debtPressureRatio >= 0.35, 'La deuda pesa demasiado dentro del ingreso mensual.');
-  pushIf(risks, reserveMonths < 1, 'El ahorro protegido todavía no alcanza para blindar el mes.');
-  pushIf(risks, extraordinaryIncomeDependency >= 0.3, 'Hoy se depende de eventos extraordinarios para sostener estabilidad.');
-  pushIf(risks, debtBalance > regularIncomeMonthly * 8 && regularIncomeMonthly > 0, 'El tamaño total de deuda mantiene presión estructural alta.');
-  if (!risks.length) risks.push('No se observan focos críticos hoy, pero conviene sostener hábitos para no retroceder.');
 
-  const headlineByStatus: Record<HouseholdStructuralStatus, string> = {
+  if (operativeMoney > safeObligations * 0.35) strengths.push(strengthsPool.liquidity);
+  if (coverageRatio >= 1) strengths.push(strengthsPool.obligations);
+  if (baseMonthlyMargin > 0) strengths.push(strengthsPool.weeklyManeuver);
+  if (reserveMonths >= 0.7) strengths.push(strengthsPool.reserve);
+  if (extraordinaryIncomeDependency < 0.2) strengths.push(strengthsPool.lowExtraDependency);
+
+  if (hasWeakCoverage) risks.push(riskPool.weakCoverage);
+  if (hasHighDebtPressure) risks.push(riskPool.highDebt);
+  if (hasLowReserve) risks.push(riskPool.lowReserve);
+  if (hasHighExtraDependency) risks.push(riskPool.highExtraDependency);
+  if (debtBalance > regularIncomeMonthly * 8 && regularIncomeMonthly > 0) risks.push(riskPool.highDebtBalance);
+
+  if (status === 'vulnerable') {
+    const vulnerableStrengths = strengths.filter((item) =>
+      [strengthsPool.liquidity, strengthsPool.obligations, strengthsPool.weeklyManeuver].includes(item)
+    );
+    const cappedStrengths = vulnerableStrengths.slice(0, 2);
+    if (!cappedStrengths.length) cappedStrengths.push('Hoy hay algunos intentos de orden, pero todavía no alcanzan para dar estabilidad.');
+
+    const dominantRisks = risks.length ? risks : [riskPool.weakCoverage, riskPool.lowReserve];
+
+    return {
+      status,
+      stage,
+      headline: 'Estructura vulnerable',
+      interpretation:
+        `La fragilidad es estructural: cobertura base ${toPercent(coverageRatio)}, reserva ${toMonths(reserveMonths)} y presión de deuda ${toPercent(debtPressureRatio)}. ` +
+        'Con estos niveles, un imprevisto relevante presiona el mes de inmediato.',
+      shortLine: 'Hoy la estructura mensual es frágil y necesita refuerzo prioritario.',
+      strengths: cappedStrengths,
+      risks: dominantRisks.slice(0, 3),
+      nextFocus: 'Convertir deuda en margen mensual, construir colchón protector real y fortalecer ingreso base recurrente.',
+      metrics: {
+        coverageRatio,
+        debtPressureRatio,
+        reserveMonths,
+        extraordinaryIncomeDependency
+      },
+      assumptions
+    };
+  }
+
+  const headlineByStatus: Record<Exclude<HouseholdStructuralStatus, 'vulnerable'>, string> = {
     solido: 'Estructura sólida',
     en_transicion: 'Estructura en transición',
-    ajustado: 'Estructura ajustada',
-    vulnerable: 'Estructura vulnerable'
+    ajustado: 'Estructura ajustada'
   };
 
-  const interpretationByStatus: Record<HouseholdStructuralStatus, string> = {
-    solido: 'Tu hogar cubre lo esencial, conserva margen y tiene protección real para imprevistos.',
-    en_transicion: 'Vas ganando estabilidad, aunque todavía hay piezas que deben consolidarse.',
-    ajustado: 'Tu hogar cubre lo esencial, pero aún depende de maniobras para respirar con holgura.',
-    vulnerable: 'La presión principal es estructural: falta colchón y el mes se vuelve frágil ante cualquier cambio.'
+  const interpretationByStatus: Record<Exclude<HouseholdStructuralStatus, 'vulnerable'>, string> = {
+    solido:
+      `Tu estructura mensual es saludable: cobertura base ${toPercent(coverageRatio)}, reserva ${toMonths(reserveMonths)} y presión de deuda ${toPercent(debtPressureRatio)}.`,
+    en_transicion:
+      `Hay avance real: cobertura base ${toPercent(coverageRatio)} y reserva ${toMonths(reserveMonths)}, pero aún conviene fortalecer margen y blindaje.`,
+    ajustado:
+      `El hogar sostiene lo esencial con margen corto (margen base ${formatMoney(baseMonthlyMargin)}); falta consolidar reserva y reducir presión estructural.`
   };
 
-  const shortLineByStatus: Record<HouseholdStructuralStatus, string> = {
-    solido: 'Hay base, margen y reserva: la estructura del hogar está firme.',
-    en_transicion: 'Hay avances reales, pero aún no alcanza para hablar de estabilidad plena.',
-    ajustado: 'La base alcanza, aunque la holgura sigue siendo limitada.',
-    vulnerable: 'Hoy la estructura mensual sigue bajo presión y necesita refuerzo.'
+  const shortLineByStatus: Record<Exclude<HouseholdStructuralStatus, 'vulnerable'>, string> = {
+    solido: 'La estructura del hogar está firme, con margen y protección razonable.',
+    en_transicion: 'Hay estabilidad parcial: buen rumbo, pero todavía con puntos frágiles.',
+    ajustado: 'La base se sostiene, aunque la holgura estructural sigue limitada.'
   };
 
-  const nextFocusByStatus: Record<HouseholdStructuralStatus, string> = {
-    solido: 'Tu siguiente enfoque debe ser convertir el excedente en reserva protegida y acelerar reducción de deuda cara.',
-    en_transicion: 'Tu siguiente enfoque debe ser convertir deuda en margen y llevar el ahorro protegido a dos meses.',
-    ajustado: 'Tu siguiente enfoque debe ser estabilizar el mes: priorizar pagos clave y construir un colchón mínimo.',
-    vulnerable: 'Tu siguiente enfoque debe ser recuperar tracción: reforzar ingreso base y frenar fugas estructurales.'
+  const nextFocusByStatus: Record<Exclude<HouseholdStructuralStatus, 'vulnerable'>, string> = {
+    solido: 'Mantener disciplina: convertir excedente en reserva protegida y seguir bajando deuda cara.',
+    en_transicion: 'Convertir deuda en margen mensual y llevar el ahorro protector a un nivel más estable.',
+    ajustado: 'Reducir fugas estructurales, subir ahorro protector y fortalecer ingreso base recurrente.'
   };
+
+  if (!strengths.length) strengths.push('Existe intención de orden financiero, aunque aún falta consolidar resultados constantes.');
+  if (!risks.length) risks.push('No se observan focos críticos hoy, pero conviene sostener hábitos para no retroceder.');
+
+  const strengthsLimit = status === 'solido' ? 3 : 2;
+  const risksLimit = status === 'solido' ? 2 : 3;
 
   return {
     status,
@@ -126,8 +190,8 @@ export function calculateFinancialStatus(input: {
     headline: headlineByStatus[status],
     interpretation: interpretationByStatus[status],
     shortLine: shortLineByStatus[status],
-    strengths: strengths.slice(0, 3),
-    risks: risks.slice(0, 3),
+    strengths: strengths.slice(0, strengthsLimit),
+    risks: risks.slice(0, risksLimit),
     nextFocus: nextFocusByStatus[status],
     metrics: {
       coverageRatio,
