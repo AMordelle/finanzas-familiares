@@ -21,6 +21,7 @@ const accounts = [
   { id: 'acc-tdc', name: 'TDC BBVA', type: 'credit_card' },
   { id: 'acc-liv', name: 'Tarjeta Liverpool', type: 'credit_card', aliases: ['TDC Liverpool'] },
   { id: 'acc-loan', name: 'Préstamo auto', type: 'loan' },
+  { id: 'acc-caja', name: 'Caja de Ahorro', type: 'savings_fund', aliases: ['Caja ahorro'] },
   { id: 'acc-ah1', name: 'Ahorro Emergencia', type: 'savings_fund' },
   { id: 'acc-ah2', name: 'Ahorro Viaje', type: 'savings_fund' },
   { id: 'acc-rec', name: 'Juan por cobrar', type: 'receivable' }
@@ -897,6 +898,165 @@ describe('ai-first instruction understanding', () => {
     expect(result.missingFieldKinds).toContain('missingSourceAccount');
     expect(result.nextPromptInputType).toBe('account_selector');
     expect(result.nextPromptAllowedAccountTypes).toEqual(['credit_card']);
+  });
+
+  it('resolves income destination to savings when AI hint is "Caja de Ahorro"', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'income',
+      visibleType: 'Ingreso',
+      amount: 500,
+      sourceAccountHint: null,
+      destinationAccountHint: 'Caja de Ahorro',
+      category: 'ingreso_extra',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Ingreso a ahorro'
+    });
+
+    const result = await interpretTransaction('Recibi 500 de ahorro en Caja de Ahorro', accounts as any);
+    expect(result.intent).toBe('income');
+    expect(result.destinationAccountName).toBe('Caja de Ahorro');
+    expect(result.destinationAccountType).toBe('savings_fund');
+    expect(result.missingFieldKinds).not.toContain('missingDestinationAccount');
+  });
+
+  it('preserves ahorro category for income-to-savings when AI returns ahorro', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'income',
+      visibleType: 'Ingreso',
+      amount: 500,
+      sourceAccountHint: null,
+      destinationAccountHint: 'Caja de Ahorro',
+      category: 'ahorro',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Ingreso para ahorro'
+    });
+
+    const result = await interpretTransaction('Recibí 500 de ahorro en Caja de Ahorro', accounts as any);
+    expect(result.intent).toBe('income');
+    expect(result.destinationAccountName).toBe('Caja de Ahorro');
+    expect(result.category).toBe('ahorro');
+  });
+
+  it('keeps savings-compatible category for "Deposité ... en Caja de Ahorro"', async () => {
+    const result = await interpretTransaction('Deposité 1000 en Caja de Ahorro', accounts as any);
+    expect(['ahorro', 'ingreso_extra']).toContain(result.category ?? '');
+  });
+
+  it('keeps nomina as ingreso_fijo (regression)', async () => {
+    const result = await interpretTransaction('Recibí nómina de 7000 en TDD BBVA', accounts as any);
+    expect(result.category).toBe('ingreso_fijo');
+  });
+
+  it('keeps PrimeIPTV income as ingreso_extra (regression)', async () => {
+    const result = await interpretTransaction('Me depositaron 500 de PrimeIPTV en TDD BBVA', accounts as any);
+    expect(result.category).toBe('ingreso_extra');
+  });
+
+  it('resolves own transfer from Caja de Ahorro to TDD BBVA without missing source', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'transfer_between_own_accounts',
+      visibleType: 'Transferencia entre cuentas',
+      amount: 4412.82,
+      sourceAccountHint: 'Caja de Ahorro',
+      destinationAccountHint: 'TDD BBVA',
+      category: 'transferencia',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Transferencia entre cuentas propias'
+    });
+
+    const result = await interpretTransaction('Transferí 4412.82 desde Caja de Ahorro hacia TDD BBVA', accounts as any);
+    expect(result.intent).toBe('transfer_between_own_accounts');
+    expect(result.sourceAccountName).toBe('Caja de Ahorro');
+    expect(result.destinationAccountName).toBe('TDD BBVA');
+    expect(result.missingFieldKinds).not.toContain('missingSourceAccount');
+    expect(result.missingFieldKinds).not.toContain('missingDestinationAccount');
+  });
+
+  it('normalizes Caja de Ahorro variants to the same savings account', async () => {
+    const variants = ['Caja ahorro', 'caja de ahorro', 'CAJA AHORRO'];
+    for (const variant of variants) {
+      mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+        intent: 'income',
+        visibleType: 'Ingreso',
+        amount: 300,
+        sourceAccountHint: null,
+        destinationAccountHint: variant,
+        category: 'ingreso_extra',
+        missingFields: [],
+        confidence: 'high',
+        reason: 'Alias ahorro'
+      });
+      const result = await interpretTransaction(`Recibi 300 en ${variant}`, accounts as any);
+      expect(result.destinationAccountName).toBe('Caja de Ahorro');
+      expect(result.destinationAccountType).toBe('savings_fund');
+    }
+  });
+
+  it('keeps own-transfer fallback selector limited to compatible own accounts when unresolved', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'transfer_between_own_accounts',
+      visibleType: 'Transferencia entre cuentas',
+      amount: 1000,
+      sourceAccountHint: 'Cuenta Fantasma',
+      destinationAccountHint: 'TDD BBVA',
+      category: 'transferencia',
+      missingFields: ['missingSourceAccount'],
+      confidence: 'high',
+      reason: 'Origen desconocido'
+    });
+
+    const result = await interpretTransaction('Transferí 1000 desde Cuenta Fantasma hacia TDD BBVA', accounts as any);
+    expect(result.missingFieldKinds).toContain('missingSourceAccount');
+    expect(result.nextPromptInputType).toBe('account_selector');
+    expect(result.nextPromptAllowedAccountTypes).toEqual(['operational_cash', 'savings_fund', 'investment']);
+    expect(result.nextPromptAllowedAccountTypes).not.toContain('credit_card');
+    expect(result.nextPromptAllowedAccountTypes).not.toContain('loan');
+    expect(result.nextPromptAllowedAccountTypes).not.toContain('receivable');
+  });
+
+  it('validates using matched account stored type after catalog match', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'income',
+      visibleType: 'Ingreso',
+      amount: 500,
+      sourceAccountHint: null,
+      destinationAccountHint: 'TDC BBVA',
+      category: 'ingreso_extra',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Destino no compatible'
+    });
+
+    const result = await interpretTransaction('Recibí 500 en TDC BBVA', accounts as any);
+    expect(result.destinationAccountName).toBeNull();
+    expect(result.missingFieldKinds).toContain('missingDestinationAccount');
+    expect(result.nextPrompt).toContain('no es compatible');
+  });
+
+  it('resolves custom user account names from catalog aliases without name-specific patches', async () => {
+    const customAccounts = [
+      { id: 'acc-op', name: 'Banco Principal', type: 'operational_cash' },
+      { id: 'acc-save', name: 'Mi Chanchito 2026', type: 'savings_fund', aliases: ['Fondo Viaje'] }
+    ];
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'income',
+      visibleType: 'Ingreso',
+      amount: 800,
+      sourceAccountHint: null,
+      destinationAccountHint: 'fondo viaje',
+      category: 'ingreso_extra',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Alias del usuario'
+    });
+
+    const result = await interpretTransaction('Recibí 800 en fondo viaje', customAccounts as any);
+    expect(result.destinationAccountName).toBe('Mi Chanchito 2026');
+    expect(result.destinationAccountType).toBe('savings_fund');
+    expect(result.missingFieldKinds).not.toContain('missingDestinationAccount');
   });
 
   it('rebuilds full instruction after concept follow-up and keeps semantic category quality', async () => {
