@@ -983,6 +983,48 @@ describe('ai-first instruction understanding', () => {
     expect(result.nextPromptAllowedAccountTypes).not.toContain('receivable');
   });
 
+  it('validates using matched account stored type after catalog match', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'income',
+      visibleType: 'Ingreso',
+      amount: 500,
+      sourceAccountHint: null,
+      destinationAccountHint: 'TDC BBVA',
+      category: 'ingreso_extra',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Destino no compatible'
+    });
+
+    const result = await interpretTransaction('Recibí 500 en TDC BBVA', accounts as any);
+    expect(result.destinationAccountName).toBeNull();
+    expect(result.missingFieldKinds).toContain('missingDestinationAccount');
+    expect(result.nextPrompt).toContain('no es compatible');
+  });
+
+  it('resolves custom user account names from catalog aliases without name-specific patches', async () => {
+    const customAccounts = [
+      { id: 'acc-op', name: 'Banco Principal', type: 'operational_cash' },
+      { id: 'acc-save', name: 'Mi Chanchito 2026', type: 'savings_fund', aliases: ['Fondo Viaje'] }
+    ];
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'income',
+      visibleType: 'Ingreso',
+      amount: 800,
+      sourceAccountHint: null,
+      destinationAccountHint: 'fondo viaje',
+      category: 'ingreso_extra',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Alias del usuario'
+    });
+
+    const result = await interpretTransaction('Recibí 800 en fondo viaje', customAccounts as any);
+    expect(result.destinationAccountName).toBe('Mi Chanchito 2026');
+    expect(result.destinationAccountType).toBe('savings_fund');
+    expect(result.missingFieldKinds).not.toContain('missingDestinationAccount');
+  });
+
   it('rebuilds full instruction after concept follow-up and keeps semantic category quality', async () => {
     mockedSemanticInstructionUnderstanding
       .mockResolvedValueOnce({

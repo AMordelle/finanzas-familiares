@@ -175,7 +175,6 @@ function normalize(input: string) {
 function normalizeAccountReference(input: string) {
   return normalize(input)
     .replace(/\b(mi|mis|la|el|las|los|de|del|al|a|en|para|por)\b/g, ' ')
-    .replace(/\bcaja de ahorro\b/g, 'caja ahorro')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -220,7 +219,32 @@ function buildOperationalDebitAliases(normalizedName: string) {
 }
 
 function hintImpliesSavings(normalizedHint: string) {
-  return /(caja ahorro|ahorro|fondo|meta)/.test(normalizedHint);
+  return /(ahorro|fondo|meta)/.test(normalizedHint);
+}
+
+function isExpectedKindCompatible(account: EnrichedAccount, expectedKind: ExplicitAccountReference['expectedKind']) {
+  if (!expectedKind) return true;
+  if (expectedKind === 'debt') return account.is_debt;
+  if (expectedKind === 'operational') return account.type === 'operational_cash';
+  return account.type === 'savings_fund';
+}
+
+function isAccountTypeCompatibleWithIntent(
+  account: EnrichedAccount,
+  role: 'source' | 'destination',
+  intent: z.infer<typeof financialIntentSchema>
+) {
+  const type = account.type;
+  if (intent === 'transfer_between_own_accounts') return ['operational_cash', 'savings_fund', 'investment'].includes(type);
+  if (intent === 'income' && role === 'destination') return ['operational_cash', 'savings_fund', 'investment', 'receivable'].includes(type);
+  if (intent === 'expense_debt_account' && role === 'source') return type === 'credit_card';
+  if (intent === 'expense_cash_like' && role === 'source') return ['operational_cash', 'savings_fund', 'investment'].includes(type);
+  if (intent === 'debt_payment' && role === 'destination') return ['credit_card', 'loan'].includes(type);
+  if (intent === 'debt_transfer') return ['credit_card', 'loan'].includes(type);
+  if ((intent === 'savings_contribution' || intent === 'savings_withdrawal') && role === 'destination') return type === 'savings_fund';
+  if ((intent === 'savings_contribution' || intent === 'savings_withdrawal') && role === 'source') return ['operational_cash', 'savings_fund', 'investment'].includes(type);
+  if (intent === 'receivable_payment' && role === 'destination') return ['operational_cash', 'savings_fund'].includes(type);
+  return true;
 }
 
 function parseAmount(input: string) {
@@ -348,17 +372,13 @@ function resolveExplicitReference(
   if (!reference) return { account: null, confidence: 0, unresolvedMessage: null };
   const normalizedReference = normalizeStrongDebitReference(stripReferenceNoise(reference.normalized));
 
-  const expectedKind = hasStrongDebitMarker(reference.normalized)
-    ? 'operational'
-    : reference.expectedKind;
-  const pool = expectedKind
-    ? accounts.filter((account) => expectedKind === 'debt' ? account.is_debt : expectedKind === 'operational' ? account.type === 'operational_cash' : account.type === 'savings_fund')
-    : accounts;
-
-  if (!pool.length) return { account: null, confidence: 0, unresolvedMessage: null };
+  const expectedKind = hasStrongDebitMarker(reference.normalized) ? 'operational' : reference.expectedKind;
+  if (!accounts.length) return { account: null, confidence: 0, unresolvedMessage: null };
   if (reference.isGeneric) {
     if (reference.expectedKind) {
-      const genericPool = pool;
+      const genericPool = expectedKind
+        ? accounts.filter((account) => isExpectedKindCompatible(account, expectedKind))
+        : accounts;
       const keywordPool = genericPool.filter((account) => {
         if (reference.normalized.includes('banco')) return account.normalized_name.includes('banco');
         if (reference.normalized.includes('efectivo')) return account.normalized_name.includes('efectivo');
@@ -372,7 +392,7 @@ function resolveExplicitReference(
     return { account: null, confidence: 0.4, unresolvedMessage: null };
   }
 
-  const ranked = pool
+  const ranked = accounts
     .map((account) => {
       if (reference.normalized === account.normalized_name) return { account, score: 1 };
       if (normalizedReference === account.normalized_name) return { account, score: 0.99 };
@@ -394,7 +414,10 @@ function resolveExplicitReference(
           score = Math.max(score, 0.9);
         }
       }
-      return { account, score };
+      if (isExpectedKindCompatible(account, expectedKind)) {
+        score += 0.03;
+      }
+      return { account, score: Math.min(score, 1) };
     })
     .sort((a, b) => b.score - a.score);
 
@@ -688,6 +711,7 @@ function resolveAccountFromAiHint(
               ? expectedKindByHint
               : expectedKindByHint;
 
+  let usedHeuristicFallback = false;
   const resolved = resolveExplicitReference({
     raw: hint,
     normalized: normalizedHintReference,
@@ -695,14 +719,19 @@ function resolveAccountFromAiHint(
     isGeneric: genericHintRegex.test(normalizedHintReference),
     role
   }, accounts);
+  let finalResolution = resolved;
+  if (!resolved.account && expectedKindByHint) {
+    const fallbackByKind = findAccountByHint(normalizedHintReference, accounts, expectedKindByHint === 'debt' ? 'debt' : expectedKindByHint === 'operational' ? 'operational' : 'savings');
+    if (fallbackByKind) {
+      finalResolution = { account: fallbackByKind, confidence: Math.max(resolved.confidence, 0.72), unresolvedMessage: null };
+      usedHeuristicFallback = true;
+    }
+  }
+  const typeValidationPassed = finalResolution.account
+    ? isAccountTypeCompatibleWithIntent(finalResolution.account, role, intent)
+    : null;
   if (process.env.NODE_ENV === 'development') {
-    const filteredCandidates = expectedKind
-      ? accounts.filter((account) => expectedKind === 'debt'
-        ? account.is_debt
-        : expectedKind === 'operational'
-          ? account.type === 'operational_cash'
-          : account.type === 'savings_fund')
-      : accounts;
+    const filteredCandidates = accounts;
     console.info('[AIHintResolver]', {
       intent,
       role,
@@ -711,14 +740,21 @@ function resolveAccountFromAiHint(
       normalizedHintReference,
       expectedKind,
       candidateNames: filteredCandidates.map((account) => account.name),
-      matchedAccountName: resolved.account?.name ?? null,
-      unresolvedReason: resolved.unresolvedMessage ?? (resolved.account ? null : 'no_strong_match')
+      matchedAccountName: finalResolution.account?.name ?? null,
+      matchedAccountStoredType: finalResolution.account?.type ?? null,
+      typeValidationPassed,
+      usedHeuristicFallback,
+      unresolvedReason: finalResolution.unresolvedMessage ?? (finalResolution.account ? null : 'no_catalog_match')
     });
   }
-  if (intent === 'expense_debt_account' && role === 'source' && resolved.account && resolved.account.type !== 'credit_card') {
-    return { account: null, confidence: resolved.confidence, unresolvedMessage: resolved.unresolvedMessage };
+  if (finalResolution.account && typeValidationPassed === false) {
+    return {
+      account: null,
+      confidence: finalResolution.confidence,
+      unresolvedMessage: `Encontré la cuenta "${finalResolution.account.name}", pero no es compatible para este movimiento. ¿Quieres elegir otra cuenta?`
+    };
   }
-  return resolved;
+  return finalResolution;
 }
 
 function inferIntent(normalizedText: string, matched: EnrichedAccount[]): z.infer<typeof financialIntentSchema> {
@@ -1078,6 +1114,15 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   if (intent === 'receivable_payment' && receivableRoles.hasDestinationFragment) {
     destination = receivableRoles.destination ?? destination;
   }
+  let compatibilityUnresolvedMessage: string | null = null;
+  if (source && !isAccountTypeCompatibleWithIntent(source, 'source', intent)) {
+    compatibilityUnresolvedMessage = `Encontré la cuenta "${source.name}", pero no es compatible para este movimiento. ¿Quieres elegir otra cuenta?`;
+    source = null;
+  }
+  if (destination && !isAccountTypeCompatibleWithIntent(destination, 'destination', intent)) {
+    compatibilityUnresolvedMessage = `Encontré la cuenta "${destination.name}", pero no es compatible para este movimiento. ¿Quieres elegir otra cuenta?`;
+    destination = null;
+  }
   const finalIntent = inferFinalIntent(intent, source?.type, destination?.type, normalizedText);
   const hasAcceptedAiCategory = !shouldFallbackToDeterministic
     && aiProposal?.confidence !== 'low'
@@ -1109,7 +1154,8 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     ...aiMetadata
   });
   applyIntentAccountConstraints(draftForConstraints);
-  const deterministicMissingKinds = recomputeMissingKinds(draftForConstraints, explicitResolution.unresolvedMessage);
+  const unresolvedMessage = explicitResolution.unresolvedMessage ?? compatibilityUnresolvedMessage;
+  const deterministicMissingKinds = recomputeMissingKinds(draftForConstraints, unresolvedMessage);
   const aiMissingKinds = shouldFallbackToDeterministic
     ? []
     : pruneResolvedMissingKinds(draftForConstraints, mapAiMissingFieldKindsToDeterministic(aiProposal?.missingFields ?? []));
@@ -1153,7 +1199,7 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     destinationAccount: draftForConstraints.destinationAccount,
     missingFields: missingKinds.map((item) => item.replace('missing', '').replace('Target', 'Account').replace(/^./, (c) => c.toLowerCase())),
     missingFieldKinds: missingKinds,
-    nextPrompt: explicitResolution.unresolvedMessage ?? prompt.nextPrompt,
+    nextPrompt: unresolvedMessage ?? prompt.nextPrompt,
     nextPromptInputType: prompt.nextPromptInputType,
     nextPromptAllowedAccountTypes: prompt.nextPromptAllowedAccountTypes,
     confidence,
