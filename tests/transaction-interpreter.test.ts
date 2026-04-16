@@ -920,6 +920,40 @@ describe('ai-first instruction understanding', () => {
     expect(result.missingFieldKinds).not.toContain('missingDestinationAccount');
   });
 
+  it('preserves ahorro category for income-to-savings when AI returns ahorro', async () => {
+    mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+      intent: 'income',
+      visibleType: 'Ingreso',
+      amount: 500,
+      sourceAccountHint: null,
+      destinationAccountHint: 'Caja de Ahorro',
+      category: 'ahorro',
+      missingFields: [],
+      confidence: 'high',
+      reason: 'Ingreso para ahorro'
+    });
+
+    const result = await interpretTransaction('Recibí 500 de ahorro en Caja de Ahorro', accounts as any);
+    expect(result.intent).toBe('income');
+    expect(result.destinationAccountName).toBe('Caja de Ahorro');
+    expect(result.category).toBe('ahorro');
+  });
+
+  it('keeps savings-compatible category for "Deposité ... en Caja de Ahorro"', async () => {
+    const result = await interpretTransaction('Deposité 1000 en Caja de Ahorro', accounts as any);
+    expect(['ahorro', 'ingreso_extra']).toContain(result.category ?? '');
+  });
+
+  it('keeps nomina as ingreso_fijo (regression)', async () => {
+    const result = await interpretTransaction('Recibí nómina de 7000 en TDD BBVA', accounts as any);
+    expect(result.category).toBe('ingreso_fijo');
+  });
+
+  it('keeps PrimeIPTV income as ingreso_extra (regression)', async () => {
+    const result = await interpretTransaction('Me depositaron 500 de PrimeIPTV en TDD BBVA', accounts as any);
+    expect(result.category).toBe('ingreso_extra');
+  });
+
   it('resolves own transfer from Caja de Ahorro to TDD BBVA without missing source', async () => {
     mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
       intent: 'transfer_between_own_accounts',

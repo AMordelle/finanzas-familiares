@@ -149,7 +149,7 @@ function isCategoryCompatibleWithIntent(
   category: string | null | undefined
 ) {
   if (!category) return false;
-  if (intent === 'income') return ['ingreso_fijo', 'ingreso_extra', 'reembolso', 'otros_gastos'].includes(category);
+  if (intent === 'income') return ['ingreso_fijo', 'ingreso_extra', 'reembolso', 'ahorro', 'otros_gastos'].includes(category);
   if (intent === 'receivable_payment') return category === 'pago_recibido';
   return true;
 }
@@ -1131,6 +1131,15 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const category = hasAcceptedAiCategory
     ? aiProposal!.category
     : await semanticCategoryInferenceWithAI({ text, normalizedText, intent: finalIntent });
+  if (process.env.NODE_ENV === 'development') {
+    console.info('[CategoryValidation]', {
+      intent: finalIntent,
+      aiCategory: aiProposal?.category ?? null,
+      finalCategory: category,
+      acceptedAiCategory: hasAcceptedAiCategory,
+      fallbackTriggered: !hasAcceptedAiCategory
+    });
+  }
 
   const draftForConstraints: TransactionIntent = transactionIntentSchema.parse({
     rawText: text,
