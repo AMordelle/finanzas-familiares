@@ -55,6 +55,24 @@ function riskLevelFromScore(score: number): PriorityDiagnostic['level'] {
   return 'low';
 }
 
+function formatMoney(value: number) {
+  return `$${Math.round(value).toLocaleString('es-MX')}`;
+}
+
+function extractUpcomingObligation(radar: FinancialRadar | null) {
+  if (!radar?.upcoming) return null;
+  const match = /En\s+(\d+)\s+d[ií]as\s+(?:vence|viene)\s+(.+?)(?:\.|$)/i.exec(radar.upcoming);
+  if (!match) return null;
+  const dueInDays = Number(match[1]);
+  const rawName = match[2]?.trim() ?? '';
+  const name = rawName.replace(/^el\s+/i, '');
+  if (!name) return null;
+  return {
+    name,
+    dueInDays: Number.isFinite(dueInDays) ? dueInDays : null
+  };
+}
+
 export function getPriorityDiagnostics(input: {
   radar: FinancialRadar | null;
   financialStatus: FinancialStatus | null;
@@ -76,81 +94,90 @@ export function getPriorityDiagnostics(input: {
   ].filter((value): value is string => Boolean(value));
 
   const candidates: Candidate[] = [];
+  const upcomingObligation = extractUpcomingObligation(radar);
 
-  if (radar?.status === 'presion' || financialPressure?.status === 'critical') {
+  if (radar && upcomingObligation?.dueInDays !== null && upcomingObligation.dueInDays <= 10) {
+    const pressurePoints = [
+      radar.status === 'presion',
+      radar.estimatedMargin <= Math.max(radar.upcomingLoad * 0.12, 350),
+      financialPressure?.status === 'critical'
+    ].filter(Boolean).length;
+
+    if (pressurePoints >= 1) {
+      candidates.push({
+        key: 'obligacion-inminente',
+        score: 98,
+        level: 'high',
+        title: `En ${upcomingObligation.dueInDays} días vence ${upcomingObligation.name} y esta semana queda justa`,
+        explanation: `La carga de ${formatMoney(radar.upcomingLoad)} en la ventana corta deja poco margen frente a tu disponible actual (${formatMoney(radar.availableNow)}).`,
+        action: 'Congela extras esta semana y deja separado ese pago desde hoy.'
+      });
+    }
+  }
+
+  if (radar && (radar.status === 'presion' || radar.estimatedMargin < 0 || financialPressure?.status === 'critical')) {
+    const shortfall = Math.max(-radar.estimatedMargin, financialPressure?.gap ?? 0, 0);
     candidates.push({
-      key: 'liquidez-inmediata',
-      score: 100,
+      key: 'semana-corta-liquidez',
+      score: 92,
       level: 'high',
-      title: 'La liquidez inmediata está bajo presión',
-      explanation: 'En los próximos días la carga supera o casi consume tu disponible. Conviene blindar flujo desde hoy.',
-      action: 'Prioriza lo indispensable y mueve lo no urgente.'
+      title: shortfall > 0
+        ? `Esta semana te falta ${formatMoney(shortfall)} para cubrir sin fricción`
+        : 'Esta semana va muy al límite y cualquier gasto extra desordena el flujo',
+      explanation: `El disponible (${formatMoney(radar.availableNow)}) no alcanza con holgura para la carga inmediata (${formatMoney(radar.upcomingLoad)}).`,
+      action: 'Reordena pagos por fecha y mueve lo postergable fuera de esta ventana.'
     });
   }
 
-  if (radar && (radar.nearFutureLoad > 0 || radar.upcomingLoad > 0)) {
-    const ratio = radar.upcomingLoad > 0 ? radar.nearFutureLoad / radar.upcomingLoad : 0;
-    if (ratio >= 0.3 || radar.nearFutureLoad >= 1200) {
-      candidates.push({
-        key: 'presion-semana-cercana',
-        score: 78 + Math.min(Math.round(ratio * 10), 8),
-        level: 'medium',
-        title: 'Se acerca una semana más pesada',
-        explanation: `Después de esta ventana viene una carga cercana de $${Math.round(radar.nearFutureLoad).toLocaleString('es-MX')}. Vale anticiparte desde ahora.`,
-        action: 'Reserva liquidez desde esta semana para no llegar justo.'
-      });
-    }
+  if (financialStatus && financialStatus.metrics.debtPressureRatio >= 0.35) {
+    const debtPercent = Math.round(financialStatus.metrics.debtPressureRatio * 100);
+    candidates.push({
+      key: 'deuda-recorta-margen',
+      score: 84,
+      level: 'high',
+      title: `Hoy ${debtPercent}% del ingreso base se va en deuda`,
+      explanation: 'Ese peso fijo recorta la maniobra mensual y te obliga a operar con margen corto casi todo el mes.',
+      action: 'Ataca primero deuda cara o renegocia una cuota para recuperar flujo mensual.'
+    });
   }
 
-  if (financialStatus) {
-    if (financialStatus.status === 'vulnerable' || financialStatus.metrics.coverageRatio < 1 || financialStatus.metrics.reserveMonths < 0.7) {
-      candidates.push({
-        key: 'presion-estructural',
-        score: 88,
-        level: 'high',
-        title: 'La presión principal sigue siendo estructural',
-        explanation: 'Lo inmediato se puede mover, pero la base mensual aún tiene poco margen y poca protección.',
-        action: 'Convierte deuda en margen y fortalece reserva base.'
-      });
-    }
-
-    if (financialStatus.metrics.debtPressureRatio >= 0.35) {
-      candidates.push({
-        key: 'deuda-consume-margen',
-        score: 82,
-        level: 'high',
-        title: 'La deuda está consumiendo demasiado margen',
-        explanation: `La presión de deuda ronda ${Math.round(financialStatus.metrics.debtPressureRatio * 100)}% del ingreso base y limita tu maniobra mensual.`,
-        action: 'Ataca primero la deuda más cara para liberar flujo.'
-      });
-    }
-
-    if (financialStatus.metrics.extraordinaryIncomeDependency >= 0.25) {
-      candidates.push({
-        key: 'dependencia-extra',
-        score: 62,
-        level: 'medium',
-        title: 'Hay dependencia de ingresos extraordinarios',
-        explanation: 'Parte del equilibrio depende de entradas no recurrentes. Eso vuelve inestable el plan mensual.',
-        action: 'Reduce compromisos fijos hasta que el ingreso base cargue más peso.'
-      });
-    }
+  if (financialStatus && (financialStatus.metrics.reserveMonths < 1 || financialStatus.status === 'vulnerable')) {
+    const reserveMonths = Math.max(financialStatus.metrics.reserveMonths, 0);
+    candidates.push({
+      key: 'colchon-debil',
+      score: 74,
+      level: 'medium',
+      title: `Tu colchón actual cubre solo ${reserveMonths.toFixed(1)} meses`,
+      explanation: 'Con ese nivel, cualquier imprevisto mediano vuelve a presionar la semana y obliga a improvisar.',
+      action: 'Define una meta mínima de reserva y fondea una parte fija cada semana.'
+    });
   }
 
   if (radar && financialStatus && radar.status === 'estable' && radar.estimatedMargin > 0 && financialStatus.metrics.reserveMonths < 2) {
     candidates.push({
       key: 'ventana-ahorro',
-      score: 54,
+      score: 56,
       level: 'low',
-      title: 'Buen momento para fortalecer colchón',
-      explanation: 'La semana se ve controlada. Si sostienes el orden, puedes separar una parte para protección.',
-      action: 'Aparta una cantidad pequeña y constante al fondo.'
+      title: `Esta semana te deja ${formatMoney(radar.estimatedMargin)} de margen aprovechable`,
+      explanation: 'Si sostienes el orden de pagos, puedes convertir una parte de ese margen en colchón real.',
+      action: 'Aparta hoy una cantidad concreta al fondo y trátala como pago fijo.'
+    });
+  }
+
+  if (radar && radar.nearFutureLoad > 0 && radar.nearFutureLoad / Math.max(radar.upcomingLoad, 1) >= 0.35) {
+    candidates.push({
+      key: 'ola-siguiente-semana',
+      score: 70,
+      level: 'medium',
+      title: `Después de esta ventana viene otra carga de ${formatMoney(radar.nearFutureLoad)}`,
+      explanation: 'Si no te anticipas hoy, la siguiente semana arranca más ajustada y reduce tu margen de maniobra.',
+      action: 'Reserva desde esta semana una parte para la siguiente ola de pagos.'
     });
   }
 
   const selected = candidates
     .filter((candidate, index, list) => list.findIndex((item) => item.key === candidate.key) === index)
-    .filter((candidate) => candidate.score >= 85 || !isDuplicateEquivalent(candidate, baselineTexts))
+    .filter((candidate) => candidate.score >= 90 || !isDuplicateEquivalent(candidate, baselineTexts))
     .sort((a, b) => b.score - a.score)
     .slice(0, 3)
     .map(({ score, ...candidate }) => ({

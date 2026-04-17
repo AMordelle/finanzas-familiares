@@ -7,7 +7,7 @@ const baseRadar = {
   windowLabel: 'próximos 7 días',
   actionToday: 'Hoy: cubre lo esencial y evita extras.',
   actionTodayDetail: 'Alcanzas esta semana, pero conviene no mover reservas sin necesidad.',
-  upcoming: 'En 6 días vence BBVA.',
+  upcoming: 'En 6 días vence Pago TDC BBVA.',
   riskText: 'Cubres lo inmediato, pero con poco margen.',
   nextBestStep: 'Intenta cerrar la semana con margen positivo, aunque sea pequeño.',
   statusReason: 'Cubres el periodo, pero con poco margen.',
@@ -38,7 +38,7 @@ const baseStatus = {
 describe('getPriorityDiagnostics', () => {
   it('retorna máximo 3 diagnósticos priorizados', () => {
     const diagnostics = getPriorityDiagnostics({
-      radar: { ...baseRadar, status: 'presion', estimatedMargin: -200 },
+      radar: { ...baseRadar, status: 'presion', estimatedMargin: -600 },
       financialStatus: { ...baseStatus, status: 'vulnerable' },
       financialPressure: {
         requiredMoney: 6200,
@@ -53,9 +53,9 @@ describe('getPriorityDiagnostics', () => {
     expect(diagnostics.length).toBeLessThanOrEqual(3);
   });
 
-  it('ordena primero lo de mayor prioridad', () => {
+  it('prioriza obligación inminente con nombre cuando existe', () => {
     const diagnostics = getPriorityDiagnostics({
-      radar: { ...baseRadar, status: 'presion' },
+      radar: { ...baseRadar, status: 'presion', estimatedMargin: -200 },
       financialStatus: { ...baseStatus, status: 'vulnerable' },
       financialPressure: {
         requiredMoney: 6200,
@@ -66,39 +66,33 @@ describe('getPriorityDiagnostics', () => {
       }
     });
 
-    expect(diagnostics[0]?.level).toBe('high');
-    expect(diagnostics[0]?.key).toBe('liquidez-inmediata');
+    expect(diagnostics[0]?.key).toBe('obligacion-inminente');
+    expect(diagnostics[0]?.title).toContain('Pago TDC BBVA');
+    expect(diagnostics[0]?.title).toContain('En 6 días');
   });
 
-  it('evita duplicar mensajes equivalentes de Radar/Estado cuando es evitable', () => {
+  it('usa títulos concretos y evita frases abstractas previas', () => {
     const diagnostics = getPriorityDiagnostics({
-      radar: { ...baseRadar, status: 'estable', actionToday: 'Hoy: puedes separar una parte para colchón.', estimatedMargin: 2000, nearFutureLoad: 0 },
-      financialStatus: {
-        ...baseStatus,
-        status: 'en_transicion',
-        metrics: {
-          coverageRatio: 1.1,
-          debtPressureRatio: 0.24,
-          reserveMonths: 1.4,
-          extraordinaryIncomeDependency: 0.12
-        }
-      },
+      radar: { ...baseRadar, status: 'presion', estimatedMargin: -400 },
+      financialStatus: { ...baseStatus, status: 'vulnerable' },
       financialPressure: {
-        requiredMoney: 3000,
-        availableMoney: 6000,
-        gap: -3000,
-        status: 'healthy',
-        breakdown: { debts: 700, fixedExpenses: 1500, operationalEstimate: 800 }
-      },
-      existingDiagnoses: ['Buen momento para fortalecer colchón']
+        requiredMoney: 6200,
+        availableMoney: 5000,
+        gap: 1200,
+        status: 'critical',
+        breakdown: { debts: 2000, fixedExpenses: 2500, operationalEstimate: 1700 }
+      }
     });
 
-    expect(diagnostics.find((item) => item.key === 'ventana-ahorro')).toBeUndefined();
+    const titles = diagnostics.map((item) => item.title).join(' | ');
+    expect(titles).not.toContain('La liquidez inmediata está bajo presión');
+    expect(titles).not.toContain('La presión principal sigue siendo estructural');
+    expect(titles).not.toContain('La deuda está consumiendo demasiado margen');
   });
 
-  it('entrega salida útil para presión inmediata, debilidad estructural y oportunidad de ahorro', () => {
-    const immediatePressure = getPriorityDiagnostics({
-      radar: { ...baseRadar, status: 'presion' },
+  it('entrega diagnóstico más específico que el wording del Radar', () => {
+    const diagnostics = getPriorityDiagnostics({
+      radar: { ...baseRadar, actionToday: 'Hoy: enfócate en cubrir lo inmediato.', status: 'presion', estimatedMargin: -300 },
       financialStatus: { ...baseStatus, status: 'ajustado' },
       financialPressure: {
         requiredMoney: 6200,
@@ -108,27 +102,13 @@ describe('getPriorityDiagnostics', () => {
         breakdown: { debts: 2000, fixedExpenses: 2500, operationalEstimate: 1700 }
       }
     });
-    expect(immediatePressure.some((item) => item.key === 'liquidez-inmediata')).toBe(true);
 
-    const structuralWeakness = getPriorityDiagnostics({
-      radar: baseRadar,
-      financialStatus: {
-        ...baseStatus,
-        status: 'vulnerable',
-        shortLine: 'Hoy cuesta sostener el mes con holgura.',
-        interpretation: 'Hay fragilidad en la base mensual.'
-      },
-      financialPressure: {
-        requiredMoney: 4500,
-        availableMoney: 5000,
-        gap: -500,
-        status: 'warning',
-        breakdown: { debts: 1800, fixedExpenses: 1900, operationalEstimate: 800 }
-      }
-    });
-    expect(structuralWeakness.some((item) => item.key === 'presion-estructural')).toBe(true);
+    expect(diagnostics.some((item) => item.title.includes('Pago TDC BBVA'))).toBe(true);
+    expect(diagnostics.some((item) => item.explanation.includes('$'))).toBe(true);
+  });
 
-    const saveOpportunity = getPriorityDiagnostics({
+  it('mantiene oportunidad de ahorro útil cuando la semana está estable', () => {
+    const diagnostics = getPriorityDiagnostics({
       radar: {
         ...baseRadar,
         status: 'estable',
@@ -155,6 +135,8 @@ describe('getPriorityDiagnostics', () => {
       }
     });
 
-    expect(saveOpportunity.some((item) => item.key === 'ventana-ahorro')).toBe(true);
+    const saveWindow = diagnostics.find((item) => item.key === 'ventana-ahorro');
+    expect(saveWindow?.title).toContain('$');
+    expect(saveWindow?.action).toContain('fondo');
   });
 });

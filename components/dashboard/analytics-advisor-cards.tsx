@@ -65,10 +65,10 @@ function stageLabel(stage: FinancialStatus['stage']) {
   return 'Recuperación';
 }
 
-function levelLabel(level: PriorityDiagnostic['level']) {
-  if (level === 'high') return { label: 'Alta', style: 'bg-rose-100 text-rose-700' };
-  if (level === 'medium') return { label: 'Media', style: 'bg-amber-100 text-amber-700' };
-  return { label: 'Baja', style: 'bg-emerald-100 text-emerald-700' };
+function itemAccent(level: PriorityDiagnostic['level']) {
+  if (level === 'high') return 'border-l-rose-300';
+  if (level === 'medium') return 'border-l-amber-300';
+  return 'border-l-emerald-300';
 }
 
 export function AnalyticsAdvisorCards({ radar, financialPressure, financialStatus, priorityDiagnostics, initialOpenCard = null }: Props) {
@@ -162,35 +162,23 @@ export function AnalyticsAdvisorCards({ radar, financialPressure, financialStatu
               <span className={`rounded-full px-2 py-1 text-xs font-medium ${estadoDiagnosticos.style}`}>{estadoDiagnosticos.label}</span>
             </div>
             <ul className="mt-3 space-y-2">
-              {collapsedDiagnostics.map((diagnostic) => {
-                const level = levelLabel(diagnostic.level);
-                return (
-                  <li key={diagnostic.key} className="flex items-start gap-2 text-sm text-slate-700">
-                    <span className={`mt-0.5 rounded-full px-2 py-0.5 text-[10px] font-semibold ${level.style}`}>{level.label}</span>
-                    <span className="line-clamp-2">{diagnostic.title}</span>
-                  </li>
-                );
-              })}
+              {collapsedDiagnostics.map((diagnostic) => (
+                <li key={diagnostic.key} className="text-sm text-slate-700 line-clamp-2">• {diagnostic.title}</li>
+              ))}
             </ul>
           </button>
           {openCard === 'diagnosticos' ? (
             <div className="border-t border-slate-100 px-4 pb-4 pt-3 text-sm text-slate-700">
               <ul className="space-y-3">
-                {priorityDiagnostics.slice(0, 3).map((diagnostic) => {
-                  const level = levelLabel(diagnostic.level);
-                  return (
-                    <li key={diagnostic.key} className="rounded-md bg-slate-50 p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="font-medium text-slate-900">{diagnostic.title}</p>
-                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${level.style}`}>{level.label}</span>
-                      </div>
-                      <p className="mt-2 text-sm text-slate-700">{diagnostic.explanation}</p>
-                      {diagnostic.action ? (
-                        <p className="mt-2 text-xs text-slate-600"><span className="font-medium text-slate-800">Siguiente paso:</span> {diagnostic.action}</p>
-                      ) : null}
-                    </li>
-                  );
-                })}
+                {priorityDiagnostics.slice(0, 3).map((diagnostic) => (
+                  <li key={diagnostic.key} className={`rounded-md border-l-2 bg-slate-50 p-3 ${itemAccent(diagnostic.level)}`}>
+                    <p className="font-medium text-slate-900">{diagnostic.title}</p>
+                    <p className="mt-2 text-sm text-slate-700">{diagnostic.explanation}</p>
+                    {diagnostic.action ? (
+                      <p className="mt-2 text-xs text-slate-600"><span className="font-medium text-slate-800">Siguiente paso:</span> {diagnostic.action}</p>
+                    ) : null}
+                  </li>
+                ))}
               </ul>
             </div>
           ) : null}

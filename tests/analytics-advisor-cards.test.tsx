@@ -9,7 +9,7 @@ const radar = {
   windowLabel: 'próximos 7 días',
   actionToday: 'Hoy: evita gastos extra y cuida liquidez.',
   actionTodayDetail: 'Mantén solo gastos esenciales hasta pasar esta ventana corta.',
-  upcoming: 'En 6 días vence BBVA.',
+  upcoming: 'En 6 días vence Pago TDC BBVA.',
   riskText: 'Riesgo medio: cualquier gasto no planeado te aprieta.',
   nextBestStep: 'Reordena pagos de los próximos 7 días y recorta variable.',
   statusReason: 'Sí cubres la carga, pero con poco margen de seguridad.',
@@ -51,25 +51,25 @@ const financialStatus = {
 
 const priorityDiagnostics = [
   {
-    key: 'presion-estructural',
+    key: 'obligacion-inminente',
     level: 'high' as const,
-    title: 'La presión principal sigue siendo estructural',
-    explanation: 'La base mensual todavía tiene poco margen y poca protección.',
-    action: 'Convierte deuda en margen y fortalece reserva base.'
+    title: 'En 6 días vence Pago TDC BBVA y esta semana queda justa',
+    explanation: 'La carga de esta ventana deja poco margen frente al disponible.',
+    action: 'Congela extras y deja ese pago separado.'
   },
   {
-    key: 'semana-pesada',
+    key: 'deuda-recorta-margen',
     level: 'medium' as const,
-    title: 'Se acerca una semana más pesada',
-    explanation: 'Después de esta ventana viene una carga que conviene anticipar.',
-    action: 'Reserva liquidez desde esta semana.'
+    title: 'Hoy 38% del ingreso base se va en deuda',
+    explanation: 'Ese peso fijo recorta la maniobra mensual.',
+    action: 'Renegocia una cuota para recuperar flujo.'
   },
   {
-    key: 'ahorro',
+    key: 'ventana-ahorro',
     level: 'low' as const,
-    title: 'Buen momento para fortalecer colchón',
-    explanation: 'Puedes separar una parte pequeña si mantienes el orden.',
-    action: 'Aparta una cantidad pequeña al fondo.'
+    title: 'Esta semana te deja $2,400 de margen aprovechable',
+    explanation: 'Puedes convertir parte de ese margen en colchón real.',
+    action: 'Aparta hoy una cantidad concreta al fondo.'
   }
 ];
 
@@ -83,9 +83,9 @@ describe('AnalyticsAdvisorCards', () => {
     expect(html).toContain('Estado financiero actual');
     expect(html).toContain('Diagnósticos prioritarios');
     expect((html.match(/min-h-\[148px\]/g) ?? []).length).toBe(3);
-    expect(html).toContain('La presión principal sigue siendo estructural');
-    expect(html).toContain('Se acerca una semana más pesada');
-    expect(html).not.toContain('Buen momento para fortalecer colchón');
+    expect(html).toContain('En 6 días vence Pago TDC BBVA');
+    expect(html).toContain('Hoy 38% del ingreso base se va en deuda');
+    expect(html).not.toContain('Esta semana te deja $2,400 de margen aprovechable');
     expect(html).not.toContain('Interpretación general:');
     expect(html).not.toContain('Siguiente paso:');
   });
@@ -102,7 +102,7 @@ describe('AnalyticsAdvisorCards', () => {
     );
 
     expect(diagnosticosExpanded).toContain('Siguiente paso:');
-    expect(diagnosticosExpanded).toContain('Buen momento para fortalecer colchón');
+    expect(diagnosticosExpanded).toContain('Esta semana te deja $2,400 de margen aprovechable');
     expect(diagnosticosExpanded).not.toContain('Qué hacer hoy:');
     expect(diagnosticosExpanded).not.toContain('Interpretación general:');
 
@@ -117,6 +117,17 @@ describe('AnalyticsAdvisorCards', () => {
     );
     expect(estadoExpanded).toContain('Interpretación general:');
     expect(estadoExpanded).not.toContain('Siguiente paso:');
+  });
+
+  it('reduce redundancia visual de severidad en items de diagnósticos', () => {
+    const html = renderToStaticMarkup(
+      <AnalyticsAdvisorCards radar={radar} financialPressure={pressure} financialStatus={financialStatus} priorityDiagnostics={priorityDiagnostics} initialOpenCard="diagnosticos" />
+    );
+
+    expect(html).toContain('Alta prioridad');
+    expect(html).not.toContain('>Alta<');
+    expect(html).not.toContain('>Media<');
+    expect(html).not.toContain('>Baja<');
   });
 
   it('aplica comportamiento accordion en helper de estado', () => {
