@@ -74,23 +74,26 @@ const priorityDiagnostics = [
 ];
 
 describe('AnalyticsAdvisorCards', () => {
-  it('renderiza cards compactas incluyendo diagnósticos prioritarios colapsados', () => {
+  it('renderiza dashboard táctico sin card estructural expandida y con resumen ejecutivo', () => {
     const html = renderToStaticMarkup(
       <AnalyticsAdvisorCards radar={radar} financialPressure={pressure} financialStatus={financialStatus} priorityDiagnostics={priorityDiagnostics} />
     );
 
     expect(html).toContain('Radar Financiero');
-    expect(html).toContain('Estado financiero actual');
+    expect(html).toContain('Estado general');
     expect(html).toContain('Diagnósticos prioritarios');
+    expect(html).toContain('Ver análisis →');
+    expect(html).toContain('href="/analisis"');
+    expect(html).toContain('La base alcanza, aunque la holgura sigue siendo limitada.');
+    expect(html).not.toContain('Estado financiero actual');
+    expect(html).not.toContain('Interpretación general:');
     expect((html.match(/min-h-\[148px\]/g) ?? []).length).toBe(3);
     expect(html).toContain('En 6 días vence Pago TDC BBVA');
     expect(html).toContain('Hoy 38% del ingreso base se va en deuda');
     expect(html).not.toContain('Esta semana te deja $2,400 de margen aprovechable');
-    expect(html).not.toContain('Interpretación general:');
-    expect(html).not.toContain('Siguiente paso:');
   });
 
-  it('expande solo la card seleccionada, incluyendo diagnósticos', () => {
+  it('expande solo la card seleccionada de radar o diagnósticos', () => {
     const diagnosticosExpanded = renderToStaticMarkup(
       <AnalyticsAdvisorCards
         radar={radar}
@@ -104,19 +107,12 @@ describe('AnalyticsAdvisorCards', () => {
     expect(diagnosticosExpanded).toContain('Siguiente paso:');
     expect(diagnosticosExpanded).toContain('Esta semana te deja $2,400 de margen aprovechable');
     expect(diagnosticosExpanded).not.toContain('Qué hacer hoy:');
-    expect(diagnosticosExpanded).not.toContain('Interpretación general:');
 
     const radarExpanded = renderToStaticMarkup(
       <AnalyticsAdvisorCards radar={radar} financialPressure={pressure} financialStatus={financialStatus} priorityDiagnostics={priorityDiagnostics} initialOpenCard="radar" />
     );
     expect(radarExpanded).toContain('Qué hacer hoy:');
-    expect(radarExpanded).not.toContain('Interpretación general:');
-
-    const estadoExpanded = renderToStaticMarkup(
-      <AnalyticsAdvisorCards radar={radar} financialPressure={pressure} financialStatus={financialStatus} priorityDiagnostics={priorityDiagnostics} initialOpenCard="estado" />
-    );
-    expect(estadoExpanded).toContain('Interpretación general:');
-    expect(estadoExpanded).not.toContain('Siguiente paso:');
+    expect(radarExpanded).not.toContain('Siguiente paso:');
   });
 
   it('reduce redundancia visual de severidad en items de diagnósticos', () => {
@@ -132,8 +128,7 @@ describe('AnalyticsAdvisorCards', () => {
 
   it('aplica comportamiento accordion en helper de estado', () => {
     expect(toggleAnalyticsCard(null, 'radar')).toBe('radar');
-    expect(toggleAnalyticsCard('radar', 'estado')).toBe('estado');
-    expect(toggleAnalyticsCard('estado', 'diagnosticos')).toBe('diagnosticos');
+    expect(toggleAnalyticsCard('radar', 'diagnosticos')).toBe('diagnosticos');
     expect(toggleAnalyticsCard('diagnosticos', 'diagnosticos')).toBeNull();
   });
 });
