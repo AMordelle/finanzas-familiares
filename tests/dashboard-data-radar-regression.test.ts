@@ -95,5 +95,7 @@ describe('dashboard data regression with radar y estado estructural', () => {
     expect(dashboard.financialStatus).not.toBeNull();
     expect(dashboard.financialStatus?.interpretation.toLowerCase()).not.toContain('7 días');
     expect(dashboard.financialStatus?.strengths.length).toBeGreaterThan(0);
+    expect(Array.isArray(dashboard.priorityDiagnostics)).toBe(true);
+    expect(dashboard.priorityDiagnostics.length).toBeLessThanOrEqual(3);
   });
 });

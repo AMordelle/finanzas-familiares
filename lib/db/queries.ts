@@ -14,6 +14,7 @@ import {
 import { calculateFinancialPressure, generateFinancialInsight } from '@/lib/finance/financialPressure';
 import { calculateFinancialRadar, type FinancialRadar } from '@/lib/finance/financialRadar';
 import { calculateFinancialStatus, type FinancialStatus } from '@/lib/finance/financialStatus';
+import { getPriorityDiagnostics, type PriorityDiagnostic } from '@/lib/finance/priorityDiagnostics';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
 
@@ -150,6 +151,7 @@ type DashboardData = {
   } | null;
   financialRadar: FinancialRadar | null;
   financialStatus: FinancialStatus | null;
+  priorityDiagnostics: PriorityDiagnostic[];
 };
 
 type SupabaseClientLike = typeof supabaseAdmin;
@@ -511,6 +513,13 @@ function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
     operativeMoney: toFiniteNumber(rawFinancialInput?.operativeMoney, payload?.availableMoney as number ?? 0)
   });
 
+  const priorityDiagnostics = getPriorityDiagnostics({
+    radar: null,
+    financialStatus,
+    financialPressure,
+    existingDiagnoses: diagnoses
+  });
+
   return {
     hasHousehold: true,
     monthlyOFH,
@@ -521,7 +530,8 @@ function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
     financialPressure,
     financialInsight,
     financialRadar: null,
-    financialStatus
+    financialStatus,
+    priorityDiagnostics
   };
 }
 
@@ -541,7 +551,8 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
       financialPressure: null,
       financialInsight: null,
       financialRadar: null,
-      financialStatus: null
+      financialStatus: null,
+      priorityDiagnostics: []
     };
   }
 
@@ -567,13 +578,20 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
       financialPressure: null,
       financialInsight: null,
       financialRadar: null,
-      financialStatus: null
+      financialStatus: null,
+      priorityDiagnostics: []
     };
   }
 
   const parsed = normalizeSnapshotPayload(data.payload);
   const financialRadar = await getFinancialRadar(householdId, client);
   parsed.financialRadar = financialRadar;
+  parsed.priorityDiagnostics = getPriorityDiagnostics({
+    radar: parsed.financialRadar,
+    financialStatus: parsed.financialStatus,
+    financialPressure: parsed.financialPressure,
+    existingDiagnoses: parsed.diagnoses
+  });
   return parsed;
 }
 
