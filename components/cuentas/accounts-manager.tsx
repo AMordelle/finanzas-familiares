@@ -1,6 +1,6 @@
-import React from 'react';
 'use client';
 
+import React from 'react';
 import { useMemo, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
