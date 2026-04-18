@@ -2,10 +2,8 @@
 
 import React from 'react';
 import { useMemo, useState } from 'react';
-import Link from 'next/link';
 import { Card } from '@/components/ui/card';
 import type { FinancialRadar } from '@/lib/finance/financialRadar';
-import type { FinancialStatus } from '@/lib/finance/financialStatus';
 import type { PriorityDiagnostic } from '@/lib/finance/priorityDiagnostics';
 
 type FinancialPressureData = {
@@ -23,7 +21,6 @@ type FinancialPressureData = {
 type Props = {
   radar: FinancialRadar | null;
   financialPressure: FinancialPressureData | null;
-  financialStatus: FinancialStatus | null;
   priorityDiagnostics: PriorityDiagnostic[];
   initialOpenCard?: OpenCard;
 };
@@ -45,14 +42,6 @@ function estadoFromMargin(radar: FinancialRadar | null) {
   return { label: 'Estable', style: 'bg-emerald-100 text-emerald-700' };
 }
 
-function estadoEstructuralBadge(financialStatus: FinancialStatus | null) {
-  if (!financialStatus) return { label: 'Sin datos', style: 'bg-slate-100 text-slate-700' };
-  if (financialStatus.status === 'solido') return { label: 'Sólido', style: 'bg-emerald-100 text-emerald-700' };
-  if (financialStatus.status === 'en_transicion') return { label: 'En transición', style: 'bg-sky-100 text-sky-700' };
-  if (financialStatus.status === 'ajustado') return { label: 'Ajustado', style: 'bg-amber-100 text-amber-700' };
-  return { label: 'Vulnerable', style: 'bg-rose-100 text-rose-700' };
-}
-
 function diagnosticsBadge(priorityDiagnostics: PriorityDiagnostic[]) {
   if (!priorityDiagnostics.length) return { label: 'Sin datos', style: 'bg-slate-100 text-slate-700' };
   if (priorityDiagnostics[0]?.level === 'high') return { label: 'Alta prioridad', style: 'bg-rose-100 text-rose-700' };
@@ -66,16 +55,15 @@ function itemAccent(level: PriorityDiagnostic['level']) {
   return 'border-l-emerald-300';
 }
 
-export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPressure, financialStatus, priorityDiagnostics, initialOpenCard = null }: Props) {
+export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPressure, priorityDiagnostics, initialOpenCard = null }: Props) {
   const [openCard, setOpenCard] = useState<OpenCard>(initialOpenCard);
 
   const estadoRadar = useMemo(() => estadoFromMargin(radar), [radar]);
-  const estadoEstructural = useMemo(() => estadoEstructuralBadge(financialStatus), [financialStatus]);
   const estadoDiagnosticos = useMemo(() => diagnosticsBadge(priorityDiagnostics), [priorityDiagnostics]);
   const collapsedDiagnostics = priorityDiagnostics.slice(0, 2);
 
   return (
-    <section className="mt-4 grid gap-4 md:grid-cols-3">
+    <section className="mt-4 grid gap-4 md:grid-cols-2">
       {radar ? (
         <Card className="p-0">
           <button type="button" className="min-h-[148px] w-full p-4 text-left" onClick={() => setOpenCard((v) => toggleAnalyticsCard(v, 'radar'))} aria-expanded={openCard === 'radar'}>
@@ -106,21 +94,6 @@ export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPres
               ) : null}
             </div>
           ) : null}
-        </Card>
-      ) : null}
-
-      {financialStatus ? (
-        <Card className="flex min-h-[148px] flex-col justify-between">
-          <div>
-            <div className="flex items-start justify-between gap-3">
-              <h3 className="font-semibold text-slate-900">Estado general</h3>
-              <span className={`rounded-full px-2 py-1 text-xs font-medium ${estadoEstructural.style}`}>{estadoEstructural.label}</span>
-            </div>
-            <p className="mt-2 text-sm text-slate-700">{financialStatus.shortLine}</p>
-          </div>
-          <Link href="/analisis" className="mt-4 inline-flex text-sm font-medium text-slate-700 transition hover:text-slate-900">
-            Ver análisis →
-          </Link>
         </Card>
       ) : null}
 

@@ -14,7 +14,6 @@ export default async function DashboardPage() {
   const availableMoney = Number.isFinite(Number(data.availableMoney)) ? Number(data.availableMoney) : 0;
   const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
   const financialPressure = data.financialPressure;
-  const financialStatus = data.financialStatus;
   const financialInsight = data.financialInsight;
   const financialRadar = data.financialRadar;
 
@@ -44,7 +43,6 @@ export default async function DashboardPage() {
       <AnalyticsAdvisorCards
         radar={financialRadar}
         financialPressure={financialPressure}
-        financialStatus={financialStatus}
         priorityDiagnostics={data.priorityDiagnostics}
       />
       <section className="mt-4 grid gap-4 md:grid-cols-2">
