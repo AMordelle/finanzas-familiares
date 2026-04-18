@@ -75,23 +75,37 @@ function clamp(value: number, min: number, max: number) {
 }
 
 function buildAllocationFromPercentages(amount: number, percentages: Record<AllocationBucket, number>) {
-  const buckets: AllocationBucket[] = ['liquidez', 'colchon', 'deuda', 'libre'];
   const allocations: Record<AllocationBucket, number> = {
-    liquidez: 0,
-    colchon: 0,
-    deuda: 0,
+    liquidez: roundMoney(amount * percentages.liquidez),
+    colchon: roundMoney(amount * percentages.colchon),
+    deuda: roundMoney(amount * percentages.deuda),
     libre: 0
   };
 
-  let accumulated = 0;
-  for (let index = 0; index < buckets.length; index += 1) {
-    const bucket = buckets[index];
-    if (index === buckets.length - 1) {
-      allocations[bucket] = roundMoney(amount - accumulated);
-    } else {
-      allocations[bucket] = roundMoney(amount * percentages[bucket]);
-      accumulated += allocations[bucket];
-    }
+  const consumed = allocations.liquidez + allocations.colchon + allocations.deuda;
+  const libreCandidate = roundMoney(amount - consumed);
+
+  if (libreCandidate >= 0) {
+    allocations.libre = libreCandidate;
+    return allocations;
+  }
+
+  let deficit = Math.abs(libreCandidate);
+  const rebalanceOrder: AllocationBucket[] = ['deuda', 'colchon', 'liquidez'];
+
+  for (const bucket of rebalanceOrder) {
+    if (deficit <= 0) break;
+    const reducible = Math.min(allocations[bucket], deficit);
+    allocations[bucket] = roundMoney(allocations[bucket] - reducible);
+    deficit = roundMoney(deficit - reducible);
+  }
+
+  allocations.libre = 0;
+
+  const totalAfter = roundMoney(allocations.liquidez + allocations.colchon + allocations.deuda + allocations.libre);
+  const roundingGap = roundMoney(amount - totalAfter);
+  if (roundingGap !== 0) {
+    allocations.deuda = roundMoney(Math.max(allocations.deuda + roundingGap, 0));
   }
 
   return allocations;
@@ -231,8 +245,10 @@ function buildScenario(mode: RecommendationMode, amount: number, context: Extrao
   const allocations: ExtraordinaryIncomeAllocation[] = (['liquidez', 'colchon', 'deuda', 'libre'] as AllocationBucket[]).map((bucket) => ({
     bucket,
     amount: raw[bucket],
-    percentage: Number((weights[bucket] * 100).toFixed(1)),
-    reason: bucketReason(bucket, mode, context)
+    percentage: amount > 0 ? Number(((raw[bucket] / amount) * 100).toFixed(1)) : 0,
+    reason: bucket === 'libre' && raw.libre <= 0
+      ? 'No hay remanente flexible por ahora; conviene priorizar estabilidad y protección.'
+      : bucketReason(bucket, mode, context)
   }));
 
   const summaryByMode: Record<RecommendationMode, string> = {

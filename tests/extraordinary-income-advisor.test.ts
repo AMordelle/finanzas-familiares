@@ -87,6 +87,33 @@ describe('extraordinary income advisor', () => {
     }
   });
 
+
+  it('nunca deja el bucket libre en negativo', () => {
+    const recommendation = recommendExtraordinaryIncomeDistribution({
+      amount: 12000,
+      label: 'Bono extraordinario',
+      context: buildContext({
+        financialStatus: {
+          ...buildContext().financialStatus!,
+          metrics: {
+            ...buildContext().financialStatus!.metrics,
+            debtPressureRatio: 0.6,
+            reserveMonths: 0.2
+          }
+        },
+        financialRadar: {
+          ...buildContext().financialRadar!,
+          status: 'presion'
+        }
+      })
+    });
+
+    for (const scenario of recommendation.scenarios) {
+      const libre = scenario.allocations.find((item) => item.bucket === 'libre')!.amount;
+      expect(libre).toBeGreaterThanOrEqual(0);
+    }
+  });
+
   it('modifica recomendación cuando sube la presión de deuda y baja colchón', () => {
     const healthy = recommendExtraordinaryIncomeDistribution({
       amount: 20000,
