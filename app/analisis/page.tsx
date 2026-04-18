@@ -1,20 +1,28 @@
+import React from 'react';
 import { AppShell } from '@/components/app-shell';
 import { Card } from '@/components/ui/card';
+import { getDashboardData } from '@/lib/db/queries';
 import { financialNarrator } from '@/lib/ai/financialNarrator';
+import { FinancialStatusDetailsCard } from '@/components/analysis/financial-status-details-card';
 
-export default function AnalisisPage() {
+export default async function AnalisisPage() {
+  const data = await getDashboardData();
+
   const texto = financialNarrator({
-    ofh: 35000,
-    availableMoney: 22000,
-    diagnoses: ['Consumo de reservas', 'Gasto variable en aumento']
+    ofh: Number.isFinite(Number(data.monthlyOFH)) ? Number(data.monthlyOFH) : 0,
+    availableMoney: Number.isFinite(Number(data.availableMoney)) ? Number(data.availableMoney) : 0,
+    diagnoses: data.diagnoses.length ? data.diagnoses : ['Sin diagnósticos críticos por ahora']
   });
 
   return (
     <AppShell title="Análisis y asistente financiero">
-      <Card>
-        <h2 className="font-semibold">Resumen general</h2>
-        <p className="mt-3 text-slate-700">{texto}</p>
-      </Card>
+      <section className="grid gap-4">
+        <FinancialStatusDetailsCard financialStatus={data.financialStatus} />
+        <Card>
+          <h2 className="font-semibold">Resumen general</h2>
+          <p className="mt-3 text-slate-700">{texto}</p>
+        </Card>
+      </section>
     </AppShell>
   );
 }

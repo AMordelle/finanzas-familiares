@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { Card } from '@/components/ui/card';
 import type { FinancialRadar } from '@/lib/finance/financialRadar';
 import type { FinancialStatus } from '@/lib/finance/financialStatus';
@@ -27,7 +28,7 @@ type Props = {
   initialOpenCard?: OpenCard;
 };
 
-type OpenCard = 'radar' | 'estado' | 'diagnosticos' | null;
+type OpenCard = 'radar' | 'diagnosticos' | null;
 
 export function toggleAnalyticsCard(current: OpenCard, target: Exclude<OpenCard, null>) {
   return current === target ? null : target;
@@ -59,19 +60,13 @@ function diagnosticsBadge(priorityDiagnostics: PriorityDiagnostic[]) {
   return { label: 'Estable', style: 'bg-emerald-100 text-emerald-700' };
 }
 
-function stageLabel(stage: FinancialStatus['stage']) {
-  if (stage === 'optimizacion') return 'Optimización';
-  if (stage === 'estabilizacion') return 'Estabilización';
-  return 'Recuperación';
-}
-
 function itemAccent(level: PriorityDiagnostic['level']) {
   if (level === 'high') return 'border-l-rose-300';
   if (level === 'medium') return 'border-l-amber-300';
   return 'border-l-emerald-300';
 }
 
-export function AnalyticsAdvisorCards({ radar, financialPressure, financialStatus, priorityDiagnostics, initialOpenCard = null }: Props) {
+export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPressure, financialStatus, priorityDiagnostics, initialOpenCard = null }: Props) {
   const [openCard, setOpenCard] = useState<OpenCard>(initialOpenCard);
 
   const estadoRadar = useMemo(() => estadoFromMargin(radar), [radar]);
@@ -114,43 +109,18 @@ export function AnalyticsAdvisorCards({ radar, financialPressure, financialStatu
         </Card>
       ) : null}
 
-      {financialPressure && financialStatus ? (
-        <Card className="p-0">
-          <button type="button" className="min-h-[148px] w-full p-4 text-left" onClick={() => setOpenCard((v) => toggleAnalyticsCard(v, 'estado'))} aria-expanded={openCard === 'estado'}>
+      {financialStatus ? (
+        <Card className="flex min-h-[148px] flex-col justify-between">
+          <div>
             <div className="flex items-start justify-between gap-3">
-              <h3 className="font-semibold text-slate-900">Estado financiero actual</h3>
+              <h3 className="font-semibold text-slate-900">Estado general</h3>
               <span className={`rounded-full px-2 py-1 text-xs font-medium ${estadoEstructural.style}`}>{estadoEstructural.label}</span>
             </div>
             <p className="mt-2 text-sm text-slate-700">{financialStatus.shortLine}</p>
-          </button>
-          {openCard === 'estado' ? (
-            <div className="border-t border-slate-100 px-4 pb-4 pt-3 text-sm text-slate-700">
-              <p>
-                <span className="font-medium text-slate-900">Interpretación general:</span> {financialStatus.interpretation}
-              </p>
-              <p className="mt-2 text-xs text-slate-500">
-                Etapa actual: <span className="font-medium text-slate-700">{stageLabel(financialStatus.stage)}</span>
-              </p>
-              <div className="mt-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Fortalezas actuales</p>
-                <ul className="mt-1 space-y-1 text-sm text-slate-700">
-                  {financialStatus.strengths.map((item) => <li key={item}>• {item}</li>)}
-                </ul>
-              </div>
-              <div className="mt-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Riesgos actuales</p>
-                <ul className="mt-1 space-y-1 text-sm text-slate-700">
-                  {financialStatus.risks.map((item) => <li key={item}>• {item}</li>)}
-                </ul>
-              </div>
-              <p className="mt-3">
-                <span className="font-medium text-slate-900">En qué enfocarse ahora:</span> {financialStatus.nextFocus}
-              </p>
-              {financialStatus.assumptions.length ? (
-                <p className="mt-2 text-xs text-slate-500">{financialStatus.assumptions[0]}</p>
-              ) : null}
-            </div>
-          ) : null}
+          </div>
+          <Link href="/analisis" className="mt-4 inline-flex text-sm font-medium text-slate-700 transition hover:text-slate-900">
+            Ver análisis →
+          </Link>
         </Card>
       ) : null}
 
