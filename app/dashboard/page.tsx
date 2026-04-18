@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { getDashboardData } from '@/lib/db/queries';
 import { AnalyticsAdvisorCards } from '@/components/dashboard/analytics-advisor-cards';
+import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 export default async function DashboardPage() {
   const data = await getDashboardData();
@@ -14,7 +15,6 @@ export default async function DashboardPage() {
   const availableMoney = Number.isFinite(Number(data.availableMoney)) ? Number(data.availableMoney) : 0;
   const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
   const financialPressure = data.financialPressure;
-  const financialStatus = data.financialStatus;
   const financialInsight = data.financialInsight;
   const financialRadar = data.financialRadar;
 
@@ -37,14 +37,13 @@ export default async function DashboardPage() {
   return (
     <AppShell title="Dashboard principal">
       <section className="grid gap-4 md:grid-cols-3">
-        <MetricCard label="OFH mensual" value={`$${monthlyOFH.toLocaleString('es-MX')}`} />
-        <MetricCard label="Objetivo semanal" value={`$${weeklyOFH.toLocaleString('es-MX')}`} />
-        <MetricCard label="Dinero disponible hoy" value={`$${availableMoney.toLocaleString('es-MX')}`} />
+        <MetricCard label="OFH mensual" value={formatCurrencyMXN(monthlyOFH)} />
+        <MetricCard label="Objetivo semanal" value={formatCurrencyMXN(weeklyOFH)} />
+        <MetricCard label="Dinero disponible hoy" value={formatCurrencyMXN(availableMoney)} />
       </section>
       <AnalyticsAdvisorCards
         radar={financialRadar}
         financialPressure={financialPressure}
-        financialStatus={financialStatus}
         priorityDiagnostics={data.priorityDiagnostics}
       />
       <section className="mt-4 grid gap-4 md:grid-cols-2">

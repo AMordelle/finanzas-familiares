@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
+import { formatCurrencyMXN } from '@/lib/formatters/currency';
 import { Card } from '@/components/ui/card';
 import { submitOnboardingAction } from '@/app/onboarding/actions';
 import { onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
@@ -104,11 +105,11 @@ export function OnboardingWizard() {
         <p className="text-sm font-medium text-teal-700">Onboarding completado</p>
         <h2 className="mt-2 text-2xl font-semibold">Tu diagnóstico financiero inicial</h2>
         <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <p>OFH mensual: <strong>${summary.monthlyOFH.toLocaleString('es-MX')}</strong></p>
-          <p>Objetivo semanal: <strong>${summary.weeklyOFH.toLocaleString('es-MX')}</strong></p>
-          <p>Ingreso regular mensual: <strong>${summary.regularIncomeMonthly.toLocaleString('es-MX')}</strong></p>
-          <p>Ingreso promedio anual mensualizado: <strong>${summary.annualAverageMonthlyIncome.toLocaleString('es-MX')}</strong></p>
-          <p>Dinero disponible: <strong>${summary.availableMoney.toLocaleString('es-MX')}</strong></p>
+          <p>OFH mensual: <strong>{formatCurrencyMXN(summary.monthlyOFH)}</strong></p>
+          <p>Objetivo semanal: <strong>{formatCurrencyMXN(summary.weeklyOFH)}</strong></p>
+          <p>Ingreso regular mensual: <strong>{formatCurrencyMXN(summary.regularIncomeMonthly)}</strong></p>
+          <p>Ingreso promedio anual mensualizado: <strong>{formatCurrencyMXN(summary.annualAverageMonthlyIncome)}</strong></p>
+          <p>Dinero disponible: <strong>{formatCurrencyMXN(summary.availableMoney)}</strong></p>
           <p>MRF inmediato: <strong>{summary.immediateMRF}</strong></p>
           <p>MRF ampliado: <strong>{summary.extendedMRF}</strong></p>
           <p>Diagnóstico inicial: <strong>{summary.diagnoses[0] ?? 'Sin diagnóstico'}</strong></p>

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import type { AccountOption, MovementHistoryItem } from '@/lib/db/queries';
+import { formatCurrencyMXN } from '@/lib/formatters/currency';
 import { deleteMovementAction, updateMovementAction } from '@/app/movimientos/actions';
 
 type Props = {
@@ -16,10 +17,6 @@ type MovementVisual = {
   shortType: 'Ingreso' | 'Gasto efectivo' | 'Gasto TDC' | 'Pago deuda' | 'Transferencia' | 'Traslado deuda';
   impact: 'inflow' | 'outflow' | 'neutral';
 };
-
-function formatMoney(amount: number) {
-  return `$${amount.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
 
 function formatDate(value: string) {
   const date = new Date(value);
@@ -73,9 +70,9 @@ function getAmountClass(impact: MovementVisual['impact']) {
 }
 
 function getAmountText(amount: number, impact: MovementVisual['impact']) {
-  if (impact === 'inflow') return `+${formatMoney(amount)}`;
-  if (impact === 'outflow') return `-${formatMoney(amount)}`;
-  return `${formatMoney(amount)} ⇄`;
+  if (impact === 'inflow') return `+${formatCurrencyMXN(amount)}`;
+  if (impact === 'outflow') return `-${formatCurrencyMXN(amount)}`;
+  return `${formatCurrencyMXN(amount)} ⇄`;
 }
 
 export function MovementsHistoryList({ movements, accounts }: Props) {

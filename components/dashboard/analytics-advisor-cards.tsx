@@ -2,11 +2,10 @@
 
 import React from 'react';
 import { useMemo, useState } from 'react';
-import Link from 'next/link';
 import { Card } from '@/components/ui/card';
 import type { FinancialRadar } from '@/lib/finance/financialRadar';
-import type { FinancialStatus } from '@/lib/finance/financialStatus';
 import type { PriorityDiagnostic } from '@/lib/finance/priorityDiagnostics';
+import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 type FinancialPressureData = {
   requiredMoney: number;
@@ -23,7 +22,6 @@ type FinancialPressureData = {
 type Props = {
   radar: FinancialRadar | null;
   financialPressure: FinancialPressureData | null;
-  financialStatus: FinancialStatus | null;
   priorityDiagnostics: PriorityDiagnostic[];
   initialOpenCard?: OpenCard;
 };
@@ -34,23 +32,11 @@ export function toggleAnalyticsCard(current: OpenCard, target: Exclude<OpenCard,
   return current === target ? null : target;
 }
 
-function formatMoney(value: number) {
-  return `$${Math.round(value).toLocaleString('es-MX')}`;
-}
-
 function estadoFromMargin(radar: FinancialRadar | null) {
   if (!radar) return { label: 'Sin datos', style: 'bg-slate-100 text-slate-700' };
   if (radar.status === 'presion') return { label: 'Presión', style: 'bg-rose-100 text-rose-700' };
   if (radar.status === 'atencion') return { label: 'Atención', style: 'bg-amber-100 text-amber-700' };
   return { label: 'Estable', style: 'bg-emerald-100 text-emerald-700' };
-}
-
-function estadoEstructuralBadge(financialStatus: FinancialStatus | null) {
-  if (!financialStatus) return { label: 'Sin datos', style: 'bg-slate-100 text-slate-700' };
-  if (financialStatus.status === 'solido') return { label: 'Sólido', style: 'bg-emerald-100 text-emerald-700' };
-  if (financialStatus.status === 'en_transicion') return { label: 'En transición', style: 'bg-sky-100 text-sky-700' };
-  if (financialStatus.status === 'ajustado') return { label: 'Ajustado', style: 'bg-amber-100 text-amber-700' };
-  return { label: 'Vulnerable', style: 'bg-rose-100 text-rose-700' };
 }
 
 function diagnosticsBadge(priorityDiagnostics: PriorityDiagnostic[]) {
@@ -66,16 +52,15 @@ function itemAccent(level: PriorityDiagnostic['level']) {
   return 'border-l-emerald-300';
 }
 
-export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPressure, financialStatus, priorityDiagnostics, initialOpenCard = null }: Props) {
+export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPressure, priorityDiagnostics, initialOpenCard = null }: Props) {
   const [openCard, setOpenCard] = useState<OpenCard>(initialOpenCard);
 
   const estadoRadar = useMemo(() => estadoFromMargin(radar), [radar]);
-  const estadoEstructural = useMemo(() => estadoEstructuralBadge(financialStatus), [financialStatus]);
   const estadoDiagnosticos = useMemo(() => diagnosticsBadge(priorityDiagnostics), [priorityDiagnostics]);
   const collapsedDiagnostics = priorityDiagnostics.slice(0, 2);
 
   return (
-    <section className="mt-4 grid gap-4 md:grid-cols-3">
+    <section className="mt-4 grid gap-4 md:grid-cols-2">
       {radar ? (
         <Card className="p-0">
           <button type="button" className="min-h-[148px] w-full p-4 text-left" onClick={() => setOpenCard((v) => toggleAnalyticsCard(v, 'radar'))} aria-expanded={openCard === 'radar'}>
@@ -86,7 +71,7 @@ export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPres
               </span>
             </div>
             <p className="mt-2 text-sm text-slate-700">{radar.actionToday}</p>
-            <p className="mt-3 text-sm text-slate-700"><span className="font-medium text-slate-900">Carga {radar.windowLabel}:</span> {formatMoney(radar.upcomingLoad)}</p>
+            <p className="mt-3 text-sm text-slate-700"><span className="font-medium text-slate-900">Carga {radar.windowLabel}:</span> {formatCurrencyMXN(radar.upcomingLoad)}</p>
           </button>
           {openCard === 'radar' ? (
             <div className="border-t border-slate-100 px-4 pb-4 pt-3 text-sm text-slate-700">
@@ -95,32 +80,17 @@ export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPres
               <p className="mt-2"><span className="font-medium text-slate-900">Riesgo actual:</span> {radar.riskText}</p>
               <p className="mt-2"><span className="font-medium text-slate-900">Próximo paso ideal:</span> {radar.nextBestStep}</p>
               <div className="mt-3 grid gap-2 rounded-md bg-slate-50 p-3 text-xs sm:grid-cols-3">
-                <p><span className="font-medium text-slate-900">Disponible actual:</span> {formatMoney(radar.availableNow)}</p>
-                <p><span className="font-medium text-slate-900">Carga {radar.windowLabel}:</span> {formatMoney(radar.upcomingLoad)}</p>
-                <p><span className="font-medium text-slate-900">Margen estimado:</span> {formatMoney(radar.estimatedMargin)}</p>
+                <p><span className="font-medium text-slate-900">Disponible actual:</span> {formatCurrencyMXN(radar.availableNow)}</p>
+                <p><span className="font-medium text-slate-900">Carga {radar.windowLabel}:</span> {formatCurrencyMXN(radar.upcomingLoad)}</p>
+                <p><span className="font-medium text-slate-900">Margen estimado:</span> {formatCurrencyMXN(radar.estimatedMargin)}</p>
               </div>
               {radar.nearFutureLoad > 0 ? (
                 <p className="mt-2 text-xs text-slate-600">
-                  <span className="font-medium text-slate-800">Presión cercana (8-14 días):</span> {formatMoney(radar.nearFutureLoad)}
+                  <span className="font-medium text-slate-800">Presión cercana (8-14 días):</span> {formatCurrencyMXN(radar.nearFutureLoad)}
                 </p>
               ) : null}
             </div>
           ) : null}
-        </Card>
-      ) : null}
-
-      {financialStatus ? (
-        <Card className="flex min-h-[148px] flex-col justify-between">
-          <div>
-            <div className="flex items-start justify-between gap-3">
-              <h3 className="font-semibold text-slate-900">Estado general</h3>
-              <span className={`rounded-full px-2 py-1 text-xs font-medium ${estadoEstructural.style}`}>{estadoEstructural.label}</span>
-            </div>
-            <p className="mt-2 text-sm text-slate-700">{financialStatus.shortLine}</p>
-          </div>
-          <Link href="/analisis" className="mt-4 inline-flex text-sm font-medium text-slate-700 transition hover:text-slate-900">
-            Ver análisis →
-          </Link>
         </Card>
       ) : null}
 

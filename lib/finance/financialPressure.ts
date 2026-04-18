@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 const DEFAULT_OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-4.1-mini';
 const DEFAULT_WARNING_RATIO = 0.2;
@@ -141,12 +142,12 @@ function fallbackInsight(snapshot: FinancialPressureSnapshot): FinancialInsight 
     .sort((a, b) => b.amount - a.amount)
     .filter((item) => item.amount > 0)
     .slice(0, 2)
-    .map((item) => `${item.label} ($${item.amount.toLocaleString('es-MX')})`);
+    .map((item) => `${item.label} (${formatCurrencyMXN(item.amount)})`);
 
   const explanation =
     snapshot.gap > 0
-      ? `Te faltan $${snapshot.gap.toLocaleString('es-MX')} para cubrir compromisos de corto plazo.`
-      : `Tienes un margen positivo de $${Math.abs(snapshot.gap).toLocaleString('es-MX')} para esta semana.`;
+      ? `Te faltan ${formatCurrencyMXN(snapshot.gap)} para cubrir compromisos de corto plazo.`
+      : `Tienes un margen positivo de ${formatCurrencyMXN(Math.abs(snapshot.gap))} para esta semana.`;
 
   const suggestions =
     snapshot.gap > 0

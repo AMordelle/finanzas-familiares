@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card';
 import { APPROVED_CATEGORY_CATALOG } from '@/lib/ai/semanticCategory';
 import { type TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import type { AccountOption } from '@/lib/db/queries';
+import { formatCurrencyMXN } from '@/lib/formatters/currency';
 import { applyFollowUpAnswerAction, interpretTransactionAction, saveInterpretedTransactionAction } from '@/app/registro/actions';
 
 type Props = {
@@ -182,7 +183,7 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
           <h3 className="font-semibold">Confirmación</h3>
           <ul className="mt-3 space-y-1 text-sm text-slate-700">
             <li>Tipo de movimiento: {intent.visibleType}</li>
-            <li>Monto: ${intent.amount.toLocaleString('es-MX')}</li>
+            <li>Monto: {formatCurrencyMXN(intent.amount)}</li>
             <li>Descripción: {intent.description}</li>
             <li>Cuenta origen: {intent.sourceAccountName ?? 'N/A'}</li>
             <li>Cuenta destino: {intent.destinationAccountName ?? 'N/A'}</li>

@@ -1,11 +1,13 @@
 'use client';
 
+import React from 'react';
 import { useMemo, useState, useTransition } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { createAccountAction, deactivateAccountAction, updateAccountAction } from '@/app/cuentas/actions';
 import type { ManagedAccount } from '@/lib/db/queries';
 import { accountsFormVisibilityReducer, buildAccountGroupSummaries, normalizeType, type ManagedAccountType } from '@/components/cuentas/accounts-manager.helpers';
+import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 const accountTypeOptions = [
   { value: 'operational_cash', label: 'Dinero operativo' },
@@ -53,10 +55,6 @@ function requiresPeriodicPayment(type: ManagedAccountType) {
 
 function supportsPeriodicFields(type: ManagedAccountType) {
   return type === 'credit_card' || type === 'loan';
-}
-
-function formatMoney(amount: number) {
-  return amount.toLocaleString('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 });
 }
 
 export function AccountsManager({ accounts }: { accounts: ManagedAccount[] }) {
@@ -226,7 +224,7 @@ export function AccountsManager({ accounts }: { accounts: ManagedAccount[] }) {
           <Card key={group.key}>
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="font-semibold">{group.label} — {formatMoney(group.totalBalance)}</h3>
+                <h3 className="font-semibold">{group.label} — {formatCurrencyMXN(group.totalBalance)}</h3>
                 <p className="text-xs text-slate-600">{group.accounts.length} {group.accounts.length === 1 ? 'cuenta' : 'cuentas'}</p>
               </div>
             </div>
@@ -237,7 +235,7 @@ export function AccountsManager({ accounts }: { accounts: ManagedAccount[] }) {
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <p className="font-medium">{account.name}</p>
-                      <p className="text-xs text-slate-600">Saldo: {formatMoney(account.balance)}</p>
+                      <p className="text-xs text-slate-600">Saldo: {formatCurrencyMXN(account.balance)}</p>
                       {!account.isActive && <p className="text-xs text-amber-700">Cuenta desactivada</p>}
                     </div>
                     {account.isActive && (

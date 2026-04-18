@@ -41,7 +41,7 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(result.sourceAccountName).toBeNull();
     expect(result.sourceAccountId).toBeNull();
     expect(result.destinationAccountName).toBe('Banco BBVA');
-    expect(result.humanConfirmation).toBe('Registrar ingreso de $2,000 hacia Banco BBVA.');
+    expect(result.humanConfirmation).toBe('Registrar ingreso de $2,000.00 hacia Banco BBVA.');
   });
 
   it('A/B: clear expense with source account and punctuation has no follow-up', async () => {
