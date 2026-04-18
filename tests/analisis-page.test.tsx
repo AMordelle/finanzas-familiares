@@ -51,5 +51,7 @@ describe('AnalisisPage', () => {
     expect(html).toContain('Riesgos actuales');
     expect(html).toContain('En qué enfocarse ahora:');
     expect(html).toContain('Supuestos');
+    expect(html).toContain('Distribución inteligente de ingreso extraordinario');
+    expect(html).toContain('Recomendado:');
   });
 });
