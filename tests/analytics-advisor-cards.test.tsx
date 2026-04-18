@@ -69,6 +69,7 @@ describe('AnalyticsAdvisorCards', () => {
     expect((html.match(/min-h-\[148px\]/g) ?? []).length).toBe(2);
     expect(html).toContain('En 6 días vence Pago TDC BBVA');
     expect(html).toContain('Hoy 38% del ingreso base se va en deuda');
+    expect(html).toContain('Carga próximos 7 días:</span> $4,200.00');
     expect(html).not.toContain('Esta semana te deja $2,400 de margen aprovechable');
   });
 

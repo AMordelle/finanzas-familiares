@@ -1,5 +1,6 @@
 import type { FinancialRadar } from '@/lib/finance/financialRadar';
 import type { FinancialStatus } from '@/lib/finance/financialStatus';
+import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 export type PriorityDiagnostic = {
   key: string;
@@ -55,10 +56,6 @@ function riskLevelFromScore(score: number): PriorityDiagnostic['level'] {
   return 'low';
 }
 
-function formatMoney(value: number) {
-  return `$${Math.round(value).toLocaleString('es-MX')}`;
-}
-
 function extractUpcomingObligation(radar: FinancialRadar | null) {
   if (!radar?.upcoming) return null;
   const match = /En\s+(\d+)\s+d[ií]as\s+(?:vence|viene)\s+(.+?)(?:\.|$)/i.exec(radar.upcoming);
@@ -96,7 +93,7 @@ export function getPriorityDiagnostics(input: {
   const candidates: Candidate[] = [];
   const upcomingObligation = extractUpcomingObligation(radar);
 
-  if (radar && upcomingObligation?.dueInDays !== null && upcomingObligation.dueInDays <= 10) {
+  if (radar && upcomingObligation?.dueInDays != null && upcomingObligation.dueInDays <= 10) {
     const pressurePoints = [
       radar.status === 'presion',
       radar.estimatedMargin <= Math.max(radar.upcomingLoad * 0.12, 350),
@@ -109,7 +106,7 @@ export function getPriorityDiagnostics(input: {
         score: 98,
         level: 'high',
         title: `En ${upcomingObligation.dueInDays} días vence ${upcomingObligation.name} y esta semana queda justa`,
-        explanation: `La carga de ${formatMoney(radar.upcomingLoad)} en la ventana corta deja poco margen frente a tu disponible actual (${formatMoney(radar.availableNow)}).`,
+        explanation: `La carga de ${formatCurrencyMXN(radar.upcomingLoad)} en la ventana corta deja poco margen frente a tu disponible actual (${formatCurrencyMXN(radar.availableNow)}).`,
         action: 'Congela extras esta semana y deja separado ese pago desde hoy.'
       });
     }
@@ -122,9 +119,9 @@ export function getPriorityDiagnostics(input: {
       score: 92,
       level: 'high',
       title: shortfall > 0
-        ? `Esta semana te falta ${formatMoney(shortfall)} para cubrir sin fricción`
+        ? `Esta semana te falta ${formatCurrencyMXN(shortfall)} para cubrir sin fricción`
         : 'Esta semana va muy al límite y cualquier gasto extra desordena el flujo',
-      explanation: `El disponible (${formatMoney(radar.availableNow)}) no alcanza con holgura para la carga inmediata (${formatMoney(radar.upcomingLoad)}).`,
+      explanation: `El disponible (${formatCurrencyMXN(radar.availableNow)}) no alcanza con holgura para la carga inmediata (${formatCurrencyMXN(radar.upcomingLoad)}).`,
       action: 'Reordena pagos por fecha y mueve lo postergable fuera de esta ventana.'
     });
   }
@@ -158,7 +155,7 @@ export function getPriorityDiagnostics(input: {
       key: 'ventana-ahorro',
       score: 56,
       level: 'low',
-      title: `Esta semana te deja ${formatMoney(radar.estimatedMargin)} de margen aprovechable`,
+      title: `Esta semana te deja ${formatCurrencyMXN(radar.estimatedMargin)} de margen aprovechable`,
       explanation: 'Si sostienes el orden de pagos, puedes convertir una parte de ese margen en colchón real.',
       action: 'Aparta hoy una cantidad concreta al fondo y trátala como pago fijo.'
     });
@@ -169,7 +166,7 @@ export function getPriorityDiagnostics(input: {
       key: 'ola-siguiente-semana',
       score: 70,
       level: 'medium',
-      title: `Después de esta ventana viene otra carga de ${formatMoney(radar.nearFutureLoad)}`,
+      title: `Después de esta ventana viene otra carga de ${formatCurrencyMXN(radar.nearFutureLoad)}`,
       explanation: 'Si no te anticipas hoy, la siguiente semana arranca más ajustada y reduce tu margen de maniobra.',
       action: 'Reserva desde esta semana una parte para la siguiente ola de pagos.'
     });

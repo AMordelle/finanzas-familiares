@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { isApprovedCategory, localCategoryInference, semanticCategoryInferenceWithAI } from '@/lib/ai/semanticCategory';
 import { semanticInstructionUnderstanding } from '@/lib/ai/semanticInstruction';
+import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 export const accountTypeSchema = z.enum([
   'operational_cash',
@@ -1186,8 +1187,8 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const humanConfirmation = missingKinds.length
     ? null
     : finalIntent === 'income'
-      ? `Registrar ingreso de $${amount.toLocaleString('es-MX')} hacia ${draftForConstraints.destinationAccountName ?? 'N/A'}.`
-      : `Registrar ${visibleType.toLowerCase()} de $${amount.toLocaleString('es-MX')}${draftForConstraints.sourceAccountName ? ` desde ${draftForConstraints.sourceAccountName}` : ''}${draftForConstraints.destinationAccountName ? ` hacia ${draftForConstraints.destinationAccountName}` : ''}.`;
+      ? `Registrar ingreso de ${formatCurrencyMXN(amount)} hacia ${draftForConstraints.destinationAccountName ?? 'N/A'}.`
+      : `Registrar ${visibleType.toLowerCase()} de ${formatCurrencyMXN(amount)}${draftForConstraints.sourceAccountName ? ` desde ${draftForConstraints.sourceAccountName}` : ''}${draftForConstraints.destinationAccountName ? ` hacia ${draftForConstraints.destinationAccountName}` : ''}.`;
 
   const parsedResult = transactionIntentSchema.parse({
     rawText: text,
@@ -1380,8 +1381,8 @@ export async function applyFollowUpAnswer(
   final.humanConfirmation = final.missingFieldKinds.length
     ? null
     : final.intent === 'income'
-      ? `Registrar ingreso de $${final.amount.toLocaleString('es-MX')} hacia ${final.destinationAccountName ?? 'N/A'}.`
-      : `Registrar ${final.visibleType.toLowerCase()} de $${final.amount.toLocaleString('es-MX')}${final.sourceAccountName ? ` desde ${final.sourceAccountName}` : ''}${final.destinationAccountName ? ` hacia ${final.destinationAccountName}` : ''}.`;
+      ? `Registrar ingreso de ${formatCurrencyMXN(final.amount)} hacia ${final.destinationAccountName ?? 'N/A'}.`
+      : `Registrar ${final.visibleType.toLowerCase()} de ${formatCurrencyMXN(final.amount)}${final.sourceAccountName ? ` desde ${final.sourceAccountName}` : ''}${final.destinationAccountName ? ` hacia ${final.destinationAccountName}` : ''}.`;
 
   const parsedResult = transactionIntentSchema.parse(final);
   return enforceFinancialConsistency(parsedResult);

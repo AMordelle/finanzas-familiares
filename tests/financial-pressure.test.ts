@@ -94,6 +94,20 @@ describe('financial pressure indicator', () => {
     expect(responsesCreateMock).not.toHaveBeenCalled();
   });
 
+  it('fallback de insight mantiene formato monetario con dos decimales', async () => {
+    const snapshot = calculateFinancialPressure({
+      accounts: [{ type: 'operativa', balance: 1000 }],
+      debts: [{ periodicPayment: 1000 }],
+      fixedExpenses: 600,
+      recentTransactions: [{ type: 'debit', amount: 100, category: 'misc' }]
+    });
+
+    const insight = await generateFinancialInsight(snapshot, []);
+    expect(insight.explanation).toContain('$');
+    expect(insight.explanation).toContain('.00');
+    expect(insight.topCauses[0]).toContain('$');
+  });
+
   it('usa OpenAI solo para la explicación', async () => {
     process.env.OPENAI_API_KEY = 'test-key';
     responsesCreateMock.mockResolvedValueOnce({

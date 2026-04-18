@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import type { FinancialRadar } from '@/lib/finance/financialRadar';
 import type { PriorityDiagnostic } from '@/lib/finance/priorityDiagnostics';
+import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 type FinancialPressureData = {
   requiredMoney: number;
@@ -29,10 +30,6 @@ type OpenCard = 'radar' | 'diagnosticos' | null;
 
 export function toggleAnalyticsCard(current: OpenCard, target: Exclude<OpenCard, null>) {
   return current === target ? null : target;
-}
-
-function formatMoney(value: number) {
-  return `$${Math.round(value).toLocaleString('es-MX')}`;
 }
 
 function estadoFromMargin(radar: FinancialRadar | null) {
@@ -74,7 +71,7 @@ export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPres
               </span>
             </div>
             <p className="mt-2 text-sm text-slate-700">{radar.actionToday}</p>
-            <p className="mt-3 text-sm text-slate-700"><span className="font-medium text-slate-900">Carga {radar.windowLabel}:</span> {formatMoney(radar.upcomingLoad)}</p>
+            <p className="mt-3 text-sm text-slate-700"><span className="font-medium text-slate-900">Carga {radar.windowLabel}:</span> {formatCurrencyMXN(radar.upcomingLoad)}</p>
           </button>
           {openCard === 'radar' ? (
             <div className="border-t border-slate-100 px-4 pb-4 pt-3 text-sm text-slate-700">
@@ -83,13 +80,13 @@ export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPres
               <p className="mt-2"><span className="font-medium text-slate-900">Riesgo actual:</span> {radar.riskText}</p>
               <p className="mt-2"><span className="font-medium text-slate-900">Próximo paso ideal:</span> {radar.nextBestStep}</p>
               <div className="mt-3 grid gap-2 rounded-md bg-slate-50 p-3 text-xs sm:grid-cols-3">
-                <p><span className="font-medium text-slate-900">Disponible actual:</span> {formatMoney(radar.availableNow)}</p>
-                <p><span className="font-medium text-slate-900">Carga {radar.windowLabel}:</span> {formatMoney(radar.upcomingLoad)}</p>
-                <p><span className="font-medium text-slate-900">Margen estimado:</span> {formatMoney(radar.estimatedMargin)}</p>
+                <p><span className="font-medium text-slate-900">Disponible actual:</span> {formatCurrencyMXN(radar.availableNow)}</p>
+                <p><span className="font-medium text-slate-900">Carga {radar.windowLabel}:</span> {formatCurrencyMXN(radar.upcomingLoad)}</p>
+                <p><span className="font-medium text-slate-900">Margen estimado:</span> {formatCurrencyMXN(radar.estimatedMargin)}</p>
               </div>
               {radar.nearFutureLoad > 0 ? (
                 <p className="mt-2 text-xs text-slate-600">
-                  <span className="font-medium text-slate-800">Presión cercana (8-14 días):</span> {formatMoney(radar.nearFutureLoad)}
+                  <span className="font-medium text-slate-800">Presión cercana (8-14 días):</span> {formatCurrencyMXN(radar.nearFutureLoad)}
                 </p>
               ) : null}
             </div>

@@ -105,6 +105,7 @@ describe('getPriorityDiagnostics', () => {
 
     expect(diagnostics.some((item) => item.title.includes('Pago TDC BBVA'))).toBe(true);
     expect(diagnostics.some((item) => item.explanation.includes('$'))).toBe(true);
+    expect(diagnostics.some((item) => item.explanation.includes('.00'))).toBe(true);
   });
 
   it('mantiene oportunidad de ahorro útil cuando la semana está estable', () => {
@@ -137,6 +138,7 @@ describe('getPriorityDiagnostics', () => {
 
     const saveWindow = diagnostics.find((item) => item.key === 'ventana-ahorro');
     expect(saveWindow?.title).toContain('$');
+    expect(saveWindow?.title).toContain('.00');
     expect(saveWindow?.action).toContain('fondo');
   });
 });

@@ -1,3 +1,5 @@
+import { formatCurrencyMXN } from '@/lib/formatters/currency';
+
 export type HouseholdStructuralStatus = 'solido' | 'en_transicion' | 'ajustado' | 'vulnerable';
 export type HouseholdFinancialStage = 'recuperacion' | 'estabilizacion' | 'optimizacion';
 
@@ -36,10 +38,6 @@ function toPercent(value: number) {
 
 function toMonths(value: number) {
   return `${value.toFixed(1)} meses`;
-}
-
-function formatMoney(value: number) {
-  return `$${Math.round(value).toLocaleString('es-MX')}`;
 }
 
 export function calculateFinancialStatus(input: {
@@ -163,7 +161,7 @@ export function calculateFinancialStatus(input: {
     en_transicion:
       `Hay avance real: cobertura base ${toPercent(coverageRatio)} y reserva ${toMonths(reserveMonths)}, pero aún conviene fortalecer margen y blindaje.`,
     ajustado:
-      `El hogar sostiene lo esencial con margen corto (margen base ${formatMoney(baseMonthlyMargin)}); falta consolidar reserva y reducir presión estructural.`
+      `El hogar sostiene lo esencial con margen corto (margen base ${formatCurrencyMXN(baseMonthlyMargin)}); falta consolidar reserva y reducir presión estructural.`
   };
 
   const shortLineByStatus: Record<Exclude<HouseholdStructuralStatus, 'vulnerable'>, string> = {
