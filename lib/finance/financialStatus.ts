@@ -1,7 +1,29 @@
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
-
 export type HouseholdStructuralStatus = 'solido' | 'en_transicion' | 'ajustado' | 'vulnerable';
 export type HouseholdFinancialStage = 'recuperacion' | 'estabilizacion' | 'optimizacion';
+
+
+export type FinancialStatusRecommendationSignals = {
+  declared: {
+    recurringIncomePlan: Array<{ monthlyAmount: number; recurring: boolean }>;
+    fixedObligations: Array<{ amount: number }>;
+  };
+  observed: {
+    debtBalances: number;
+    actualCurrentLiquidity: number;
+  };
+  projected: {
+    monthlyBaseCoverage: number;
+    debtPressureRatio: number;
+    reserveMonths: number;
+  };
+  derived: {
+    extraordinaryIncomeDependence: number;
+    baseMonthlyMargin: number;
+    confidenceNotes: string[];
+    assumptions: string[];
+  };
+};
 
 export type FinancialStatus = {
   status: HouseholdStructuralStatus;
@@ -19,6 +41,11 @@ export type FinancialStatus = {
     extraordinaryIncomeDependency: number;
   };
   assumptions: string[];
+};
+
+type StructuralMetrics = FinancialStatus['metrics'] & {
+  baseMonthlyMargin: number;
+  safeObligations: number;
 };
 
 function roundMetric(value: number) {
@@ -40,35 +67,40 @@ function toMonths(value: number) {
   return `${value.toFixed(1)} meses`;
 }
 
-export function calculateFinancialStatus(input: {
-  regularIncomeMonthly?: unknown;
-  annualExtraIncome?: unknown;
-  recurringObligationsMonthly?: unknown;
-  debtPaymentsMonthly?: unknown;
-  debtBalance?: unknown;
-  protectedSavings?: unknown;
-  operativeMoney?: unknown;
-}): FinancialStatus {
-  const assumptions: string[] = [];
+function buildStructuralMetrics(input: {
+  regularIncomeMonthly: unknown;
+  annualExtraIncome: unknown;
+  recurringObligationsMonthly: unknown;
+  debtPaymentsMonthly: unknown;
+  protectedSavings: unknown;
+}) {
   const regularIncomeMonthly = toPositive(input.regularIncomeMonthly);
   const annualExtraIncome = toPositive(input.annualExtraIncome);
   const recurringObligationsMonthly = toPositive(input.recurringObligationsMonthly);
   const debtPaymentsMonthly = toPositive(input.debtPaymentsMonthly);
-  const debtBalance = toPositive(input.debtBalance);
   const protectedSavings = toPositive(input.protectedSavings);
-  const operativeMoney = toPositive(input.operativeMoney);
-
-  if (regularIncomeMonthly <= 0) assumptions.push('No hay ingreso recurrente claro; se toma postura conservadora.');
-  if (recurringObligationsMonthly <= 0) assumptions.push('Compromisos recurrentes incompletos; se usa base mínima para evitar optimismo falso.');
-  if (protectedSavings <= 0) assumptions.push('No se detecta ahorro protegido; se asume reserva nula.');
 
   const safeObligations = recurringObligationsMonthly > 0 ? recurringObligationsMonthly : Math.max(regularIncomeMonthly * 0.8, 1);
   const totalMonthlyIncome = regularIncomeMonthly + annualExtraIncome / 12;
-  const coverageRatio = roundMetric(regularIncomeMonthly / safeObligations);
-  const debtPressureRatio = roundMetric(debtPaymentsMonthly / Math.max(regularIncomeMonthly, 1));
-  const reserveMonths = roundMetric(protectedSavings / safeObligations);
-  const extraordinaryIncomeDependency = roundMetric((annualExtraIncome / 12) / Math.max(totalMonthlyIncome, 1));
-  const baseMonthlyMargin = roundMetric(regularIncomeMonthly - safeObligations - debtPaymentsMonthly);
+
+  return {
+    coverageRatio: roundMetric(regularIncomeMonthly / safeObligations),
+    debtPressureRatio: roundMetric(debtPaymentsMonthly / Math.max(regularIncomeMonthly, 1)),
+    reserveMonths: roundMetric(protectedSavings / safeObligations),
+    extraordinaryIncomeDependency: roundMetric((annualExtraIncome / 12) / Math.max(totalMonthlyIncome, 1)),
+    baseMonthlyMargin: roundMetric(regularIncomeMonthly - safeObligations - debtPaymentsMonthly),
+    safeObligations
+  } satisfies StructuralMetrics;
+}
+
+function composeStatus(input: {
+  metrics: StructuralMetrics;
+  debtBalance: number;
+  operativeMoney: number;
+  assumptions: string[];
+  confidenceNotes?: string[];
+}) {
+  const { coverageRatio, debtPressureRatio, reserveMonths, extraordinaryIncomeDependency, baseMonthlyMargin, safeObligations } = input.metrics;
 
   const hasWeakCoverage = coverageRatio < 1;
   const hasHighDebtPressure = debtPressureRatio >= 0.35;
@@ -107,7 +139,7 @@ export function calculateFinancialStatus(input: {
   const strengths: string[] = [];
   const risks: string[] = [];
 
-  if (operativeMoney > safeObligations * 0.35) strengths.push(strengthsPool.liquidity);
+  if (input.operativeMoney > safeObligations * 0.35) strengths.push(strengthsPool.liquidity);
   if (coverageRatio >= 1) strengths.push(strengthsPool.obligations);
   if (baseMonthlyMargin > 0) strengths.push(strengthsPool.weeklyManeuver);
   if (reserveMonths >= 0.7) strengths.push(strengthsPool.reserve);
@@ -117,7 +149,7 @@ export function calculateFinancialStatus(input: {
   if (hasHighDebtPressure) risks.push(riskPool.highDebt);
   if (hasLowReserve) risks.push(riskPool.lowReserve);
   if (hasHighExtraDependency) risks.push(riskPool.highExtraDependency);
-  if (debtBalance > regularIncomeMonthly * 8 && regularIncomeMonthly > 0) risks.push(riskPool.highDebtBalance);
+  if (input.debtBalance > (safeObligations + Math.max(baseMonthlyMargin, 0)) * 8) risks.push(riskPool.highDebtBalance);
 
   if (status === 'vulnerable') {
     const vulnerableStrengths = strengths.filter((item) =>
@@ -145,8 +177,8 @@ export function calculateFinancialStatus(input: {
         reserveMonths,
         extraordinaryIncomeDependency
       },
-      assumptions
-    };
+      assumptions: Array.from(new Set([...(input.assumptions ?? []), ...(input.confidenceNotes ?? [])]))
+    } satisfies FinancialStatus;
   }
 
   const headlineByStatus: Record<Exclude<HouseholdStructuralStatus, 'vulnerable'>, string> = {
@@ -197,6 +229,75 @@ export function calculateFinancialStatus(input: {
       reserveMonths,
       extraordinaryIncomeDependency
     },
-    assumptions
+    assumptions: Array.from(new Set([...(input.assumptions ?? []), ...(input.confidenceNotes ?? [])]))
   };
+}
+
+export function calculateFinancialStatus(input: {
+  regularIncomeMonthly?: unknown;
+  annualExtraIncome?: unknown;
+  recurringObligationsMonthly?: unknown;
+  debtPaymentsMonthly?: unknown;
+  debtBalance?: unknown;
+  protectedSavings?: unknown;
+  operativeMoney?: unknown;
+}): FinancialStatus {
+  const assumptions: string[] = [];
+  const regularIncomeMonthly = toPositive(input.regularIncomeMonthly);
+  const annualExtraIncome = toPositive(input.annualExtraIncome);
+  const recurringObligationsMonthly = toPositive(input.recurringObligationsMonthly);
+  const protectedSavings = toPositive(input.protectedSavings);
+
+  if (regularIncomeMonthly <= 0) assumptions.push('No hay ingreso recurrente claro; se toma postura conservadora.');
+  if (recurringObligationsMonthly <= 0) assumptions.push('Compromisos recurrentes incompletos; se usa base mínima para evitar optimismo falso.');
+  if (protectedSavings <= 0) assumptions.push('No se detecta ahorro protegido; se asume reserva nula.');
+
+  return composeStatus({
+    metrics: buildStructuralMetrics({
+      regularIncomeMonthly,
+      annualExtraIncome,
+      recurringObligationsMonthly,
+      debtPaymentsMonthly: input.debtPaymentsMonthly,
+      protectedSavings
+    }),
+    debtBalance: toPositive(input.debtBalance),
+    operativeMoney: toPositive(input.operativeMoney),
+    assumptions
+  });
+}
+
+export function calculateFinancialStatusFromRecommendationContext(context: FinancialStatusRecommendationSignals): FinancialStatus {
+  const recurringIncomeMonthly = context.declared.recurringIncomePlan
+    .filter((item) => item.recurring !== false)
+    .reduce((acc, item) => acc + toPositive(item.monthlyAmount), 0);
+
+  const obligationsMonthly = context.declared.fixedObligations
+    .reduce((acc, item) => acc + toPositive(item.amount), 0);
+
+  const protectedSavings = toPositive(context.projected.reserveMonths) * Math.max(obligationsMonthly, recurringIncomeMonthly * 0.8, 1);
+  const annualExtraIncome = Math.round(toPositive(context.derived.extraordinaryIncomeDependence) * recurringIncomeMonthly * 12);
+  const debtPaymentsMonthly = toPositive(context.projected.debtPressureRatio) * Math.max(recurringIncomeMonthly, 1);
+
+  const computedMetrics = buildStructuralMetrics({
+    regularIncomeMonthly: recurringIncomeMonthly,
+    annualExtraIncome,
+    recurringObligationsMonthly: obligationsMonthly,
+    debtPaymentsMonthly,
+    protectedSavings
+  });
+
+  return composeStatus({
+    metrics: {
+      ...computedMetrics,
+      coverageRatio: roundMetric(context.projected.monthlyBaseCoverage),
+      debtPressureRatio: roundMetric(context.projected.debtPressureRatio),
+      reserveMonths: roundMetric(context.projected.reserveMonths),
+      extraordinaryIncomeDependency: roundMetric(context.derived.extraordinaryIncomeDependence),
+      baseMonthlyMargin: roundMetric(context.derived.baseMonthlyMargin)
+    },
+    debtBalance: toPositive(context.observed.debtBalances),
+    operativeMoney: toPositive(context.observed.actualCurrentLiquidity),
+    assumptions: context.derived.assumptions ?? [],
+    confidenceNotes: context.derived.confidenceNotes ?? []
+  });
 }
