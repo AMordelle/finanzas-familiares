@@ -15,6 +15,7 @@ import { calculateFinancialPressure, generateFinancialInsight } from '@/lib/fina
 import { calculateFinancialRadar, type FinancialRadar } from '@/lib/finance/financialRadar';
 import { calculateFinancialStatus, type FinancialStatus } from '@/lib/finance/financialStatus';
 import { getPriorityDiagnostics, type PriorityDiagnostic } from '@/lib/finance/priorityDiagnostics';
+import { buildHouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
 
@@ -598,6 +599,16 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
 export async function getFinancialRadar(householdId?: string, client: SupabaseClientLike = supabaseAdmin): Promise<FinancialRadar | null> {
   const resolvedHouseholdId = householdId ?? await getDefaultHouseholdId(client);
   if (!resolvedHouseholdId) return null;
+
+  try {
+    const recommendationContext = await buildHouseholdRecommendationContext(resolvedHouseholdId, client);
+    return recommendationContext.projected.radar;
+  } catch (error) {
+    logDebug('Radar context fallback', {
+      householdId: resolvedHouseholdId,
+      reason: error instanceof Error ? error.message : 'unknown'
+    });
+  }
 
   const [accountsResult, obligationsResult, variableSpendingResult, groupsResult] = await Promise.all([
     client.from('accounts').select('name,type,balance').eq('household_id', resolvedHouseholdId).eq('is_active', true),
