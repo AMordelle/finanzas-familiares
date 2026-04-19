@@ -59,6 +59,12 @@ function createFakeSupabase() {
   const db: Record<string, any[]> = {
     profiles: [{ id: 'profile-1' }],
     household_members: [{ id: 'hm-1', profile_id: 'profile-1', household_id: 'house-1' }],
+    households: [{ id: 'house-1', name: 'Hogar Test' }],
+    income_sources: [{ id: 'inc-1', household_id: 'house-1', name: 'Nómina', amount: '22000', recurring: true }],
+    calendar_events: [],
+    goals: [],
+    recurring_patterns: [],
+    receivables: [],
     financial_snapshots: [{ id: 'snap-1', household_id: 'house-1', payload: JSON.stringify({ monthlyOFH: 10000, weeklyOFH: 2300, availableMoney: 5000, diagnoses: [], recommendations: [] }) }],
     accounts: [{ id: 'acc-1', household_id: 'house-1', name: 'Cuenta TDD', type: 'operational_cash', balance: '3000', is_active: true }],
     obligations: [{ id: 'ob-1', household_id: 'house-1', name: 'BBVA', amount: '1200', due_day: 18 }],
@@ -97,5 +103,6 @@ describe('dashboard data regression with radar y estado estructural', () => {
     expect(dashboard.financialStatus?.strengths.length).toBeGreaterThan(0);
     expect(Array.isArray(dashboard.priorityDiagnostics)).toBe(true);
     expect(dashboard.priorityDiagnostics.length).toBeLessThanOrEqual(3);
+    expect(dashboard.priorityDiagnostics[0]?.title.toLowerCase()).not.toContain('liquidez inmediata está bajo presión');
   });
 });

@@ -585,12 +585,24 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
   }
 
   const parsed = normalizeSnapshotPayload(data.payload);
-  const financialRadar = await getFinancialRadar(householdId, client);
+
+  let recommendationContext = null;
+  try {
+    recommendationContext = await buildHouseholdRecommendationContext(householdId, client);
+  } catch (error) {
+    logDebug('Priority diagnostics context fallback', {
+      householdId,
+      reason: error instanceof Error ? error.message : 'unknown'
+    });
+  }
+
+  const financialRadar = recommendationContext?.projected.radar ?? await getFinancialRadar(householdId, client);
   parsed.financialRadar = financialRadar;
   parsed.priorityDiagnostics = getPriorityDiagnostics({
     radar: parsed.financialRadar,
-    financialStatus: parsed.financialStatus,
+    financialStatus: recommendationContext?.projected.status ?? parsed.financialStatus,
     financialPressure: parsed.financialPressure,
+    recommendationContext,
     existingDiagnoses: parsed.diagnoses
   });
   return parsed;
