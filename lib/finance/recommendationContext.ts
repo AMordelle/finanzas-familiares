@@ -1,5 +1,5 @@
 import { calculateFinancialRadar, type FinancialRadar } from '@/lib/finance/financialRadar';
-import { calculateFinancialStatus, type FinancialStatus } from '@/lib/finance/financialStatus';
+import { calculateFinancialStatusFromRecommendationContext, type FinancialStatus } from '@/lib/finance/financialStatus';
 import { supabaseAdmin } from '@/lib/db/supabase';
 
 type SupabaseClientLike = typeof supabaseAdmin;
@@ -277,14 +277,50 @@ export async function buildHouseholdRecommendationContext(
 
   const annualExtraIncome = roundMoney(extraordinaryEvents.reduce((acc, item) => acc + item.amount, 0));
 
-  const status = calculateFinancialStatus({
-    regularIncomeMonthly: recurringIncomeMonthly,
-    annualExtraIncome,
-    recurringObligationsMonthly: obligationsMonthly,
-    debtPaymentsMonthly: safeDebtPaymentsMonthly,
-    debtBalance: debtBalances,
-    protectedSavings: roundMoney((groupedBalances.fondo ?? 0) + (groupedBalances.savings_fund ?? 0) + (groupedBalances.investment ?? 0) + (groupedBalances.inversion ?? 0)),
-    operativeMoney: actualCurrentLiquidity
+  const protectedSavings = roundMoney(
+    (groupedBalances.fondo ?? 0) +
+    (groupedBalances.savings_fund ?? 0) +
+    (groupedBalances.investment ?? 0) +
+    (groupedBalances.inversion ?? 0)
+  );
+
+  const safeObligations = obligationsMonthly > 0 ? obligationsMonthly : Math.max(recurringIncomeMonthly * 0.8, 1);
+  const monthlyBaseCoverage = roundMoney(recurringIncomeMonthly / safeObligations);
+  const debtPressureRatio = roundMoney(safeDebtPaymentsMonthly / Math.max(recurringIncomeMonthly, 1));
+  const reserveMonths = roundMoney(protectedSavings / safeObligations);
+  const extraordinaryIncomeDependence = roundMoney((annualExtraIncome / 12) / Math.max(recurringIncomeMonthly + annualExtraIncome / 12, 1));
+  const baseMonthlyMargin = roundMoney(recurringIncomeMonthly - obligationsMonthly - safeDebtPaymentsMonthly);
+
+  const confidenceNotes: string[] = [];
+  if (!recurringIncomePlan.length) confidenceNotes.push('Declared income is incomplete, projections are conservative.');
+  if (!tx30d.length) confidenceNotes.push('Observed behavior lacks recent transaction history.');
+  if (!extraordinaryEvents.length) confidenceNotes.push('No extraordinary events declared, seasonality might be missing.');
+
+  const status = calculateFinancialStatusFromRecommendationContext({
+    declared: {
+      recurringIncomePlan: recurringIncomePlan.map((item) => ({
+        monthlyAmount: item.monthlyAmount,
+        recurring: item.recurring
+      })),
+      fixedObligations: fixedObligations.map((item) => ({
+        amount: item.amount
+      }))
+    },
+    observed: {
+      debtBalances,
+      actualCurrentLiquidity
+    },
+    projected: {
+      monthlyBaseCoverage,
+      debtPressureRatio,
+      reserveMonths
+    },
+    derived: {
+      extraordinaryIncomeDependence,
+      baseMonthlyMargin,
+      confidenceNotes,
+      assumptions
+    }
   });
 
   assumptions.push(...status.assumptions);
@@ -304,11 +340,6 @@ export async function buildHouseholdRecommendationContext(
     assumptions.push('Extraordinary events loaded but no future date is available.');
   }
 
-  const baseMonthlyMargin = roundMoney(recurringIncomeMonthly - obligationsMonthly - safeDebtPaymentsMonthly);
-  const confidenceNotes: string[] = [];
-  if (!recurringIncomePlan.length) confidenceNotes.push('Declared income is incomplete, projections are conservative.');
-  if (!tx30d.length) confidenceNotes.push('Observed behavior lacks recent transaction history.');
-  if (!extraordinaryEvents.length) confidenceNotes.push('No extraordinary events declared, seasonality might be missing.');
 
   const context: HouseholdRecommendationContext = {
     householdId,
@@ -337,9 +368,9 @@ export async function buildHouseholdRecommendationContext(
     projected: {
       upcoming7dLoad: radar.upcomingLoad,
       nearFuture8to14dLoad: radar.nearFutureLoad,
-      monthlyBaseCoverage: status.metrics.coverageRatio,
-      debtPressureRatio: status.metrics.debtPressureRatio,
-      reserveMonths: status.metrics.reserveMonths,
+      monthlyBaseCoverage,
+      debtPressureRatio,
+      reserveMonths,
       nextHeavyWeek: radar.nearFutureLoad > radar.upcomingLoad * 0.65 ? '8-14d window may be heavier than current tactical window.' : null,
       nextExtraordinaryEvent,
       tacticalPressure: inferTacticalPressure(radar),
@@ -351,7 +382,7 @@ export async function buildHouseholdRecommendationContext(
       householdStage: status.stage,
       tacticalStatus: radar.status,
       structuralStatus: status.status,
-      extraordinaryIncomeDependence: status.metrics.extraordinaryIncomeDependency,
+      extraordinaryIncomeDependence,
       baseMonthlyMargin,
       confidenceNotes,
       assumptions: Array.from(new Set(assumptions))
