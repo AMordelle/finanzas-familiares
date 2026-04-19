@@ -16,6 +16,7 @@ import { calculateFinancialRadar, type FinancialRadar } from '@/lib/finance/fina
 import { calculateFinancialStatus, type FinancialStatus } from '@/lib/finance/financialStatus';
 import { getPriorityDiagnostics, type PriorityDiagnostic } from '@/lib/finance/priorityDiagnostics';
 import { buildHouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
+import type { HouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
 import type { TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
 
@@ -153,6 +154,7 @@ type DashboardData = {
   financialRadar: FinancialRadar | null;
   financialStatus: FinancialStatus | null;
   priorityDiagnostics: PriorityDiagnostic[];
+  recommendationContext: HouseholdRecommendationContext | null;
 };
 
 type SupabaseClientLike = typeof supabaseAdmin;
@@ -532,7 +534,8 @@ function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
     financialInsight,
     financialRadar: null,
     financialStatus,
-    priorityDiagnostics
+    priorityDiagnostics,
+    recommendationContext: null
   };
 }
 
@@ -553,7 +556,8 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
       financialInsight: null,
       financialRadar: null,
       financialStatus: null,
-      priorityDiagnostics: []
+      priorityDiagnostics: [],
+      recommendationContext: null
     };
   }
 
@@ -580,7 +584,8 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
       financialInsight: null,
       financialRadar: null,
       financialStatus: null,
-      priorityDiagnostics: []
+      priorityDiagnostics: [],
+      recommendationContext: null
     };
   }
 
@@ -605,6 +610,7 @@ export async function getDashboardData(client: SupabaseClientLike = supabaseAdmi
     recommendationContext,
     existingDiagnoses: parsed.diagnoses
   });
+  parsed.recommendationContext = recommendationContext;
   return parsed;
 }
 

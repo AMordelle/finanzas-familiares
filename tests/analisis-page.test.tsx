@@ -36,7 +36,8 @@ vi.mock('@/lib/db/queries', () => ({
       },
       assumptions: ['No se detecta ahorro protegido; se asume reserva nula.']
     },
-    priorityDiagnostics: []
+    priorityDiagnostics: [],
+    recommendationContext: null
   }))
 }));
 
