@@ -4,6 +4,7 @@ import {
   recommendExtraordinaryIncomeDistribution,
   type ExtraordinaryIncomeContext
 } from '@/lib/finance/extraordinaryIncomeAdvisor';
+import type { HouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
 
 function buildContext(overrides?: Partial<ExtraordinaryIncomeContext>): ExtraordinaryIncomeContext {
   return {
@@ -42,6 +43,57 @@ function buildContext(overrides?: Partial<ExtraordinaryIncomeContext>): Extraord
       assumptions: []
     },
     priorityDiagnostics: [],
+    ...overrides
+  };
+}
+
+function buildRecommendationContext(overrides?: Partial<HouseholdRecommendationContext>): HouseholdRecommendationContext {
+  return {
+    householdId: 'home-1',
+    generatedAt: '2026-04-19T00:00:00.000Z',
+    declared: {
+      recurringIncomePlan: [{ name: 'Sueldo', monthlyAmount: 52000, recurring: true }],
+      fixedObligations: [{ name: 'Hipoteca', amount: 19000, dueDay: 5 }],
+      extraordinaryEvents: [{ label: 'Colegiatura', amount: 8000, eventDate: '2026-05-01T00:00:00.000Z' }],
+      goals: [{ name: 'Fondo casa', targetAmount: 120000, savedAmount: 30000, targetDate: '2027-01-01T00:00:00.000Z' }],
+      priorities: ['Orden de liquidez'],
+      householdSettings: {
+        householdName: 'Hogar',
+        recurringPatterns: ['quincenal']
+      }
+    },
+    observed: {
+      accountBalances: [{ name: 'Débito', type: 'checking', balance: 18000 }],
+      groupedBalances: { checking: 18000 },
+      recentTransactions: [],
+      recentIncome: 52000,
+      recentExpenses: 43000,
+      debtBalances: 89000,
+      receivables: 0,
+      actualCurrentLiquidity: 18000
+    },
+    projected: {
+      upcoming7dLoad: 9000,
+      nearFuture8to14dLoad: 6000,
+      monthlyBaseCoverage: 1.2,
+      debtPressureRatio: 0.32,
+      reserveMonths: 1.2,
+      nextHeavyWeek: null,
+      nextExtraordinaryEvent: null,
+      tacticalPressure: 'medium',
+      structuralPressure: 'medium',
+      radar: buildContext().financialRadar!,
+      status: buildContext().financialStatus!
+    },
+    derived: {
+      householdStage: 'estabilizacion',
+      tacticalStatus: 'atencion',
+      structuralStatus: 'ajustado',
+      extraordinaryIncomeDependence: 0.2,
+      baseMonthlyMargin: 3000,
+      confidenceNotes: [],
+      assumptions: []
+    },
     ...overrides
   };
 }
@@ -149,5 +201,176 @@ describe('extraordinary income advisor', () => {
       .allocations.find((item) => item.bucket === 'deuda')!.amount;
 
     expect(pressuredDebt).toBeGreaterThan(healthyDebt);
+  });
+
+  it('sube liquidez cuando la presión táctica es alta en contexto compartido', () => {
+    const medium = recommendExtraordinaryIncomeDistribution({
+      amount: 20000,
+      label: 'Utilidades',
+      context: buildContext({ recommendationContext: buildRecommendationContext() })
+    });
+    const high = recommendExtraordinaryIncomeDistribution({
+      amount: 20000,
+      label: 'Utilidades',
+      context: buildContext({
+        recommendationContext: buildRecommendationContext({
+          projected: {
+            ...buildRecommendationContext().projected,
+            tacticalPressure: 'high',
+            upcoming7dLoad: 17000,
+            nearFuture8to14dLoad: 8000
+          }
+        })
+      })
+    });
+
+    const baseLiquidity = medium.scenarios.find((item) => item.recommendationMode === 'balanceado')!
+      .allocations.find((item) => item.bucket === 'liquidez')!.amount;
+    const stressedLiquidity = high.scenarios.find((item) => item.recommendationMode === 'balanceado')!
+      .allocations.find((item) => item.bucket === 'liquidez')!.amount;
+
+    expect(stressedLiquidity).toBeGreaterThan(baseLiquidity);
+  });
+
+  it('sube deuda cuando la presión de deuda es alta en contexto compartido', () => {
+    const base = recommendExtraordinaryIncomeDistribution({
+      amount: 20000,
+      label: 'Bono',
+      context: buildContext({ recommendationContext: buildRecommendationContext() })
+    });
+    const highDebt = recommendExtraordinaryIncomeDistribution({
+      amount: 20000,
+      label: 'Bono',
+      context: buildContext({
+        recommendationContext: buildRecommendationContext({
+          projected: {
+            ...buildRecommendationContext().projected,
+            debtPressureRatio: 0.48
+          }
+        })
+      })
+    });
+
+    const baseDebt = base.scenarios.find((item) => item.recommendationMode === 'balanceado')!
+      .allocations.find((item) => item.bucket === 'deuda')!.amount;
+    const stressedDebt = highDebt.scenarios.find((item) => item.recommendationMode === 'balanceado')!
+      .allocations.find((item) => item.bucket === 'deuda')!.amount;
+    expect(stressedDebt).toBeGreaterThan(baseDebt);
+  });
+
+  it('sube colchón cuando la reserva es débil en contexto compartido', () => {
+    const healthyReserve = recommendExtraordinaryIncomeDistribution({
+      amount: 20000,
+      label: 'Bono',
+      context: buildContext({
+        recommendationContext: buildRecommendationContext({
+          projected: { ...buildRecommendationContext().projected, reserveMonths: 1.4 }
+        })
+      })
+    });
+    const weakReserve = recommendExtraordinaryIncomeDistribution({
+      amount: 20000,
+      label: 'Bono',
+      context: buildContext({
+        recommendationContext: buildRecommendationContext({
+          projected: { ...buildRecommendationContext().projected, reserveMonths: 0.4 }
+        })
+      })
+    });
+
+    const healthyCushion = healthyReserve.scenarios.find((item) => item.recommendationMode === 'balanceado')!
+      .allocations.find((item) => item.bucket === 'colchon')!.amount;
+    const weakCushion = weakReserve.scenarios.find((item) => item.recommendationMode === 'balanceado')!
+      .allocations.find((item) => item.bucket === 'colchon')!.amount;
+    expect(weakCushion).toBeGreaterThan(healthyCushion);
+  });
+
+  it('permite más flexibilidad en hogar estable con metas activas', () => {
+    const tighter = recommendExtraordinaryIncomeDistribution({
+      amount: 18000,
+      label: 'Venta extraordinaria',
+      context: buildContext({
+        recommendationContext: buildRecommendationContext({
+          projected: { ...buildRecommendationContext().projected, tacticalPressure: 'medium' }
+        })
+      })
+    });
+
+    const stable = recommendExtraordinaryIncomeDistribution({
+      amount: 18000,
+      label: 'Venta extraordinaria',
+      context: buildContext({
+        recommendationContext: buildRecommendationContext({
+          projected: { ...buildRecommendationContext().projected, tacticalPressure: 'low', reserveMonths: 2.8 },
+          derived: { ...buildRecommendationContext().derived, householdStage: 'fortalecimiento' }
+        })
+      })
+    });
+
+    const tightFree = tighter.scenarios.find((item) => item.recommendationMode === 'agresivo')!
+      .allocations.find((item) => item.bucket === 'libre')!.amount;
+    const stableFree = stable.scenarios.find((item) => item.recommendationMode === 'agresivo')!
+      .allocations.find((item) => item.bucket === 'libre')!.amount;
+    expect(stableFree).toBeGreaterThan(tightFree);
+    expect(stable.recommendedMode).toBe('agresivo');
+  });
+
+  it('cambia escenario recomendado según contexto compartido', () => {
+    const conservative = recommendExtraordinaryIncomeDistribution({
+      amount: 22000,
+      label: 'Aguinaldo',
+      context: buildContext({
+        recommendationContext: buildRecommendationContext({
+          projected: {
+            ...buildRecommendationContext().projected,
+            tacticalPressure: 'high',
+            reserveMonths: 0.6
+          }
+        })
+      })
+    });
+
+    const aggressive = recommendExtraordinaryIncomeDistribution({
+      amount: 22000,
+      label: 'Aguinaldo',
+      context: buildContext({
+        recommendationContext: buildRecommendationContext({
+          projected: {
+            ...buildRecommendationContext().projected,
+            tacticalPressure: 'low',
+            reserveMonths: 2.5,
+            debtPressureRatio: 0.45
+          },
+          derived: { ...buildRecommendationContext().derived, householdStage: 'fortalecimiento' }
+        })
+      })
+    });
+
+    expect(conservative.recommendedMode).toBe('conservador');
+    expect(aggressive.recommendedMode).toBe('agresivo');
+  });
+
+  it('usa fallback estable cuando no hay contexto compartido', () => {
+    const noSharedContext = recommendExtraordinaryIncomeDistribution({
+      amount: 21000,
+      label: 'Aguinaldo',
+      context: buildContext({
+        recommendationContext: null,
+        financialRadar: {
+          ...buildContext().financialRadar!,
+          status: 'presion'
+        },
+        financialStatus: {
+          ...buildContext().financialStatus!,
+          metrics: {
+            ...buildContext().financialStatus!.metrics,
+            reserveMonths: 0.5
+          }
+        }
+      })
+    });
+
+    expect(noSharedContext.recommendedMode).toBe('conservador');
+    expect(noSharedContext.summary).not.toContain('Basamos la sugerencia en contexto real del hogar.');
   });
 });

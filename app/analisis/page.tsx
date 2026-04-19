@@ -17,7 +17,8 @@ export default async function AnalisisPage() {
     availableMoney: data.availableMoney,
     financialRadar: data.financialRadar,
     financialStatus: data.financialStatus,
-    priorityDiagnostics: data.priorityDiagnostics.map((item) => item.title)
+    priorityDiagnostics: data.priorityDiagnostics.map((item) => item.title),
+    recommendationContext: data.recommendationContext
   };
 
   const texto = financialNarrator({

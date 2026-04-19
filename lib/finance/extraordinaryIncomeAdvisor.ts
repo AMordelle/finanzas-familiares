@@ -1,5 +1,6 @@
 import type { FinancialRadar } from '@/lib/finance/financialRadar';
 import type { FinancialStatus } from '@/lib/finance/financialStatus';
+import type { HouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
 
 export type RecommendationMode = 'conservador' | 'balanceado' | 'agresivo';
 export type AllocationBucket = 'liquidez' | 'colchon' | 'deuda' | 'libre';
@@ -17,6 +18,7 @@ export type ExtraordinaryIncomeContext = {
   financialRadar: FinancialRadar | null;
   financialStatus: FinancialStatus | null;
   priorityDiagnostics: string[];
+  recommendationContext?: HouseholdRecommendationContext | null;
 };
 
 export type ExtraordinaryIncomeAllocation = {
@@ -130,6 +132,16 @@ function normalizePercentages(weights: Record<AllocationBucket, number>) {
   };
 }
 
+type AdvisorSignals = {
+  tacticalPressure: 'low' | 'medium' | 'high';
+  debtPressureRatio: number;
+  reserveMonths: number;
+  upcomingProtectionAmount: number;
+  householdStage: FinancialStatus['stage'] | null;
+  activeGoal: { name: string; missingAmount: number } | null;
+  hasContext: boolean;
+};
+
 export function detectExtraordinaryIncome(input: { label?: string | null; amount: number; monthlyOFH?: number }) : ExtraordinaryIncomeDetection {
   const label = input.label?.trim() || 'Ingreso extraordinario';
   const normalizedLabel = normalizeText(label);
@@ -160,9 +172,10 @@ export function detectExtraordinaryIncome(input: { label?: string | null; amount
 }
 
 function adjustedWeightsByMode(mode: RecommendationMode, context: ExtraordinaryIncomeContext) {
-  const debtPressure = context.financialStatus?.metrics.debtPressureRatio ?? 0;
-  const reserveMonths = context.financialStatus?.metrics.reserveMonths ?? 0;
-  const radarPressure = context.financialRadar?.status === 'presion';
+  const signals = extractSignals(context);
+  const debtPressure = signals.debtPressureRatio;
+  const reserveMonths = signals.reserveMonths;
+  const tacticalPressure = signals.tacticalPressure;
 
   const weightsByMode: Record<RecommendationMode, Record<AllocationBucket, number>> = {
     conservador: { liquidez: 0.35, colchon: 0.35, deuda: 0.2, libre: 0.1 },
@@ -189,22 +202,42 @@ function adjustedWeightsByMode(mode: RecommendationMode, context: ExtraordinaryI
     }
   }
 
-  if (radarPressure) {
-    weights.liquidez += 0.1;
+  if (tacticalPressure === 'high') {
+    weights.liquidez += 0.13;
     weights.libre -= 0.04;
-    weights.deuda -= mode === 'agresivo' ? 0.02 : 0.04;
+    weights.deuda -= mode === 'agresivo' ? 0.04 : 0.06;
+  } else if (tacticalPressure === 'medium') {
+    weights.liquidez += 0.06;
+    weights.libre -= 0.02;
+    weights.deuda -= 0.02;
+  }
+
+  if (signals.upcomingProtectionAmount > 0) {
+    weights.liquidez += mode === 'conservador' ? 0.1 : 0.07;
+    weights.libre -= 0.03;
+    if (mode === 'agresivo') {
+      weights.deuda -= 0.04;
+    } else {
+      weights.colchon -= 0.03;
+    }
+  }
+
+  if (signals.activeGoal && reserveMonths >= 1 && tacticalPressure !== 'high') {
+    weights.libre += mode === 'agresivo' ? 0.08 : 0.05;
+    weights.deuda -= mode === 'agresivo' ? 0.03 : 0.02;
   }
 
   return normalizePercentages(weights);
 }
 
 function bucketReason(bucket: AllocationBucket, mode: RecommendationMode, context: ExtraordinaryIncomeContext) {
-  const debtPressure = context.financialStatus?.metrics.debtPressureRatio ?? 0;
-  const reserveMonths = context.financialStatus?.metrics.reserveMonths ?? 0;
+  const signals = extractSignals(context);
+  const debtPressure = signals.debtPressureRatio;
+  const reserveMonths = signals.reserveMonths;
 
   if (bucket === 'liquidez') {
-    return context.financialRadar?.status === 'presion'
-      ? 'Protege la operación de las próximas semanas y evita fricción en pagos inmediatos.'
+    return signals.tacticalPressure === 'high' || signals.upcomingProtectionAmount > 0
+      ? 'Esta semana ya trae presión táctica; apartar liquidez primero evita fricción en pagos inmediatos.'
       : 'Mantiene tranquilidad operativa para que el mes no se apriete por calendario.';
   }
 
@@ -220,12 +253,17 @@ function bucketReason(bucket: AllocationBucket, mode: RecommendationMode, contex
       : 'Mantiene avance en deuda sin descuidar estabilidad.';
   }
 
+  if (signals.activeGoal && reserveMonths >= 1 && signals.tacticalPressure !== 'high') {
+    return `Deja un margen flexible para avanzar la meta "${signals.activeGoal.name}" sin desordenar el flujo.`;
+  }
+
   return mode === 'agresivo'
     ? 'Flexibilidad mínima para no perder control mientras aceleras saneamiento.'
     : 'Espacio flexible para decisiones familiares de corto plazo sin improvisar.';
 }
 
 function buildScenario(mode: RecommendationMode, amount: number, context: ExtraordinaryIncomeContext): ExtraordinaryScenario {
+  const signals = extractSignals(context);
   const weights = adjustedWeightsByMode(mode, context);
   const raw = buildAllocationFromPercentages(amount, weights);
   const warnings: string[] = [];
@@ -238,8 +276,11 @@ function buildScenario(mode: RecommendationMode, amount: number, context: Extrao
     warnings.push('La presión de deuda es alta; prioriza deuda cara antes de nuevas metas de consumo.');
   }
 
-  if (context.financialRadar?.status === 'presion') {
+  if (signals.tacticalPressure === 'high') {
     warnings.push('Hay presión en la ventana de 7 días; separa liquidez desde hoy antes de mover lo demás.');
+  }
+  if (signals.upcomingProtectionAmount > 0) {
+    warnings.push('Hay obligaciones próximas; protege ese monto antes de usar la parte flexible.');
   }
 
   const allocations: ExtraordinaryIncomeAllocation[] = (['liquidez', 'colchon', 'deuda', 'libre'] as AllocationBucket[]).map((bucket) => ({
@@ -252,9 +293,9 @@ function buildScenario(mode: RecommendationMode, amount: number, context: Extrao
   }));
 
   const summaryByMode: Record<RecommendationMode, string> = {
-    conservador: 'Escenario protector: fortalece estabilidad y liquidez primero.',
-    balanceado: 'Escenario mixto: combina estabilidad inmediata, deuda y colchón.',
-    agresivo: 'Escenario de aceleración: reduce presión de deuda más rápido.'
+    conservador: 'Escenario protector: asegura operación y estabilidad antes de acelerar.',
+    balanceado: 'Escenario mixto: reparte entre tranquilidad operativa y avance financiero.',
+    agresivo: 'Escenario de aceleración: empuja deuda y metas cuando la base lo permite.'
   };
 
   const nextStepByMode: Record<RecommendationMode, string> = {
@@ -272,6 +313,45 @@ function buildScenario(mode: RecommendationMode, amount: number, context: Extrao
   };
 }
 
+function extractSignals(context: ExtraordinaryIncomeContext): AdvisorSignals {
+  const recommendationContext = context.recommendationContext;
+  const tacticalPressure = recommendationContext?.projected.tacticalPressure
+    ?? (context.financialRadar?.status === 'presion'
+      ? 'high'
+      : context.financialRadar?.status === 'atencion'
+        ? 'medium'
+        : 'low');
+  const debtPressureRatio = recommendationContext?.projected.debtPressureRatio
+    ?? context.financialStatus?.metrics.debtPressureRatio
+    ?? 0;
+  const reserveMonths = recommendationContext?.projected.reserveMonths
+    ?? context.financialStatus?.metrics.reserveMonths
+    ?? 0;
+
+  const upcoming7d = recommendationContext?.projected.upcoming7dLoad ?? 0;
+  const upcoming8to14 = recommendationContext?.projected.nearFuture8to14dLoad ?? 0;
+  const liquidity = recommendationContext?.observed.actualCurrentLiquidity ?? context.availableMoney ?? 0;
+  const shortTermPressure = Math.max(upcoming7d + upcoming8to14 - liquidity, 0);
+  const upcomingProtectionAmount = roundMoney(Math.max(shortTermPressure, upcoming7d * 0.35, 0));
+
+  const activeGoal = recommendationContext?.declared.goals
+    .map((goal) => ({
+      name: goal.name,
+      missingAmount: roundMoney(Math.max(goal.targetAmount - goal.savedAmount, 0))
+    }))
+    .find((goal) => goal.missingAmount > 0) ?? null;
+
+  return {
+    tacticalPressure,
+    debtPressureRatio,
+    reserveMonths,
+    upcomingProtectionAmount,
+    householdStage: recommendationContext?.derived.householdStage ?? context.financialStatus?.stage ?? null,
+    activeGoal,
+    hasContext: Boolean(recommendationContext)
+  };
+}
+
 export function recommendExtraordinaryIncomeDistribution(input: {
   amount: number;
   label?: string | null;
@@ -284,14 +364,17 @@ export function recommendExtraordinaryIncomeDistribution(input: {
     monthlyOFH: input.context.monthlyOFH
   });
 
-  const debtPressure = input.context.financialStatus?.metrics.debtPressureRatio ?? 0;
-  const reserveMonths = input.context.financialStatus?.metrics.reserveMonths ?? 0;
-  const radarStatus = input.context.financialRadar?.status;
+  const signals = extractSignals(input.context);
+  const debtPressure = signals.debtPressureRatio;
+  const reserveMonths = signals.reserveMonths;
+  const tacticalPressure = signals.tacticalPressure;
 
   let recommendedMode: RecommendationMode = 'balanceado';
-  if (radarStatus === 'presion' || reserveMonths < 0.8) {
+  if (tacticalPressure === 'high' || reserveMonths < 0.8 || signals.upcomingProtectionAmount > amount * 0.2) {
     recommendedMode = 'conservador';
-  } else if (debtPressure >= 0.38 && reserveMonths >= 1) {
+  } else if (debtPressure >= 0.38 && reserveMonths >= 1 && tacticalPressure === 'low') {
+    recommendedMode = 'agresivo';
+  } else if (signals.householdStage === 'fortalecimiento' && reserveMonths >= 2 && tacticalPressure !== 'high') {
     recommendedMode = 'agresivo';
   }
 
@@ -310,7 +393,7 @@ export function recommendExtraordinaryIncomeDistribution(input: {
     recommendedMode,
     summary: detection.detected
       ? `Se detectó un ingreso extraordinario y te proponemos iniciar con enfoque ${recommendedMode}. ${selectedScenario.summary}`
-      : `Tomamos este monto como evento puntual para planeación y sugerimos enfoque ${recommendedMode}.`,
+      : `Tomamos este monto como evento puntual para planeación y sugerimos enfoque ${recommendedMode}.${signals.hasContext ? ' Basamos la sugerencia en contexto real del hogar.' : ''}`,
     scenarios
   };
 }
