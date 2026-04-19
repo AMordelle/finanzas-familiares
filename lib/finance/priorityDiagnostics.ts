@@ -1,5 +1,6 @@
 import type { FinancialRadar } from '@/lib/finance/financialRadar';
 import type { FinancialStatus } from '@/lib/finance/financialStatus';
+import type { HouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 export type PriorityDiagnostic = {
@@ -23,6 +24,23 @@ type FinancialPressureData = {
 };
 
 type Candidate = PriorityDiagnostic & { score: number };
+
+type PrioritySignals = {
+  radar: FinancialRadar | null;
+  financialStatus: FinancialStatus | null;
+  declaredPriorities: string[];
+  upcoming7dLoad: number;
+  nearFuture8to14dLoad: number;
+  tacticalPressure: 'low' | 'medium' | 'high' | null;
+  reserveMonths: number;
+  debtPressureRatio: number;
+  nextHeavyWeek: string | null;
+  nextExtraordinaryEvent: { label: string; amount: number; date: string; inDays: number } | null;
+  monthlyMargin: number;
+  liquidity: number;
+  debtBalances: number;
+  recentSpendingPressure: number;
+};
 
 function normalizedTokens(value: string) {
   return value
@@ -70,13 +88,54 @@ function extractUpcomingObligation(radar: FinancialRadar | null) {
   };
 }
 
+function buildSignals(input: {
+  radar: FinancialRadar | null;
+  financialStatus: FinancialStatus | null;
+  recommendationContext?: HouseholdRecommendationContext | null;
+}) {
+  const context = input.recommendationContext;
+  const radar = context?.projected.radar ?? input.radar;
+  const financialStatus = context?.projected.status ?? input.financialStatus;
+  const liquidity = context?.observed.actualCurrentLiquidity ?? radar?.availableNow ?? 0;
+  const upcoming7dLoad = context?.projected.upcoming7dLoad ?? radar?.upcomingLoad ?? 0;
+  const nearFuture8to14dLoad = context?.projected.nearFuture8to14dLoad ?? radar?.nearFutureLoad ?? 0;
+  const monthlyMargin = context?.derived.baseMonthlyMargin ?? 0;
+  const debtBalances = context?.observed.debtBalances ?? 0;
+  const recentSpendingPressure = context
+    ? context.observed.recentExpenses - context.observed.recentIncome
+    : 0;
+
+  const signals: PrioritySignals = {
+    radar,
+    financialStatus,
+    declaredPriorities: context?.declared.priorities ?? [],
+    upcoming7dLoad,
+    nearFuture8to14dLoad,
+    tacticalPressure: context?.projected.tacticalPressure ?? null,
+    reserveMonths: context?.projected.reserveMonths ?? financialStatus?.metrics.reserveMonths ?? 0,
+    debtPressureRatio: context?.projected.debtPressureRatio ?? financialStatus?.metrics.debtPressureRatio ?? 0,
+    nextHeavyWeek: context?.projected.nextHeavyWeek ?? null,
+    nextExtraordinaryEvent: context?.projected.nextExtraordinaryEvent ?? null,
+    monthlyMargin,
+    liquidity,
+    debtBalances,
+    recentSpendingPressure
+  };
+
+  return signals;
+}
+
 export function getPriorityDiagnostics(input: {
   radar: FinancialRadar | null;
   financialStatus: FinancialStatus | null;
   financialPressure: FinancialPressureData | null;
+  recommendationContext?: HouseholdRecommendationContext | null;
   existingDiagnoses?: string[];
 }): PriorityDiagnostic[] {
-  const { radar, financialStatus, financialPressure } = input;
+  const { financialPressure } = input;
+  const signals = buildSignals(input);
+  const radar = signals.radar;
+  const financialStatus = signals.financialStatus;
 
   const baselineTexts = [
     radar?.actionToday,
@@ -87,6 +146,7 @@ export function getPriorityDiagnostics(input: {
     financialStatus?.shortLine,
     financialStatus?.interpretation,
     financialStatus?.nextFocus,
+    ...signals.declaredPriorities,
     ...(input.existingDiagnoses ?? [])
   ].filter((value): value is string => Boolean(value));
 
@@ -96,7 +156,8 @@ export function getPriorityDiagnostics(input: {
   if (radar && upcomingObligation?.dueInDays != null && upcomingObligation.dueInDays <= 10) {
     const pressurePoints = [
       radar.status === 'presion',
-      radar.estimatedMargin <= Math.max(radar.upcomingLoad * 0.12, 350),
+      signals.tacticalPressure === 'high',
+      signals.liquidity <= Math.max(signals.upcoming7dLoad * 1.08, 350),
       financialPressure?.status === 'critical'
     ].filter(Boolean).length;
 
@@ -106,14 +167,22 @@ export function getPriorityDiagnostics(input: {
         score: 98,
         level: 'high',
         title: `En ${upcomingObligation.dueInDays} días vence ${upcomingObligation.name} y esta semana queda justa`,
-        explanation: `La carga de ${formatCurrencyMXN(radar.upcomingLoad)} en la ventana corta deja poco margen frente a tu disponible actual (${formatCurrencyMXN(radar.availableNow)}).`,
+        explanation: `La carga táctica de ${formatCurrencyMXN(signals.upcoming7dLoad)} deja poco margen frente a tu liquidez actual (${formatCurrencyMXN(signals.liquidity)}).`,
         action: 'Congela extras esta semana y deja separado ese pago desde hoy.'
       });
     }
   }
 
-  if (radar && (radar.status === 'presion' || radar.estimatedMargin < 0 || financialPressure?.status === 'critical')) {
-    const shortfall = Math.max(-radar.estimatedMargin, financialPressure?.gap ?? 0, 0);
+  if (
+    radar && (
+      radar.status === 'presion'
+      || signals.tacticalPressure === 'high'
+      || radar.estimatedMargin < 0
+      || financialPressure?.status === 'critical'
+      || signals.recentSpendingPressure > signals.upcoming7dLoad * 0.4
+    )
+  ) {
+    const shortfall = Math.max(signals.upcoming7dLoad - signals.liquidity, -radar.estimatedMargin, financialPressure?.gap ?? 0, 0);
     candidates.push({
       key: 'semana-corta-liquidez',
       score: 92,
@@ -121,13 +190,13 @@ export function getPriorityDiagnostics(input: {
       title: shortfall > 0
         ? `Esta semana te falta ${formatCurrencyMXN(shortfall)} para cubrir sin fricción`
         : 'Esta semana va muy al límite y cualquier gasto extra desordena el flujo',
-      explanation: `El disponible (${formatCurrencyMXN(radar.availableNow)}) no alcanza con holgura para la carga inmediata (${formatCurrencyMXN(radar.upcomingLoad)}).`,
+      explanation: `Tu liquidez disponible (${formatCurrencyMXN(signals.liquidity)}) no alcanza con holgura para la carga inmediata (${formatCurrencyMXN(signals.upcoming7dLoad)}).`,
       action: 'Reordena pagos por fecha y mueve lo postergable fuera de esta ventana.'
     });
   }
 
-  if (financialStatus && financialStatus.metrics.debtPressureRatio >= 0.35) {
-    const debtPercent = Math.round(financialStatus.metrics.debtPressureRatio * 100);
+  if (signals.debtPressureRatio >= 0.35 || signals.debtBalances > 0 && signals.monthlyMargin < 0) {
+    const debtPercent = Math.round(signals.debtPressureRatio * 100);
     candidates.push({
       key: 'deuda-recorta-margen',
       score: 84,
@@ -138,8 +207,8 @@ export function getPriorityDiagnostics(input: {
     });
   }
 
-  if (financialStatus && (financialStatus.metrics.reserveMonths < 1 || financialStatus.status === 'vulnerable')) {
-    const reserveMonths = Math.max(financialStatus.metrics.reserveMonths, 0);
+  if ((signals.reserveMonths < 1 || financialStatus?.status === 'vulnerable') && signals.monthlyMargin <= 0) {
+    const reserveMonths = Math.max(signals.reserveMonths, 0);
     candidates.push({
       key: 'colchon-debil',
       score: 74,
@@ -150,7 +219,14 @@ export function getPriorityDiagnostics(input: {
     });
   }
 
-  if (radar && financialStatus && radar.status === 'estable' && radar.estimatedMargin > 0 && financialStatus.metrics.reserveMonths < 2) {
+  if (
+    radar
+    && radar.status === 'estable'
+    && signals.tacticalPressure !== 'high'
+    && radar.estimatedMargin > 0
+    && signals.reserveMonths < 2
+    && signals.monthlyMargin >= 0
+  ) {
     candidates.push({
       key: 'ventana-ahorro',
       score: 56,
@@ -161,18 +237,29 @@ export function getPriorityDiagnostics(input: {
     });
   }
 
-  if (radar && radar.nearFutureLoad > 0 && radar.nearFutureLoad / Math.max(radar.upcomingLoad, 1) >= 0.35) {
+  if (signals.nearFuture8to14dLoad > 0 && signals.nearFuture8to14dLoad / Math.max(signals.upcoming7dLoad, 1) >= 0.35) {
     candidates.push({
       key: 'ola-siguiente-semana',
-      score: 70,
+      score: signals.nextHeavyWeek ? 72 : 70,
       level: 'medium',
-      title: `Después de esta ventana viene otra carga de ${formatCurrencyMXN(radar.nearFutureLoad)}`,
+      title: `Después de esta ventana viene otra carga de ${formatCurrencyMXN(signals.nearFuture8to14dLoad)}`,
       explanation: 'Si no te anticipas hoy, la siguiente semana arranca más ajustada y reduce tu margen de maniobra.',
       action: 'Reserva desde esta semana una parte para la siguiente ola de pagos.'
     });
   }
 
-  const selected = candidates
+  if (signals.nextExtraordinaryEvent && signals.nextExtraordinaryEvent.inDays <= 14 && signals.nextExtraordinaryEvent.amount > 0) {
+    candidates.push({
+      key: 'evento-extraordinario-proximo',
+      score: signals.nextExtraordinaryEvent.inDays <= 7 ? 80 : 67,
+      level: 'medium',
+      title: `En ${signals.nextExtraordinaryEvent.inDays} días llega ${signals.nextExtraordinaryEvent.label}`,
+      explanation: `Anticipa ${formatCurrencyMXN(signals.nextExtraordinaryEvent.amount)} para evitar que ese evento rompa tu flujo operativo.`,
+      action: 'Crea una reserva puntual para ese evento desde esta semana.'
+    });
+  }
+
+  return candidates
     .filter((candidate, index, list) => list.findIndex((item) => item.key === candidate.key) === index)
     .filter((candidate) => candidate.score >= 90 || !isDuplicateEquivalent(candidate, baselineTexts))
     .sort((a, b) => b.score - a.score)
@@ -181,6 +268,4 @@ export function getPriorityDiagnostics(input: {
       ...candidate,
       level: riskLevelFromScore(score)
     }));
-
-  return selected;
 }
