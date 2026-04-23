@@ -897,7 +897,7 @@ describe('ai-first instruction understanding', () => {
     const result = await interpretTransaction('Gasté 150 con tarjeta de crédito', accounts as any);
     expect(result.missingFieldKinds).toContain('missingSourceAccount');
     expect(result.nextPromptInputType).toBe('account_selector');
-    expect(result.nextPromptAllowedAccountTypes).toEqual(['credit_card']);
+    expect(result.nextPromptAllowedAccountTypes).toEqual(['credit_card', 'loan']);
   });
 
   it('resolves income destination to savings when AI hint is "Caja de Ahorro"', async () => {
@@ -1204,6 +1204,43 @@ it('resolves debt-typed credit cards (deuda + subtype credit_card) without empty
   expect(result.sourceAccountName).toBe('TDC BBVA');
   expect(result.sourceAccountType).toBe('credit_card');
   expect(result.missingFieldKinds).not.toContain('missingSourceAccount');
+});
+
+it('accepts TDC purchases when account is stored as loan but identified as credit card by name', async () => {
+  const loanTypedTdcAccounts = [
+    { id: 'acc-ef', name: 'Efectivo', type: 'operational_cash' },
+    { id: 'acc-tdc-bbva-loan', name: 'TDC BBVA', type: 'loan' },
+    { id: 'acc-tdc-mpago-loan', name: 'TDC MPAGO', type: 'loan' }
+  ];
+
+  const oxxo = await interpretTransaction('Gasté 99 en Oxxo con TDC BBVA', loanTypedTdcAccounts as any);
+  expect(oxxo.intent).toBe('expense_debt_account');
+  expect(oxxo.sourceAccountName).toBe('TDC BBVA');
+  expect(oxxo.missingFieldKinds).not.toContain('missingSourceAccount');
+
+  const mpago = await interpretTransaction('Gasté 500 con TDC MPAGO', loanTypedTdcAccounts as any);
+  expect(mpago.intent).toBe('expense_debt_account');
+  expect(mpago.sourceAccountName).toBe('TDC MPAGO');
+  expect(mpago.missingFieldKinds).not.toContain('missingSourceAccount');
+});
+
+it('keeps non-credit loan accounts blocked for expense_debt_account source compatibility', async () => {
+  mockedSemanticInstructionUnderstanding.mockResolvedValueOnce({
+    intent: 'expense_debt_account',
+    visibleType: 'Gasto con tarjeta de crédito',
+    amount: 500,
+    sourceAccountHint: 'Préstamo auto',
+    destinationAccountHint: null,
+    category: 'otros_gastos',
+    missingFields: [],
+    confidence: 'high',
+    reason: 'test compatibility'
+  });
+
+  const result = await interpretTransaction('Gasté 500 con Préstamo auto', accounts as any);
+  expect(result.intent).toBe('expense_debt_account');
+  expect(result.sourceAccountName).toBeNull();
+  expect(result.missingFieldKinds).toContain('missingSourceAccount');
 });
 
 it('exact account name match wins before alias/fallback matching', async () => {
