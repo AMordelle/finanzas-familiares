@@ -1,5 +1,6 @@
 'use client';
 
+import React from 'react';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -14,6 +15,7 @@ import { applyFollowUpAnswerAction, interpretTransactionAction, saveInterpretedT
 type Props = {
   accounts: AccountOption[];
   hasHousehold: boolean;
+  initialIntent?: TransactionIntent | null;
 };
 
 const missingFieldQuestions: Record<string, string> = {
@@ -22,9 +24,17 @@ const missingFieldQuestions: Record<string, string> = {
   debtAccount: '¿A qué tarjeta o préstamo pagaste?'
 };
 
-export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
+function isCreditCardLikeSource(intent: TransactionIntent | null) {
+  if (!intent || intent.intent !== 'expense_debt_account') return true;
+  if (!intent.sourceAccountName) return false;
+  if (intent.sourceAccountType === 'credit_card') return true;
+  if (intent.sourceAccountType !== 'loan') return false;
+  return /\b(tdc|tarjeta|credit)\b/i.test(intent.sourceAccountName);
+}
+
+export function ConversationalRegistration({ accounts, hasHousehold, initialIntent = null }: Props) {
   const [input, setInput] = useState('');
-  const [intent, setIntent] = useState<TransactionIntent | null>(null);
+  const [intent, setIntent] = useState<TransactionIntent | null>(initialIntent);
   const [movementDate, setMovementDate] = useState(() => toDateInputValue(new Date()));
   const [isCustomDatePickerOpen, setIsCustomDatePickerOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>(APPROVED_CATEGORY_CATALOG[0]);
@@ -42,13 +52,9 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
     setIsManualCategoryOverride(false);
   }, [intent]);
 
-  const isCreditExpenseSourceInvalid = useMemo(
-    () => !!intent && intent.intent === 'expense_debt_account' && intent.sourceAccountType !== 'credit_card',
-    [intent]
-  );
   const isReadyToConfirm = useMemo(
-    () => !!intent && intent.missingFieldKinds.length === 0 && !isCreditExpenseSourceInvalid,
-    [intent, isCreditExpenseSourceInvalid]
+    () => !!intent && intent.missingFieldKinds.length === 0 && isCreditCardLikeSource(intent),
+    [intent]
   );
   const hasAccounts = accounts.length > 0;
 
@@ -110,7 +116,7 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
   }, [accounts, intent]);
 
   const handleSave = () => {
-    if (!intent || intent.missingFieldKinds.length > 0 || isCreditExpenseSourceInvalid || isSavingRef.current) return;
+    if (!intent || intent.missingFieldKinds.length > 0 || !isCreditCardLikeSource(intent) || isSavingRef.current) return;
     setError(null);
     isSavingRef.current = true;
     startTransition(async () => {
@@ -168,13 +174,6 @@ export function ConversationalRegistration({ accounts, hasHousehold }: Props) {
             </select>
           )}
           <Button onClick={handleMissingFieldApply} disabled={!followUpValue.trim()}>Continuar</Button>
-        </div>
-      )}
-
-      {intent && isCreditExpenseSourceInvalid && (
-        <div className="mt-6 space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
-          <p className="text-sm font-medium text-amber-900">Faltan datos para completar el movimiento:</p>
-          <p className="text-sm text-slate-700">¿Con qué tarjeta de crédito pagaste?</p>
         </div>
       )}
 

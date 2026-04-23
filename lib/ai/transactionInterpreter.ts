@@ -238,7 +238,7 @@ function isAccountTypeCompatibleWithIntent(
   const type = account.type;
   if (intent === 'transfer_between_own_accounts') return ['operational_cash', 'savings_fund', 'investment'].includes(type);
   if (intent === 'income' && role === 'destination') return ['operational_cash', 'savings_fund', 'investment', 'receivable'].includes(type);
-  if (intent === 'expense_debt_account' && role === 'source') return type === 'credit_card';
+  if (intent === 'expense_debt_account' && role === 'source') return isCreditCardCompatibleDebtInstrument(account);
   if (intent === 'expense_cash_like' && role === 'source') return ['operational_cash', 'savings_fund', 'investment'].includes(type);
   if (intent === 'debt_payment' && role === 'destination') return ['credit_card', 'loan'].includes(type);
   if (intent === 'debt_transfer') return ['credit_card', 'loan'].includes(type);
@@ -246,6 +246,17 @@ function isAccountTypeCompatibleWithIntent(
   if ((intent === 'savings_contribution' || intent === 'savings_withdrawal') && role === 'source') return ['operational_cash', 'savings_fund', 'investment'].includes(type);
   if (intent === 'receivable_payment' && role === 'destination') return ['operational_cash', 'savings_fund'].includes(type);
   return true;
+}
+
+function isCreditCardCompatibleDebtInstrument(account: Pick<EnrichedAccount, 'type' | 'subtype' | 'name'> | null | undefined) {
+  if (!account) return false;
+  if (account.type === 'credit_card') return true;
+  if (account.type !== 'loan') return false;
+  const normalizedSubtype = normalize(account.subtype ?? '');
+  const normalizedName = normalize(account.name ?? '');
+  return normalizedSubtype.includes('credit')
+    || normalizedSubtype.includes('tarjeta')
+    || /\b(tdc|tarjeta)\b/.test(normalizedName);
 }
 
 function parseAmount(input: string) {
@@ -776,7 +787,7 @@ function inferIntent(normalizedText: string, matched: EnrichedAccount[]): z.infe
     if (hasExplicitDebitExpenseMarker(normalizedText)) return 'expense_cash_like';
     if (/(tarjeta|tdc)/.test(normalizedText)) return 'expense_debt_account';
     const source = matched[0];
-    return source?.type === 'credit_card' ? 'expense_debt_account' : 'expense_cash_like';
+    return isCreditCardCompatibleDebtInstrument(source) ? 'expense_debt_account' : 'expense_cash_like';
   }
   if (/(meti|movi|abone)/.test(normalizedText)) return 'manual_adjustment';
   return 'expense_cash_like';
@@ -834,7 +845,14 @@ function applyIntentAccountConstraints(draft: TransactionIntent) {
     draft.destinationAccountType = null;
     draft.destinationAccount = undefined;
   }
-  if (draft.intent === 'expense_debt_account' && draft.sourceAccountType !== 'credit_card') {
+  if (
+    draft.intent === 'expense_debt_account'
+    && !isCreditCardCompatibleDebtInstrument({
+      type: draft.sourceAccountType ?? 'operational_cash',
+      subtype: null,
+      name: draft.sourceAccountName ?? ''
+    })
+  ) {
     draft.sourceAccountId = null;
     draft.sourceAccountName = null;
     draft.sourceAccountType = null;
@@ -857,7 +875,18 @@ function recomputeMissingKinds(draft: TransactionIntent, unresolvedMessage: stri
   if (/pague\s+\d+\s*$/.test(draft.normalizedText)) {
     missingKinds.push('missingIntent');
   }
-  if (draft.intent === 'expense_debt_account' && (draft.sourceAccountType !== 'credit_card' || !draft.sourceAccountId) && !missingKinds.includes('missingSourceAccount')) {
+  if (
+    draft.intent === 'expense_debt_account'
+    && (
+      !isCreditCardCompatibleDebtInstrument({
+        type: draft.sourceAccountType ?? 'operational_cash',
+        subtype: null,
+        name: draft.sourceAccountName ?? ''
+      })
+      || !draft.sourceAccountId
+    )
+    && !missingKinds.includes('missingSourceAccount')
+  ) {
     missingKinds.push('missingSourceAccount');
   }
   if (unresolvedMessage && !missingKinds.includes('missingSourceAccount')) {
@@ -892,7 +921,7 @@ function choosePrompt(
     return { nextPrompt: '¿A qué cuenta entró el dinero?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['operational_cash', 'savings_fund', 'investment', 'receivable'] as const };
   }
   if (first === 'missingSourceAccount' && intent === 'expense_debt_account' && /(tarjeta|tdc|credito|prestamo|hipoteca)/.test(normalizedText ?? '')) {
-    return { nextPrompt: '¿Con qué tarjeta de crédito pagaste?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['credit_card'] as const };
+    return { nextPrompt: '¿Con qué tarjeta de crédito pagaste?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['credit_card', 'loan'] as const };
   }
   if (first === 'missingSourceAccount' && intent === 'debt_transfer' && normalizedText?.includes('de ')) {
     return { nextPrompt: '¿Con qué cuenta pagaste esa deuda?', nextPromptInputType: 'account_selector' as const, nextPromptAllowedAccountTypes: ['credit_card', 'loan', 'operational_cash'] as const };
@@ -1276,12 +1305,25 @@ export async function applyFollowUpAnswer(
     updated.action = intentToLegacyAction(updated.intent);
   }
 
-  if (updated.intent === 'expense_cash_like' && updated.sourceAccountType === 'credit_card') {
+  if (updated.intent === 'expense_cash_like' && isCreditCardCompatibleDebtInstrument({
+    type: updated.sourceAccountType ?? 'operational_cash',
+    subtype: matchedAccount?.subtype ?? null,
+    name: updated.sourceAccountName ?? ''
+  })) {
     updated.intent = 'expense_debt_account';
     updated.visibleType = visibleTypeMap.expense_debt_account;
     updated.action = intentToLegacyAction(updated.intent);
   }
-  if (resolvedSourceBySelection && isAmbiguityClarification && updated.intent === 'expense_debt_account' && updated.sourceAccountType !== 'credit_card') {
+  if (
+    resolvedSourceBySelection
+    && isAmbiguityClarification
+    && updated.intent === 'expense_debt_account'
+    && !isCreditCardCompatibleDebtInstrument({
+      type: updated.sourceAccountType ?? 'operational_cash',
+      subtype: matchedAccount?.subtype ?? null,
+      name: updated.sourceAccountName ?? ''
+    })
+  ) {
     updated.intent = 'expense_cash_like';
     updated.visibleType = visibleTypeMap.expense_cash_like;
     updated.action = intentToLegacyAction(updated.intent);
