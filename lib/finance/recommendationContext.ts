@@ -24,6 +24,16 @@ function normalizeType(value: string | null | undefined) {
   return (value ?? '').toLowerCase().trim();
 }
 
+function normalizeLabel(value: string | null | undefined) {
+  return (value ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function isDebtType(type: string) {
   return ['deuda', 'credit_card', 'loan'].includes(normalizeType(type));
 }
@@ -73,6 +83,57 @@ function daysUntil(dateIso: string, now: Date) {
   return Math.ceil((date - now.getTime()) / MS_PER_DAY);
 }
 
+function tokenSet(value: string) {
+  return new Set(
+    normalizeLabel(value)
+      .split(' ')
+      .filter((token) => token.length >= 3)
+  );
+}
+
+function labelsLikelyMatch(left: string, right: string) {
+  const leftNorm = normalizeLabel(left);
+  const rightNorm = normalizeLabel(right);
+  if (!leftNorm || !rightNorm) return false;
+  if (leftNorm.includes(rightNorm) || rightNorm.includes(leftNorm)) return true;
+  const leftTokens = tokenSet(leftNorm);
+  const rightTokens = tokenSet(rightNorm);
+  if (!leftTokens.size || !rightTokens.size) return false;
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) overlap += 1;
+  }
+  return overlap >= 1;
+}
+
+function resolveUpcomingDueDate(dueDay: number, now: Date) {
+  const dueDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), dueDay, 12, 0, 0, 0));
+  if (dueDate.getUTCDate() !== dueDay) return null;
+  if (dueDate.getTime() < now.getTime()) {
+    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, dueDay, 12, 0, 0, 0));
+    if (next.getUTCDate() !== dueDay) return null;
+    return next;
+  }
+  return dueDate;
+}
+
+function buildCycleWindow(dueDate: Date) {
+  const previousDueDate = new Date(Date.UTC(dueDate.getUTCFullYear(), dueDate.getUTCMonth() - 1, dueDate.getUTCDate(), 12, 0, 0, 0));
+  const cycleStart = new Date(previousDueDate.getTime() + MS_PER_DAY);
+  return { cycleStart, cycleEnd: dueDate };
+}
+
+type ReconciledObligation = {
+  name: string;
+  dueDay: number | null;
+  dueDate: string | null;
+  expectedAmount: number;
+  paidAmount: number;
+  remainingAmount: number;
+  status: 'pending' | 'partial' | 'paid';
+  matchedPaymentCount: number;
+};
+
 export type HouseholdRecommendationContext = {
   householdId: string;
   generatedAt: string;
@@ -107,6 +168,7 @@ export type HouseholdRecommendationContext = {
     nextExtraordinaryEvent: { label: string; amount: number; date: string; inDays: number } | null;
     tacticalPressure: 'low' | 'medium' | 'high';
     structuralPressure: 'low' | 'medium' | 'high';
+    reconciledObligations: ReconciledObligation[];
     radar: FinancialRadar;
     status: FinancialStatus;
   };
@@ -149,7 +211,7 @@ export async function buildHouseholdRecommendationContext(
     client.from('goals').select('name,target_amount,saved_amount,target_date').eq('household_id', householdId),
     client.from('recurring_patterns').select('pattern_type,active').eq('household_id', householdId).eq('active', true),
     client.from('financial_snapshots').select('payload').eq('household_id', householdId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
-    client.from('accounts').select('name,type,balance,periodic_payment').eq('household_id', householdId).eq('is_active', true),
+    client.from('accounts').select('id,name,type,balance,periodic_payment').eq('household_id', householdId).eq('is_active', true),
     client.from('variable_spending_profiles').select('monthly_estimate').eq('household_id', householdId),
     client.from('transaction_groups').select('id').eq('household_id', householdId),
     client.from('receivables').select('pending_amount,status').eq('household_id', householdId)
@@ -159,7 +221,7 @@ export async function buildHouseholdRecommendationContext(
   const transactionsResult = groupIds.length
     ? await client
         .from('transactions')
-        .select('type,amount,happened_at')
+        .select('type,amount,happened_at,category,account_id')
         .in('group_id', groupIds)
         .order('happened_at', { ascending: false })
         .limit(90)
@@ -213,8 +275,9 @@ export async function buildHouseholdRecommendationContext(
     ? latestSnapshotPayload.diagnoses.filter((item: unknown): item is string => typeof item === 'string')
     : [];
 
-  const accounts = ((accountsResult.data ?? []) as Array<{ name: string; type: string; balance: string | number; periodic_payment?: string | number | null }>)
+  const accounts = ((accountsResult.data ?? []) as Array<{ id: string; name: string; type: string; balance: string | number; periodic_payment?: string | number | null }>)
     .map((item) => ({
+      id: item.id,
       name: item.name,
       type: item.type,
       balance: roundMoney(toNumber(item.balance, 0)),
@@ -224,12 +287,76 @@ export async function buildHouseholdRecommendationContext(
   const accountBalances = accounts.map(({ name, type, balance }) => ({ name, type, balance }));
   const groupedBalances = buildGroupedBalances(accountBalances.map((item) => ({ type: item.type, balance: item.balance })));
 
-  const recentTransactions = ((transactionsResult.data ?? []) as Array<{ type: string; amount: string | number; happened_at: string | null }>)
+  const recentTransactions = ((transactionsResult.data ?? []) as Array<{
+    type: string;
+    amount: string | number;
+    happened_at: string | null;
+    category?: string | null;
+    account_id?: string | null;
+  }>)
     .map((item) => ({
       type: item.type,
       amount: roundMoney(toNumber(item.amount, 0)),
-      happenedAt: toISODate(item.happened_at)
+      happenedAt: toISODate(item.happened_at),
+      category: normalizeType(item.category ?? ''),
+      accountId: item.account_id ?? null
     }));
+
+  const debtAccountsById = new Map(
+    accounts
+      .filter((account) => isDebtType(account.type))
+      .map((account) => [account.id, account])
+  );
+
+  const reconciledObligations: ReconciledObligation[] = fixedObligations.map((obligation) => {
+    const expectedAmount = Math.max(obligation.amount, 0);
+    const dueDate = obligation.dueDay ? resolveUpcomingDueDate(obligation.dueDay, now) : null;
+    const cycleWindow = dueDate ? buildCycleWindow(dueDate) : null;
+    const matchedDebtAccountIds = accounts
+      .filter((account) => isDebtType(account.type))
+      .filter((account) => labelsLikelyMatch(obligation.name, account.name))
+      .map((account) => account.id);
+
+    const paidAmount = roundMoney(
+      recentTransactions
+        .filter((tx) => ['deuda', 'pago_deuda'].includes(normalizeType((tx as { category?: string }).category ?? '')))
+        .filter((tx) => normalizeType(tx.type) === 'debit')
+        .filter((tx) => tx.accountId && debtAccountsById.has(tx.accountId))
+        .filter((tx) => tx.accountId && matchedDebtAccountIds.includes(tx.accountId))
+        .filter((tx) => {
+          if (!tx.happenedAt) return false;
+          const happenedAt = new Date(tx.happenedAt).getTime();
+          if (!Number.isFinite(happenedAt)) return false;
+          if (!cycleWindow) return now.getTime() - happenedAt <= 35 * MS_PER_DAY;
+          return happenedAt >= cycleWindow.cycleStart.getTime() && happenedAt <= cycleWindow.cycleEnd.getTime();
+        })
+        .reduce((acc, tx) => acc + Math.max(tx.amount, 0), 0)
+    );
+
+    const remainingAmount = roundMoney(Math.max(expectedAmount - paidAmount, 0));
+    const status: ReconciledObligation['status'] = remainingAmount <= 0
+      ? 'paid'
+      : paidAmount > 0
+        ? 'partial'
+        : 'pending';
+
+    const matchedPaymentCount = recentTransactions
+      .filter((tx) => tx.accountId && matchedDebtAccountIds.includes(tx.accountId))
+      .filter((tx) => ['deuda', 'pago_deuda'].includes(normalizeType((tx as { category?: string }).category ?? '')))
+      .filter((tx) => normalizeType(tx.type) === 'debit')
+      .length;
+
+    return {
+      name: obligation.name,
+      dueDay: obligation.dueDay,
+      dueDate: dueDate?.toISOString() ?? null,
+      expectedAmount,
+      paidAmount,
+      remainingAmount,
+      status,
+      matchedPaymentCount
+    };
+  });
 
   const tx30d = recentTransactions.filter((tx) => tx.happenedAt && daysUntil(tx.happenedAt, now) >= -30);
   if (!tx30d.length) assumptions.push('Not enough recent movements (30d); trend confidence reduced.');
@@ -259,7 +386,13 @@ export async function buildHouseholdRecommendationContext(
   const radar = calculateFinancialRadar({
     now,
     accounts: accountBalances,
-    obligations: fixedObligations,
+    obligations: fixedObligations.map((obligation) => {
+      const reconciled = reconciledObligations.find((item) => item.name === obligation.name && item.dueDay === obligation.dueDay);
+      return {
+        ...obligation,
+        amount: reconciled?.remainingAmount ?? obligation.amount
+      };
+    }),
     recentTransactions,
     fallbackMonthlyEstimate
   });
@@ -375,6 +508,7 @@ export async function buildHouseholdRecommendationContext(
       nextExtraordinaryEvent,
       tacticalPressure: inferTacticalPressure(radar),
       structuralPressure: inferStructuralPressure(status),
+      reconciledObligations,
       radar,
       status
     },

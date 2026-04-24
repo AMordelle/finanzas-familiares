@@ -82,6 +82,7 @@ function buildRecommendationContext(overrides?: Partial<HouseholdRecommendationC
       nextExtraordinaryEvent: null,
       tacticalPressure: 'medium',
       structuralPressure: 'medium',
+      reconciledObligations: [],
       radar: buildContext().financialRadar!,
       status: buildContext().financialStatus!
     },

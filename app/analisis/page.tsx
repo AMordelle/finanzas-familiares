@@ -9,8 +9,13 @@ import { ExtraordinaryIncomeAdvisorCard } from '@/components/analysis/extraordin
 export default async function AnalisisPage() {
   const data = await getDashboardData();
 
-
-  const suggestedExtraordinaryAmount = Number((data.monthlyOFH > 0 ? data.monthlyOFH * 0.5 : 15000).toFixed(2));
+  const detectedExtraordinaryEvent = data.recommendationContext?.projected.nextExtraordinaryEvent ?? null;
+  const suggestedExtraordinaryAmount = Number(
+    (detectedExtraordinaryEvent?.amount ?? (data.monthlyOFH > 0 ? data.monthlyOFH * 0.35 : 12000)).toFixed(2)
+  );
+  const suggestedExtraordinaryLabel = detectedExtraordinaryEvent
+    ? `${detectedExtraordinaryEvent.label} (detectado)`
+    : 'Simulación editable de ingreso puntual';
 
   const extraordinaryContext = {
     monthlyOFH: data.monthlyOFH,
@@ -38,7 +43,7 @@ export default async function AnalisisPage() {
         <ExtraordinaryIncomeAdvisorCard
           context={extraordinaryContext}
           suggestedAmount={suggestedExtraordinaryAmount}
-          suggestedLabel="Aguinaldo / ingreso extraordinario"
+          suggestedLabel={suggestedExtraordinaryLabel}
         />
       </section>
     </AppShell>
