@@ -34,6 +34,12 @@ function normalizeLabel(value: string | null | undefined) {
     .trim();
 }
 
+function hasDebtPaymentHint(text: string | null | undefined) {
+  const normalized = normalizeLabel(text);
+  if (!normalized) return false;
+  return ['pago', 'deuda', 'tarjeta', 'tdc', 'abono'].some((token) => normalized.includes(token));
+}
+
 function isDebtType(type: string) {
   return ['deuda', 'credit_card', 'loan'].includes(normalizeType(type));
 }
@@ -215,11 +221,12 @@ export async function buildHouseholdRecommendationContext(
     client.from('financial_snapshots').select('payload').eq('household_id', householdId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
     client.from('accounts').select('id,name,type,balance,periodic_payment').eq('household_id', householdId).eq('is_active', true),
     client.from('variable_spending_profiles').select('monthly_estimate').eq('household_id', householdId),
-    client.from('transaction_groups').select('id').eq('household_id', householdId),
+    client.from('transaction_groups').select('id,note,source').eq('household_id', householdId),
     client.from('receivables').select('pending_amount,status').eq('household_id', householdId)
   ]);
 
-  const groupIds = ((groupsResult.data ?? []) as Array<{ id: string }>).map((group) => group.id);
+  const groups = (groupsResult.data ?? []) as Array<{ id: string; note?: string | null; source?: string | null }>;
+  const groupIds = groups.map((group) => group.id);
   const transactionsResult = groupIds.length
     ? await client
         .from('transactions')
@@ -288,6 +295,8 @@ export async function buildHouseholdRecommendationContext(
 
   const accountBalances = accounts.map(({ name, type, balance }) => ({ name, type, balance }));
   const groupedBalances = buildGroupedBalances(accountBalances.map((item) => ({ type: item.type, balance: item.balance })));
+  const accountsById = new Map(accounts.map((account) => [account.id, account]));
+  const groupMetaById = new Map(groups.map((group) => [group.id, group]));
 
   const recentTransactions = ((transactionsResult.data ?? []) as Array<{
     id?: string;
@@ -308,12 +317,73 @@ export async function buildHouseholdRecommendationContext(
       accountId: item.account_id ?? null
     }));
 
+  const debtAccountIds = accounts.filter((account) => isDebtType(account.type)).map((account) => account.id);
+  const debtPaymentPoolResult = groupIds.length && debtAccountIds.length
+    ? await client
+        .from('transactions')
+        .select('id,group_id,type,amount,happened_at,category,account_id')
+        .in('group_id', groupIds)
+        .order('happened_at', { ascending: false })
+        .limit(600)
+    : { data: [], error: null };
+
+  const debtPaymentPool = ((debtPaymentPoolResult.data ?? []) as Array<{
+    id?: string;
+    group_id?: string;
+    type: string;
+    amount: string | number;
+    happened_at: string | null;
+    category?: string | null;
+    account_id?: string | null;
+  }>).map((item) => ({
+    id: item.id ?? null,
+    groupId: item.group_id ?? null,
+    type: normalizeType(item.type),
+    amount: roundMoney(toNumber(item.amount, 0)),
+    happenedAt: toISODate(item.happened_at),
+    category: normalizeType(item.category ?? ''),
+    accountId: item.account_id ?? null
+  }));
+
   const debtAccountsById = new Map(
     accounts
       .filter((account) => isDebtType(account.type))
       .map((account) => [account.id, account])
   );
-  const accountsById = new Map(accounts.map((account) => [account.id, account]));
+  const debtPaymentCandidates = debtPaymentPool
+    .map((tx) => {
+      const account = tx.accountId ? accountsById.get(tx.accountId) : null;
+      const groupMeta = tx.groupId ? groupMetaById.get(tx.groupId) : null;
+      const groupDescription = groupMeta?.note ?? groupMeta?.source ?? '';
+      const categorySuggestsDebtPayment = ['deuda', 'pago_deuda'].includes(tx.category);
+      const groupSuggestsDebtPayment = hasDebtPaymentHint(groupDescription);
+      const accountIsDebt = Boolean(account && isDebtType(account.type));
+      const rejectionReason = !accountIsDebt
+        ? 'account_not_debt'
+        : (!categorySuggestsDebtPayment && !groupSuggestsDebtPayment)
+          ? 'category_or_group_not_debt_payment'
+          : null;
+
+      return {
+        id: tx.id,
+        groupId: tx.groupId,
+        happenedAt: tx.happenedAt,
+        category: tx.category,
+        amount: tx.amount,
+        accountId: tx.accountId,
+        accountName: account?.name ?? null,
+        accountType: account?.type ?? null,
+        direction: tx.type,
+        groupDescription,
+        isDebtPaymentCandidate: rejectionReason === null,
+        rejectionReason
+      };
+    });
+
+  logRecommendationContext('debt payment candidates', {
+    total: debtPaymentCandidates.length,
+    candidates: debtPaymentCandidates
+  });
 
   const reconciledObligations: ReconciledObligation[] = fixedObligations.map((obligation) => {
     const expectedAmount = Math.max(obligation.amount, 0);
@@ -324,9 +394,8 @@ export async function buildHouseholdRecommendationContext(
       .filter((account) => labelsLikelyMatch(obligation.name, account.name))
       .map((account) => account.id);
 
-    const matchedPaymentTransactions = recentTransactions
-      .filter((tx) => ['deuda', 'pago_deuda'].includes(normalizeType((tx as { category?: string }).category ?? '')))
-      .filter((tx) => normalizeType(tx.type) === 'debit')
+    const matchedPaymentTransactions = debtPaymentCandidates
+      .filter((tx) => tx.isDebtPaymentCandidate)
       .filter((tx) => tx.accountId && debtAccountsById.has(tx.accountId))
       .filter((tx) => tx.accountId && matchedDebtAccountIds.includes(tx.accountId))
       .filter((tx) => {
@@ -353,9 +422,9 @@ export async function buildHouseholdRecommendationContext(
       .filter(Boolean);
 
     const matchedPaymentDetails = matchedPaymentTransactions.map((tx) => {
-      const sourceAccounts = recentTransactions
+      const sourceAccounts = debtPaymentPool
         .filter((line) => line.groupId && tx.groupId && line.groupId === tx.groupId)
-        .filter((line) => normalizeType(line.type) === 'credit')
+        .filter((line) => line.type === 'credit')
         .filter((line) => line.accountId && line.accountId !== tx.accountId)
         .map((line) => accountsById.get(line.accountId as string)?.name ?? (line.accountId as string));
 

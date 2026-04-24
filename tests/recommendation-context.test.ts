@@ -351,4 +351,62 @@ describe('buildHouseholdRecommendationContext', () => {
     expect(context.projected.reconciledObligations[0]?.paidAmount).toBe(1800);
     expect(context.projected.radar.upcoming).not.toContain('Pago TDC Central');
   });
+
+  it('no bloquea detección por dirección/signo cuando el movimiento de deuda está etiquetado como pago', async () => {
+    const fakeClient = createFakeSupabase({
+      obligations: [{ id: 'ob-1', household_id: 'house-1', name: 'Pago TDC Signo', amount: '1000', due_day: 19 }],
+      accounts: [
+        { id: 'acc-op', household_id: 'house-1', name: 'Cuenta Operativa', type: 'operational_cash', balance: '2000', is_active: true, periodic_payment: null },
+        { id: 'acc-debt', household_id: 'house-1', name: 'TDC Signo', type: 'credit_card', balance: '5000', is_active: true, periodic_payment: '1000' }
+      ],
+      transactions: [
+        { id: 'tx-odd', group_id: 'tg-1', type: 'credit', category: 'deuda', account_id: 'acc-debt', amount: '1000', happened_at: '2026-04-18T00:00:00Z' },
+        { id: 'tx-src', group_id: 'tg-1', type: 'debit', category: 'salida_cuenta', account_id: 'acc-op', amount: '1000', happened_at: '2026-04-18T00:00:00Z' }
+      ]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { buildHouseholdRecommendationContext } = await import('@/lib/finance/recommendationContext');
+    const context = await buildHouseholdRecommendationContext('house-1', fakeClient as any, { now: new Date('2026-04-19T00:00:00Z') });
+
+    expect(context.projected.reconciledObligations[0]?.paidAmount).toBe(1000);
+    expect(context.projected.reconciledObligations[0]?.status).toBe('paid');
+  });
+
+  it('ignora pagos fuera del ciclo actual de la obligación', async () => {
+    const fakeClient = createFakeSupabase({
+      obligations: [{ id: 'ob-1', household_id: 'house-1', name: 'Pago TDC Ciclo', amount: '1500', due_day: 19 }],
+      accounts: [
+        { id: 'acc-op', household_id: 'house-1', name: 'Cuenta Operativa', type: 'operational_cash', balance: '2000', is_active: true, periodic_payment: null },
+        { id: 'acc-debt', household_id: 'house-1', name: 'TDC Ciclo', type: 'credit_card', balance: '5000', is_active: true, periodic_payment: '1500' }
+      ],
+      transactions: [
+        { id: 'tx-old', group_id: 'tg-1', type: 'debit', category: 'deuda', account_id: 'acc-debt', amount: '1500', happened_at: '2026-03-10T00:00:00Z' },
+        { id: 'tx-src', group_id: 'tg-1', type: 'credit', category: 'salida_cuenta', account_id: 'acc-op', amount: '1500', happened_at: '2026-03-10T00:00:00Z' }
+      ]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { buildHouseholdRecommendationContext } = await import('@/lib/finance/recommendationContext');
+    const context = await buildHouseholdRecommendationContext('house-1', fakeClient as any, { now: new Date('2026-04-19T00:00:00Z') });
+
+    expect(context.projected.reconciledObligations[0]?.paidAmount).toBe(0);
+    expect(context.projected.reconciledObligations[0]?.status).toBe('pending');
+  });
+
+  it('no cuenta gastos en TDC como pago de deuda cuando categoría no corresponde', async () => {
+    const fakeClient = createFakeSupabase({
+      obligations: [{ id: 'ob-1', household_id: 'house-1', name: 'Pago TDC Compras', amount: '1500', due_day: 19 }],
+      accounts: [
+        { id: 'acc-debt', household_id: 'house-1', name: 'TDC Compras', type: 'credit_card', balance: '5000', is_active: true, periodic_payment: '1500' }
+      ],
+      transactions: [
+        { id: 'tx-expense', group_id: 'tg-1', type: 'credit', category: 'salida_cuenta', account_id: 'acc-debt', amount: '700', happened_at: '2026-04-18T00:00:00Z' }
+      ]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { buildHouseholdRecommendationContext } = await import('@/lib/finance/recommendationContext');
+    const context = await buildHouseholdRecommendationContext('house-1', fakeClient as any, { now: new Date('2026-04-19T00:00:00Z') });
+
+    expect(context.projected.reconciledObligations[0]?.paidAmount).toBe(0);
+    expect(context.projected.reconciledObligations[0]?.status).toBe('pending');
+  });
 });
