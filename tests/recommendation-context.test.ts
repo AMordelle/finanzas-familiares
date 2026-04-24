@@ -170,6 +170,7 @@ describe('buildHouseholdRecommendationContext', () => {
     expect(context.projected.reconciledObligations[0]?.status).toBe('pending');
     expect(context.projected.reconciledObligations[0]?.remainingAmount).toBe(2000);
     expect(context.projected.upcoming7dLoad).toBeGreaterThanOrEqual(2000);
+    expect(context.projected.radar.upcoming).toContain('Pago TDC BBVA');
   });
 
   it('retira obligación de carga próxima cuando pago de deuda la cubre', async () => {
@@ -209,7 +210,42 @@ describe('buildHouseholdRecommendationContext', () => {
     const nextCycle = await buildHouseholdRecommendationContext('house-1', fakeClient as any, { now: new Date('2026-05-20T00:00:00Z') });
     expect(inCycle.projected.reconciledObligations[0]?.status).toBe('partial');
     expect(inCycle.projected.reconciledObligations[0]?.remainingAmount).toBe(2000);
+    expect(inCycle.projected.radar.upcoming).toContain('restante 2000.00');
     expect(nextCycle.projected.reconciledObligations[0]?.status).toBe('pending');
     expect(nextCycle.projected.reconciledObligations[0]?.remainingAmount).toBe(3000);
+  });
+
+  it('maneja mezcla de pagada/parcial/pendiente usando solo pendientes reconciliadas en radar', async () => {
+    const fakeClient = createFakeSupabase({
+      obligations: [
+        { id: 'ob-1', household_id: 'house-1', name: 'Pago TDC A', amount: '2000', due_day: 19 },
+        { id: 'ob-2', household_id: 'house-1', name: 'Pago TDC B', amount: '3000', due_day: 20 },
+        { id: 'ob-3', household_id: 'house-1', name: 'Pago TDC C', amount: '2500', due_day: 21 }
+      ],
+      accounts: [
+        { id: 'acc-1', household_id: 'house-1', name: 'Cuenta operativa', type: 'operational_cash', balance: '6500', is_active: true, periodic_payment: null },
+        { id: 'acc-a', household_id: 'house-1', name: 'TDC A', type: 'credit_card', balance: '18000', is_active: true, periodic_payment: '2000' },
+        { id: 'acc-b', household_id: 'house-1', name: 'TDC B', type: 'credit_card', balance: '18000', is_active: true, periodic_payment: '2000' },
+        { id: 'acc-c', household_id: 'house-1', name: 'TDC C', type: 'credit_card', balance: '18000', is_active: true, periodic_payment: '2000' }
+      ],
+      transactions: [
+        { id: 'tx-1', group_id: 'tg-1', type: 'debit', category: 'deuda', account_id: 'acc-a', amount: '2000', happened_at: '2026-04-18T00:00:00Z' },
+        { id: 'tx-2', group_id: 'tg-1', type: 'debit', category: 'deuda', account_id: 'acc-b', amount: '1000', happened_at: '2026-04-18T00:00:00Z' }
+      ]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { buildHouseholdRecommendationContext } = await import('@/lib/finance/recommendationContext');
+    const context = await buildHouseholdRecommendationContext('house-1', fakeClient as any, { now: new Date('2026-04-19T00:00:00Z') });
+
+    const paid = context.projected.reconciledObligations.find((item) => item.name === 'Pago TDC A');
+    const partial = context.projected.reconciledObligations.find((item) => item.name === 'Pago TDC B');
+    const pending = context.projected.reconciledObligations.find((item) => item.name === 'Pago TDC C');
+    expect(paid?.status).toBe('paid');
+    expect(partial?.remainingAmount).toBe(2000);
+    expect(pending?.status).toBe('pending');
+    expect(context.projected.radar.upcoming).not.toContain('Pago TDC A');
+    expect(context.projected.radar.upcoming).toContain('Pago TDC B');
+    expect(context.projected.radar.upcoming).toContain('restante 2000.00');
+    expect(context.projected.upcoming7dLoad).toBeGreaterThanOrEqual(4500);
   });
 });

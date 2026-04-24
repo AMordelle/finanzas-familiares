@@ -84,10 +84,12 @@ function daysUntil(dateIso: string, now: Date) {
 }
 
 function tokenSet(value: string) {
+  const ignoredTokens = new Set(['pago', 'deuda', 'tarjeta', 'credito', 'credito', 'tdc', 'prestamo', 'loan', 'card']);
   return new Set(
     normalizeLabel(value)
       .split(' ')
       .filter((token) => token.length >= 3)
+      .filter((token) => !ignoredTokens.has(token))
   );
 }
 
@@ -103,7 +105,7 @@ function labelsLikelyMatch(left: string, right: string) {
   for (const token of leftTokens) {
     if (rightTokens.has(token)) overlap += 1;
   }
-  return overlap >= 1;
+  return overlap >= 2;
 }
 
 function resolveUpcomingDueDate(dueDay: number, now: Date) {
@@ -358,6 +360,16 @@ export async function buildHouseholdRecommendationContext(
     };
   });
 
+  const pendingReconciledObligationsForRadar = reconciledObligations
+    .filter((obligation) => obligation.status !== 'paid' && obligation.remainingAmount > 0)
+    .map((obligation) => ({
+      name: obligation.status === 'partial'
+        ? `${obligation.name} (restante ${obligation.remainingAmount.toFixed(2)})`
+        : obligation.name,
+      amount: obligation.remainingAmount,
+      dueDay: obligation.dueDay
+    }));
+
   const tx30d = recentTransactions.filter((tx) => tx.happenedAt && daysUntil(tx.happenedAt, now) >= -30);
   if (!tx30d.length) assumptions.push('Not enough recent movements (30d); trend confidence reduced.');
 
@@ -386,13 +398,7 @@ export async function buildHouseholdRecommendationContext(
   const radar = calculateFinancialRadar({
     now,
     accounts: accountBalances,
-    obligations: fixedObligations.map((obligation) => {
-      const reconciled = reconciledObligations.find((item) => item.name === obligation.name && item.dueDay === obligation.dueDay);
-      return {
-        ...obligation,
-        amount: reconciled?.remainingAmount ?? obligation.amount
-      };
-    }),
+    obligations: pendingReconciledObligationsForRadar,
     recentTransactions,
     fallbackMonthlyEstimate
   });
