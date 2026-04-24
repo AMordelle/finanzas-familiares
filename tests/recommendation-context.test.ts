@@ -248,4 +248,107 @@ describe('buildHouseholdRecommendationContext', () => {
     expect(context.projected.radar.upcoming).toContain('restante 2000.00');
     expect(context.projected.upcoming7dLoad).toBeGreaterThanOrEqual(4500);
   });
+
+  it('suma pagos divididos desde dos cuentas origen para cubrir una misma obligación', async () => {
+    const fakeClient = createFakeSupabase({
+      obligations: [{ id: 'ob-1', household_id: 'house-1', name: 'Pago TDC BBVA', amount: '2500', due_day: 19 }],
+      accounts: [
+        { id: 'acc-op', household_id: 'house-1', name: 'TDD BBVA', type: 'operational_cash', balance: '3000', is_active: true, periodic_payment: null },
+        { id: 'acc-prime', household_id: 'house-1', name: 'PrimeIPTV', type: 'operational_cash', balance: '2000', is_active: true, periodic_payment: null },
+        { id: 'acc-debt', household_id: 'house-1', name: 'TDC BBVA', type: 'credit_card', balance: '10000', is_active: true, periodic_payment: '2500' }
+      ],
+      transactions: [
+        { id: 'tx-1a', group_id: 'tg-1', type: 'debit', category: 'deuda', account_id: 'acc-debt', amount: '1000', happened_at: '2026-04-10T00:00:00Z' },
+        { id: 'tx-1b', group_id: 'tg-1', type: 'credit', category: 'salida_cuenta', account_id: 'acc-op', amount: '1000', happened_at: '2026-04-10T00:00:00Z' },
+        { id: 'tx-2a', group_id: 'tg-1', type: 'debit', category: 'deuda', account_id: 'acc-debt', amount: '1500', happened_at: '2026-04-18T00:00:00Z' },
+        { id: 'tx-2b', group_id: 'tg-1', type: 'credit', category: 'salida_cuenta', account_id: 'acc-prime', amount: '1500', happened_at: '2026-04-18T00:00:00Z' }
+      ]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { buildHouseholdRecommendationContext } = await import('@/lib/finance/recommendationContext');
+    const context = await buildHouseholdRecommendationContext('house-1', fakeClient as any, { now: new Date('2026-04-19T00:00:00Z') });
+
+    expect(context.projected.reconciledObligations[0]?.paidAmount).toBe(2500);
+    expect(context.projected.reconciledObligations[0]?.status).toBe('paid');
+    expect(context.projected.radar.upcoming).not.toContain('Pago TDC BBVA');
+  });
+
+  it('suma pagos divididos para cobertura parcial y conserva restante', async () => {
+    const fakeClient = createFakeSupabase({
+      obligations: [{ id: 'ob-1', household_id: 'house-1', name: 'Pago TDC BBVA', amount: '3000', due_day: 19 }],
+      accounts: [
+        { id: 'acc-op', household_id: 'house-1', name: 'TDD BBVA', type: 'operational_cash', balance: '3000', is_active: true, periodic_payment: null },
+        { id: 'acc-prime', household_id: 'house-1', name: 'PrimeIPTV', type: 'operational_cash', balance: '2000', is_active: true, periodic_payment: null },
+        { id: 'acc-debt', household_id: 'house-1', name: 'TDC BBVA', type: 'credit_card', balance: '10000', is_active: true, periodic_payment: '2500' }
+      ],
+      transactions: [
+        { id: 'tx-1a', group_id: 'tg-1', type: 'debit', category: 'deuda', account_id: 'acc-debt', amount: '900', happened_at: '2026-04-10T00:00:00Z' },
+        { id: 'tx-1b', group_id: 'tg-1', type: 'credit', category: 'salida_cuenta', account_id: 'acc-op', amount: '900', happened_at: '2026-04-10T00:00:00Z' },
+        { id: 'tx-2a', group_id: 'tg-1', type: 'debit', category: 'deuda', account_id: 'acc-debt', amount: '600', happened_at: '2026-04-18T00:00:00Z' },
+        { id: 'tx-2b', group_id: 'tg-1', type: 'credit', category: 'salida_cuenta', account_id: 'acc-prime', amount: '600', happened_at: '2026-04-18T00:00:00Z' }
+      ]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { buildHouseholdRecommendationContext } = await import('@/lib/finance/recommendationContext');
+    const context = await buildHouseholdRecommendationContext('house-1', fakeClient as any, { now: new Date('2026-04-19T00:00:00Z') });
+
+    expect(context.projected.reconciledObligations[0]?.paidAmount).toBe(1500);
+    expect(context.projected.reconciledObligations[0]?.remainingAmount).toBe(1500);
+    expect(context.projected.reconciledObligations[0]?.status).toBe('partial');
+    expect(context.projected.radar.upcoming).toContain('restante 1500.00');
+  });
+
+  it('no cruza pagos entre tarjetas diferentes aunque compartan cuentas origen', async () => {
+    const fakeClient = createFakeSupabase({
+      obligations: [
+        { id: 'ob-1', household_id: 'house-1', name: 'Pago TDC A', amount: '2000', due_day: 19 },
+        { id: 'ob-2', household_id: 'house-1', name: 'Pago TDC B', amount: '2200', due_day: 19 }
+      ],
+      accounts: [
+        { id: 'acc-op', household_id: 'house-1', name: 'Operativa', type: 'operational_cash', balance: '5000', is_active: true, periodic_payment: null },
+        { id: 'acc-a', household_id: 'house-1', name: 'TDC A', type: 'credit_card', balance: '10000', is_active: true, periodic_payment: '2000' },
+        { id: 'acc-b', household_id: 'house-1', name: 'TDC B', type: 'credit_card', balance: '9000', is_active: true, periodic_payment: '2200' }
+      ],
+      transactions: [
+        { id: 'tx-a1', group_id: 'tg-1', type: 'debit', category: 'deuda', account_id: 'acc-a', amount: '2000', happened_at: '2026-04-18T00:00:00Z' },
+        { id: 'tx-a2', group_id: 'tg-1', type: 'credit', category: 'salida_cuenta', account_id: 'acc-op', amount: '2000', happened_at: '2026-04-18T00:00:00Z' }
+      ]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { buildHouseholdRecommendationContext } = await import('@/lib/finance/recommendationContext');
+    const context = await buildHouseholdRecommendationContext('house-1', fakeClient as any, { now: new Date('2026-04-19T00:00:00Z') });
+
+    const cardA = context.projected.reconciledObligations.find((item) => item.name === 'Pago TDC A');
+    const cardB = context.projected.reconciledObligations.find((item) => item.name === 'Pago TDC B');
+    expect(cardA?.status).toBe('paid');
+    expect(cardB?.status).toBe('pending');
+    expect(cardB?.paidAmount).toBe(0);
+  });
+
+  it('ignora la cuenta origen para conciliación cuando destino de deuda coincide', async () => {
+    const fakeClient = createFakeSupabase({
+      obligations: [{ id: 'ob-1', household_id: 'house-1', name: 'Pago TDC Central', amount: '1800', due_day: 19 }],
+      accounts: [
+        { id: 'acc-x', household_id: 'house-1', name: 'Cuenta X', type: 'operational_cash', balance: '2000', is_active: true, periodic_payment: null },
+        { id: 'acc-y', household_id: 'house-1', name: 'Cuenta Y', type: 'operational_cash', balance: '2000', is_active: true, periodic_payment: null },
+        { id: 'acc-z', household_id: 'house-1', name: 'Cuenta Z', type: 'operational_cash', balance: '2000', is_active: true, periodic_payment: null },
+        { id: 'acc-debt', household_id: 'house-1', name: 'TDC Central', type: 'credit_card', balance: '9000', is_active: true, periodic_payment: '1800' }
+      ],
+      transactions: [
+        { id: 'tx-1a', group_id: 'tg-1', type: 'debit', category: 'deuda', account_id: 'acc-debt', amount: '600', happened_at: '2026-04-08T00:00:00Z' },
+        { id: 'tx-1b', group_id: 'tg-1', type: 'credit', category: 'salida_cuenta', account_id: 'acc-x', amount: '600', happened_at: '2026-04-08T00:00:00Z' },
+        { id: 'tx-2a', group_id: 'tg-1', type: 'debit', category: 'deuda', account_id: 'acc-debt', amount: '600', happened_at: '2026-04-12T00:00:00Z' },
+        { id: 'tx-2b', group_id: 'tg-1', type: 'credit', category: 'salida_cuenta', account_id: 'acc-y', amount: '600', happened_at: '2026-04-12T00:00:00Z' },
+        { id: 'tx-3a', group_id: 'tg-1', type: 'debit', category: 'deuda', account_id: 'acc-debt', amount: '600', happened_at: '2026-04-18T00:00:00Z' },
+        { id: 'tx-3b', group_id: 'tg-1', type: 'credit', category: 'salida_cuenta', account_id: 'acc-z', amount: '600', happened_at: '2026-04-18T00:00:00Z' }
+      ]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { buildHouseholdRecommendationContext } = await import('@/lib/finance/recommendationContext');
+    const context = await buildHouseholdRecommendationContext('house-1', fakeClient as any, { now: new Date('2026-04-19T00:00:00Z') });
+
+    expect(context.projected.reconciledObligations[0]?.status).toBe('paid');
+    expect(context.projected.reconciledObligations[0]?.paidAmount).toBe(1800);
+    expect(context.projected.radar.upcoming).not.toContain('Pago TDC Central');
+  });
 });
