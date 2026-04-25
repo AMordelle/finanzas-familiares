@@ -18,68 +18,63 @@ describe('financial radar calculation', () => {
     expect(radar.upcoming).toContain('Colegiatura');
   });
 
-  it('clasifica estado en cómodo, ajustado y faltante', () => {
-    const confortable = calculateFinancialRadar({
+  it('A) si hay margen táctico pero no colchón de fricción, pasa a atención', () => {
+    const radar = calculateFinancialRadar({
       now: new Date('2026-04-14T12:00:00Z'),
-      accounts: [{ type: 'operativa', balance: 5000 }],
+      accounts: [{ type: 'operativa', balance: 4700 }],
       recentTransactions: [{ type: 'debit', amount: 1200 }],
-      obligations: [{ amount: 1000, dueDay: 16 }]
+      obligations: [
+        { amount: 3500, dueDay: 16 },
+        { amount: 1700, dueDay: 24 }
+      ]
     });
 
-    const ajustado = calculateFinancialRadar({
+    expect(radar.estimatedMargin).toBeGreaterThan(0);
+    expect(radar.marginAfterFrictionBuffer).toBeLessThan(0);
+    expect(radar.status).toBe('atencion');
+    expect(radar.actionToday.toLowerCase()).not.toContain('separar una parte para colchón');
+  });
+
+  it('B) si cubre carga + buffer, estado estable y tono optimista', () => {
+    const radar = calculateFinancialRadar({
       now: new Date('2026-04-14T12:00:00Z'),
-      accounts: [{ type: 'operativa', balance: 1800 }],
+      accounts: [{ type: 'operativa', balance: 9000 }],
       recentTransactions: [{ type: 'debit', amount: 1200 }],
-      obligations: [{ amount: 1400, dueDay: 16 }]
+      obligations: [{ amount: 1800, dueDay: 16 }]
     });
 
-    const faltante = calculateFinancialRadar({
+    expect(radar.status).toBe('estable');
+    expect(radar.marginAfterFrictionBuffer).toBeGreaterThanOrEqual(0);
+    expect(radar.actionToday).toContain('separar una parte para colchón');
+  });
+
+  it('C) si availableNow < upcoming7dLoad, cae en presión real', () => {
+    const radar = calculateFinancialRadar({
       now: new Date('2026-04-14T12:00:00Z'),
       accounts: [{ type: 'operativa', balance: 1200 }],
       recentTransactions: [{ type: 'debit', amount: 1200 }],
       obligations: [{ amount: 1800, dueDay: 16 }]
     });
 
-    expect(confortable.status).toBe('estable');
-    expect(ajustado.status).toBe('atencion');
-    expect(faltante.status).toBe('presion');
+    expect(radar.status).toBe('presion');
+    expect(radar.estimatedMargin).toBeLessThan(0);
+    expect(radar.tacticalPressureLevel).toBe('high');
   });
 
-  it('usa redacción humana y calmada', () => {
+  it('D) anticipa carga 8-14d sin contradecir margen actual', () => {
     const radar = calculateFinancialRadar({
       now: new Date('2026-04-14T12:00:00Z'),
-      accounts: [{ type: 'operativa', balance: 1700 }],
+      accounts: [{ type: 'operativa', balance: 2900 }],
       recentTransactions: [{ type: 'debit', amount: 1000 }],
-      obligations: [{ name: 'Pago TDC BBVA', amount: 1200, dueDay: 16 }]
+      obligations: [
+        { name: 'Servicios', amount: 1200, dueDay: 16 },
+        { name: 'Seguro auto', amount: 2500, dueDay: 24 }
+      ]
     });
 
-    expect(radar.riskText).toBe('Cubres lo inmediato, pero con poco margen.');
-    expect(radar.actionToday).toContain('Hoy:');
-    expect(radar.statusReason).toBe('Cubres el periodo, pero con poco margen.');
-  });
-
-  it('incluye nombres de obligaciones en recomendaciones contextuales', () => {
-    const radar = calculateFinancialRadar({
-      now: new Date('2026-04-14T12:00:00Z'),
-      accounts: [{ type: 'operativa', balance: 1500 }],
-      recentTransactions: [{ type: 'debit', amount: 800 }],
-      obligations: [{ name: 'Pago TDC BBVA', amount: 1500, dueDay: 17 }]
-    });
-
-    expect(radar.upcoming).toContain('BBVA');
-    expect(radar.upcoming).toContain('días');
-  });
-
-  it('mantiene consistencia narrativa: si hay margen pequeño no comunica colapso', () => {
-    const radar = calculateFinancialRadar({
-      now: new Date('2026-04-14T12:00:00Z'),
-      accounts: [{ type: 'operativa', balance: 1800 }],
-      recentTransactions: [{ type: 'debit', amount: 1200 }],
-      obligations: [{ amount: 1400, dueDay: 16 }]
-    });
-
-    expect(radar.status).toBe('atencion');
     expect(radar.estimatedMargin).toBeGreaterThan(0);
-    expect(radar.riskText.toLowerCase()).not.toContain('supera');
+    expect(radar.nearFutureLoad).toBeGreaterThan(0);
+    expect(radar.status).toBe('atencion');
+    expect(radar.riskText).toContain('colchón de fricción');
   });
 });

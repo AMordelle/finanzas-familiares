@@ -23,7 +23,11 @@ function buildContext(overrides?: Partial<ExtraordinaryIncomeContext>): Extraord
       availableNow: 12000,
       upcomingLoad: 9000,
       nearFutureLoad: 2500,
-      estimatedMargin: 3000
+      estimatedMargin: 3000,
+      frictionBufferRequired: 1800,
+      marginAfterFrictionBuffer: 1200,
+      tacticalPressureLevel: 'medium',
+      recommendationTone: 'prudente'
     },
     financialStatus: {
       status: 'ajustado',
@@ -83,7 +87,18 @@ function buildRecommendationContext(overrides?: Partial<HouseholdRecommendationC
       tacticalPressure: 'medium',
       structuralPressure: 'medium',
       radar: buildContext().financialRadar!,
-      status: buildContext().financialStatus!
+      status: buildContext().financialStatus!,
+      sharedTacticalMetrics: {
+        availableNow: 18000,
+        upcoming7dLoad: 9000,
+        upcoming8to14dLoad: 6000,
+        tacticalMargin: 9000,
+        frictionBufferRequired: 3600,
+        marginAfterFrictionBuffer: 5400,
+        tacticalPressureLevel: 'low',
+        structuralPressureLevel: 'medium',
+        recommendationTone: 'optimista'
+      }
     },
     derived: {
       householdStage: 'estabilizacion',

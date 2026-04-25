@@ -1,6 +1,7 @@
 import { calculateFinancialRadar, type FinancialRadar } from '@/lib/finance/financialRadar';
 import { calculateFinancialStatusFromRecommendationContext, type FinancialStatus } from '@/lib/finance/financialStatus';
 import { supabaseAdmin } from '@/lib/db/supabase';
+import { deriveSharedTacticalMetrics, type SharedTacticalMetrics } from '@/lib/finance/sharedTacticalMetrics';
 
 type SupabaseClientLike = typeof supabaseAdmin;
 
@@ -48,10 +49,8 @@ function buildGroupedBalances(accounts: Array<{ type: string; balance: number }>
   }, {});
 }
 
-function inferTacticalPressure(radar: FinancialRadar): 'low' | 'medium' | 'high' {
-  if (radar.status === 'presion') return 'high';
-  if (radar.status === 'atencion') return 'medium';
-  return 'low';
+function inferTacticalPressure(metrics: SharedTacticalMetrics): 'low' | 'medium' | 'high' {
+  return metrics.tacticalPressureLevel;
 }
 
 function inferStructuralPressure(status: FinancialStatus): 'low' | 'medium' | 'high' {
@@ -109,6 +108,7 @@ export type HouseholdRecommendationContext = {
     structuralPressure: 'low' | 'medium' | 'high';
     radar: FinancialRadar;
     status: FinancialStatus;
+    sharedTacticalMetrics: SharedTacticalMetrics;
   };
   derived: {
     householdStage: FinancialStatus['stage'];
@@ -322,6 +322,14 @@ export async function buildHouseholdRecommendationContext(
       assumptions
     }
   });
+  const sharedTacticalMetrics = deriveSharedTacticalMetrics({
+    availableNow: radar.availableNow,
+    upcoming7dLoad: radar.upcomingLoad,
+    upcoming8to14dLoad: radar.nearFutureLoad,
+    structuralPressureLevel: inferStructuralPressure(status)
+  });
+
+
 
   assumptions.push(...status.assumptions);
 
@@ -373,10 +381,11 @@ export async function buildHouseholdRecommendationContext(
       reserveMonths,
       nextHeavyWeek: radar.nearFutureLoad > radar.upcomingLoad * 0.65 ? '8-14d window may be heavier than current tactical window.' : null,
       nextExtraordinaryEvent,
-      tacticalPressure: inferTacticalPressure(radar),
+      tacticalPressure: inferTacticalPressure(sharedTacticalMetrics),
       structuralPressure: inferStructuralPressure(status),
       radar,
-      status
+      status,
+      sharedTacticalMetrics
     },
     derived: {
       householdStage: status.stage,
@@ -412,6 +421,16 @@ export async function buildHouseholdRecommendationContext(
     upcoming7dLoad: context.projected.upcoming7dLoad,
     reserveMonths: context.projected.reserveMonths,
     assumptions: context.derived.assumptions.length
+  });
+
+  logRecommendationContext('shared tactical metrics', {
+    availableNow: context.projected.sharedTacticalMetrics.availableNow,
+    upcoming7dLoad: context.projected.sharedTacticalMetrics.upcoming7dLoad,
+    tacticalMargin: context.projected.sharedTacticalMetrics.tacticalMargin,
+    frictionBufferRequired: context.projected.sharedTacticalMetrics.frictionBufferRequired,
+    marginAfterFrictionBuffer: context.projected.sharedTacticalMetrics.marginAfterFrictionBuffer,
+    tacticalPressureLevel: context.projected.sharedTacticalMetrics.tacticalPressureLevel,
+    radarStatus: context.projected.radar.status
   });
 
   return context;
