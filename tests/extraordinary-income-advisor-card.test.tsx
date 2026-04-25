@@ -23,7 +23,11 @@ const baseContext: ExtraordinaryIncomeContext = {
     availableNow: 9000,
     upcomingLoad: 7000,
     nearFutureLoad: 2400,
-    estimatedMargin: 2000
+    estimatedMargin: 2000,
+    frictionBufferRequired: 1400,
+    marginAfterFrictionBuffer: 600,
+    tacticalPressureLevel: 'medium',
+    recommendationTone: 'prudente'
   },
   financialStatus: {
     status: 'en_transicion',

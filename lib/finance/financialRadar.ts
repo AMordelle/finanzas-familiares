@@ -1,5 +1,7 @@
 export type FinancialRadarStatus = 'estable' | 'atencion' | 'presion';
 
+import { deriveSharedTacticalMetrics } from '@/lib/finance/sharedTacticalMetrics';
+
 export type FinancialRadar = {
   status: FinancialRadarStatus;
   windowDays: number;
@@ -14,6 +16,10 @@ export type FinancialRadar = {
   upcomingLoad: number;
   nearFutureLoad: number;
   estimatedMargin: number;
+  frictionBufferRequired: number;
+  marginAfterFrictionBuffer: number;
+  tacticalPressureLevel: 'low' | 'medium' | 'high';
+  recommendationTone: 'optimista' | 'prudente' | 'contencion';
 };
 
 export type RadarAccount = {
@@ -147,24 +153,28 @@ export function calculateFinancialRadar(input: {
   const nearFutureLoad = obligations.nearFutureTotal;
   const estimatedMargin = roundMoney(availableNow - upcomingLoad);
 
-  const healthyMargin = Math.max(upcomingLoad * 0.2, 500);
+  const shared = deriveSharedTacticalMetrics({
+    availableNow,
+    upcoming7dLoad: upcomingLoad,
+    upcoming8to14dLoad: nearFutureLoad
+  });
 
   let status: FinancialRadarStatus = 'atencion';
-  if (availableNow >= upcomingLoad + healthyMargin) {
-    status = 'estable';
-  } else if (availableNow < upcomingLoad) {
+  if (shared.tacticalMargin < 0) {
     status = 'presion';
+  } else if (shared.marginAfterFrictionBuffer >= 0) {
+    status = 'estable';
   }
 
   const actionTodayByStatus: Record<FinancialRadarStatus, string> = {
     estable: 'Hoy: puedes separar una parte para colchón.',
-    atencion: 'Hoy: cubre lo esencial y evita extras.',
+    atencion: 'Hoy: hay margen nominal, pero conviene conservarlo porque la semana queda justa.',
     presion: 'Hoy: enfócate en cubrir lo inmediato.'
   };
 
   const actionTodayDetailByStatus: Record<FinancialRadarStatus, string> = {
     estable: 'Con este margen, puedes avanzar un poco sin apretar tu semana.',
-    atencion: 'Alcanzas esta semana, pero conviene no mover reservas sin necesidad.',
+    atencion: 'Cubre lo esencial y prioriza liquidez; evita comprometer colchón o extras por ahora.',
     presion: 'Conviene enfocarte en lo esencial esta semana y postergar lo movible.'
   };
 
@@ -176,7 +186,7 @@ export function calculateFinancialRadar(input: {
 
   const riskByStatus: Record<FinancialRadarStatus, string> = {
     estable: nearFutureLoad > 0 ? 'Estás bien en lo inmediato; conviene anticiparte a lo que sigue.' : 'Tu semana está controlada con holgura.',
-    atencion: 'Cubres lo inmediato, pero con poco margen.',
+    atencion: 'Cubres lo inmediato, pero no alcanzas el colchón de fricción recomendado.',
     presion: 'La carga inmediata supera tu disponible actual.'
   };
 
@@ -188,7 +198,7 @@ export function calculateFinancialRadar(input: {
 
   const statusReasonByStatus: Record<FinancialRadarStatus, string> = {
     estable: 'Tu disponible cubre el periodo con holgura.',
-    atencion: 'Cubres el periodo, pero con poco margen.',
+    atencion: 'Hay margen táctico, pero la semana sigue ajustada frente al colchón recomendado.',
     presion: 'La carga inmediata supera tu disponible.'
   };
 
@@ -205,6 +215,10 @@ export function calculateFinancialRadar(input: {
     availableNow,
     upcomingLoad,
     nearFutureLoad,
-    estimatedMargin
+    estimatedMargin,
+    frictionBufferRequired: shared.frictionBufferRequired,
+    marginAfterFrictionBuffer: shared.marginAfterFrictionBuffer,
+    tacticalPressureLevel: shared.tacticalPressureLevel,
+    recommendationTone: shared.recommendationTone
   };
 }

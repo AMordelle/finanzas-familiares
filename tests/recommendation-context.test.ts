@@ -123,6 +123,7 @@ describe('buildHouseholdRecommendationContext', () => {
     expect(context.projected.upcoming7dLoad).toBeGreaterThan(0);
     expect(context.projected.monthlyBaseCoverage).toBeGreaterThan(1);
     expect(['low', 'medium', 'high']).toContain(context.projected.tacticalPressure);
+    expect(context.projected.sharedTacticalMetrics.frictionBufferRequired).toBeGreaterThan(0);
   });
 
   it('genera señales derivadas', async () => {

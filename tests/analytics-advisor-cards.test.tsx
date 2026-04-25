@@ -16,7 +16,11 @@ const radar = {
   availableNow: 5000,
   upcomingLoad: 4200,
   nearFutureLoad: 1300,
-  estimatedMargin: 800
+  estimatedMargin: 800,
+  frictionBufferRequired: 900,
+  marginAfterFrictionBuffer: -100,
+  tacticalPressureLevel: 'medium',
+  recommendationTone: 'prudente'
 };
 
 const pressure = {

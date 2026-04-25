@@ -2,6 +2,7 @@ import type { FinancialRadar } from '@/lib/finance/financialRadar';
 import type { FinancialStatus } from '@/lib/finance/financialStatus';
 import type { HouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
+import { deriveSharedTacticalMetrics, type SharedTacticalMetrics } from '@/lib/finance/sharedTacticalMetrics';
 
 export type PriorityDiagnostic = {
   key: string;
@@ -40,6 +41,7 @@ type PrioritySignals = {
   liquidity: number;
   debtBalances: number;
   recentSpendingPressure: number;
+  shared: SharedTacticalMetrics;
 };
 
 function normalizedTokens(value: string) {
@@ -105,13 +107,20 @@ function buildSignals(input: {
     ? context.observed.recentExpenses - context.observed.recentIncome
     : 0;
 
+  const shared = context?.projected.sharedTacticalMetrics ?? deriveSharedTacticalMetrics({
+    availableNow: liquidity,
+    upcoming7dLoad,
+    upcoming8to14dLoad: nearFuture8to14dLoad,
+    structuralPressureLevel: context?.projected.structuralPressure
+  });
+
   const signals: PrioritySignals = {
     radar,
     financialStatus,
     declaredPriorities: context?.declared.priorities ?? [],
     upcoming7dLoad,
     nearFuture8to14dLoad,
-    tacticalPressure: context?.projected.tacticalPressure ?? null,
+    tacticalPressure: context?.projected.tacticalPressure ?? shared.tacticalPressureLevel,
     reserveMonths: context?.projected.reserveMonths ?? financialStatus?.metrics.reserveMonths ?? 0,
     debtPressureRatio: context?.projected.debtPressureRatio ?? financialStatus?.metrics.debtPressureRatio ?? 0,
     nextHeavyWeek: context?.projected.nextHeavyWeek ?? null,
@@ -119,7 +128,8 @@ function buildSignals(input: {
     monthlyMargin,
     liquidity,
     debtBalances,
-    recentSpendingPressure
+    recentSpendingPressure,
+    shared
   };
 
   return signals;
@@ -157,7 +167,7 @@ export function getPriorityDiagnostics(input: {
     const pressurePoints = [
       radar.status === 'presion',
       signals.tacticalPressure === 'high',
-      signals.liquidity <= Math.max(signals.upcoming7dLoad * 1.08, 350),
+      signals.shared.marginAfterFrictionBuffer < 0,
       financialPressure?.status === 'critical'
     ].filter(Boolean).length;
 
@@ -167,7 +177,7 @@ export function getPriorityDiagnostics(input: {
         score: 98,
         level: 'high',
         title: `En ${upcomingObligation.dueInDays} días vence ${upcomingObligation.name} y esta semana queda justa`,
-        explanation: `La carga táctica de ${formatCurrencyMXN(signals.upcoming7dLoad)} deja poco margen frente a tu liquidez actual (${formatCurrencyMXN(signals.liquidity)}).`,
+        explanation: `Carga inmediata ${formatCurrencyMXN(signals.shared.upcoming7dLoad)} vs liquidez ${formatCurrencyMXN(signals.shared.availableNow)}. El colchón recomendado es ${formatCurrencyMXN(signals.shared.frictionBufferRequired)} y hoy faltan ${formatCurrencyMXN(Math.max(-signals.shared.marginAfterFrictionBuffer, 0))} para operar sin fricción.`,
         action: 'Congela extras esta semana y deja separado ese pago desde hoy.'
       });
     }
@@ -177,12 +187,15 @@ export function getPriorityDiagnostics(input: {
     radar && (
       radar.status === 'presion'
       || signals.tacticalPressure === 'high'
-      || radar.estimatedMargin < 0
+      || signals.shared.tacticalMargin < 0
+      || signals.shared.marginAfterFrictionBuffer < 0
       || financialPressure?.status === 'critical'
       || signals.recentSpendingPressure > signals.upcoming7dLoad * 0.4
     )
   ) {
-    const shortfall = Math.max(signals.upcoming7dLoad - signals.liquidity, -radar.estimatedMargin, financialPressure?.gap ?? 0, 0);
+    const tacticalShortfall = Math.max(signals.shared.upcoming7dLoad - signals.shared.availableNow, 0);
+    const frictionShortfall = Math.max(signals.shared.frictionBufferRequired - signals.shared.tacticalMargin, 0);
+    const shortfall = Math.max(tacticalShortfall, frictionShortfall, financialPressure?.gap ?? 0, 0);
     candidates.push({
       key: 'semana-corta-liquidez',
       score: 92,
@@ -190,7 +203,7 @@ export function getPriorityDiagnostics(input: {
       title: shortfall > 0
         ? `Esta semana te falta ${formatCurrencyMXN(shortfall)} para cubrir sin fricción`
         : 'Esta semana va muy al límite y cualquier gasto extra desordena el flujo',
-      explanation: `Tu liquidez disponible (${formatCurrencyMXN(signals.liquidity)}) no alcanza con holgura para la carga inmediata (${formatCurrencyMXN(signals.upcoming7dLoad)}).`,
+      explanation: `Carga inmediata: ${formatCurrencyMXN(signals.shared.upcoming7dLoad)} · Liquidez disponible: ${formatCurrencyMXN(signals.shared.availableNow)} · Colchón requerido: ${formatCurrencyMXN(signals.shared.frictionBufferRequired)} · Faltante contra colchón: ${formatCurrencyMXN(Math.max(-signals.shared.marginAfterFrictionBuffer, 0))}.`,
       action: 'Reordena pagos por fecha y mueve lo postergable fuera de esta ventana.'
     });
   }
@@ -223,7 +236,7 @@ export function getPriorityDiagnostics(input: {
     radar
     && radar.status === 'estable'
     && signals.tacticalPressure !== 'high'
-    && radar.estimatedMargin > 0
+    && signals.shared.marginAfterFrictionBuffer >= 0
     && signals.reserveMonths < 2
     && signals.monthlyMargin >= 0
   ) {
@@ -259,7 +272,7 @@ export function getPriorityDiagnostics(input: {
     });
   }
 
-  return candidates
+  const preview = candidates
     .filter((candidate, index, list) => list.findIndex((item) => item.key === candidate.key) === index)
     .filter((candidate) => candidate.score >= 90 || !isDuplicateEquivalent(candidate, baselineTexts))
     .sort((a, b) => b.score - a.score)
@@ -268,4 +281,19 @@ export function getPriorityDiagnostics(input: {
       ...candidate,
       level: riskLevelFromScore(score)
     }));
+
+  if (process.env.NODE_ENV !== 'production') {
+    console.info('[recommendation-context] shared tactical metrics', {
+      availableNow: signals.shared.availableNow,
+      upcoming7dLoad: signals.shared.upcoming7dLoad,
+      tacticalMargin: signals.shared.tacticalMargin,
+      frictionBufferRequired: signals.shared.frictionBufferRequired,
+      marginAfterFrictionBuffer: signals.shared.marginAfterFrictionBuffer,
+      tacticalPressureLevel: signals.shared.tacticalPressureLevel,
+      radarStatus: radar?.status ?? null,
+      diagnosticsPriority: preview[0]?.level ?? 'none'
+    });
+  }
+
+  return preview;
 }
