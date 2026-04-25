@@ -69,6 +69,7 @@ const baseContext = {
     nextExtraordinaryEvent: null,
     tacticalPressure: 'high' as const,
     structuralPressure: 'high' as const,
+    reconciledObligations: [],
     radar: { ...baseRadar, status: 'presion' as const, upcomingLoad: 6100, estimatedMargin: -1100 },
     status: { ...baseStatus, status: 'vulnerable' as const }
   },
@@ -228,5 +229,35 @@ describe('getPriorityDiagnostics', () => {
     });
 
     expect(diagnostics.some((item) => item.key === 'ola-siguiente-semana')).toBe(true);
+  });
+
+  it('deja de marcar urgencia cuando la obligación ya quedó cubierta', () => {
+    const diagnostics = getPriorityDiagnostics({
+      radar: { ...baseRadar, upcoming: 'En 0 días vence Pago TDC BBVA.' },
+      financialStatus: { ...baseStatus },
+      financialPressure: null,
+      recommendationContext: {
+        ...baseContext,
+        projected: {
+          ...baseContext.projected,
+          tacticalPressure: 'medium',
+          reconciledObligations: [
+            {
+              name: 'Pago TDC BBVA',
+              dueDay: 19,
+              dueDate: '2026-04-19T12:00:00.000Z',
+              expectedAmount: 2000,
+              paidAmount: 2000,
+              remainingAmount: 0,
+              status: 'paid',
+              matchedPaymentCount: 1
+            }
+          ]
+        }
+      } as any
+    });
+
+    expect(diagnostics.some((item) => item.key === 'obligacion-inminente')).toBe(false);
+    expect(diagnostics.some((item) => item.key === 'obligacion-cubierta')).toBe(true);
   });
 });

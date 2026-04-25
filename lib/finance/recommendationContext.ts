@@ -24,6 +24,22 @@ function normalizeType(value: string | null | undefined) {
   return (value ?? '').toLowerCase().trim();
 }
 
+function normalizeLabel(value: string | null | undefined) {
+  return (value ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hasDebtPaymentHint(text: string | null | undefined) {
+  const normalized = normalizeLabel(text);
+  if (!normalized) return false;
+  return ['pago', 'deuda', 'tarjeta', 'tdc', 'abono'].some((token) => normalized.includes(token));
+}
+
 function isDebtType(type: string) {
   return ['deuda', 'credit_card', 'loan'].includes(normalizeType(type));
 }
@@ -73,6 +89,73 @@ function daysUntil(dateIso: string, now: Date) {
   return Math.ceil((date - now.getTime()) / MS_PER_DAY);
 }
 
+function tokenSet(value: string) {
+  const ignoredTokens = new Set(['pago', 'deuda', 'tarjeta', 'credito', 'credito', 'tdc', 'prestamo', 'loan', 'card']);
+  return new Set(
+    normalizeLabel(value)
+      .split(' ')
+      .filter((token) => token.length >= 3)
+      .filter((token) => !ignoredTokens.has(token))
+  );
+}
+
+function labelsLikelyMatch(left: string, right: string) {
+  const leftNorm = normalizeLabel(left);
+  const rightNorm = normalizeLabel(right);
+  if (!leftNorm || !rightNorm) return false;
+  if (leftNorm.includes(rightNorm) || rightNorm.includes(leftNorm)) return true;
+  const leftTokens = tokenSet(leftNorm);
+  const rightTokens = tokenSet(rightNorm);
+  if (!leftTokens.size || !rightTokens.size) return false;
+  let overlap = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) overlap += 1;
+  }
+  return overlap >= 1;
+}
+
+function resolveUpcomingDueDate(dueDay: number, now: Date) {
+  const dueDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), dueDay, 12, 0, 0, 0));
+  if (dueDate.getUTCDate() !== dueDay) return null;
+  if (dueDate.getTime() < now.getTime()) {
+    const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, dueDay, 12, 0, 0, 0));
+    if (next.getUTCDate() !== dueDay) return null;
+    return next;
+  }
+  return dueDate;
+}
+
+function buildCycleWindow(dueDate: Date) {
+  const previousDueDate = new Date(Date.UTC(dueDate.getUTCFullYear(), dueDate.getUTCMonth() - 1, dueDate.getUTCDate(), 12, 0, 0, 0));
+  const cycleStart = new Date(previousDueDate.getTime() + MS_PER_DAY);
+  return { cycleStart, cycleEnd: dueDate };
+}
+
+function inferMovementActionFromLines(lines: Array<{ type: string; category: string }>) {
+  const has = (type: string, category: string) => lines.some((line) => normalizeType(line.type) === type && normalizeType(line.category) === category);
+  if (has('debit', 'deuda') || has('credit', 'deuda') || has('debit', 'pago_deuda') || has('credit', 'pago_deuda')) return 'pago_deuda';
+  if (has('debit', 'por_cobrar')) return 'prestamo_otorgado';
+  if (has('credit', 'por_cobrar')) return 'pago_recibido';
+  if (has('debit', 'ahorro_meta')) return 'objetivo_aporte';
+  if (has('debit', 'entrada_cuenta')) return 'ingreso';
+  if (has('credit', 'salida_cuenta')) return 'gasto';
+  const debitLine = lines.find((line) => normalizeType(line.type) === 'debit');
+  const creditLine = lines.find((line) => normalizeType(line.type) === 'credit');
+  if (debitLine?.category && creditLine?.category && normalizeType(debitLine.category) === normalizeType(creditLine.category)) return 'transferencia';
+  return null;
+}
+
+type ReconciledObligation = {
+  name: string;
+  dueDay: number | null;
+  dueDate: string | null;
+  expectedAmount: number;
+  paidAmount: number;
+  remainingAmount: number;
+  status: 'pending' | 'partial' | 'paid';
+  matchedPaymentCount: number;
+};
+
 export type HouseholdRecommendationContext = {
   householdId: string;
   generatedAt: string;
@@ -107,6 +190,7 @@ export type HouseholdRecommendationContext = {
     nextExtraordinaryEvent: { label: string; amount: number; date: string; inDays: number } | null;
     tacticalPressure: 'low' | 'medium' | 'high';
     structuralPressure: 'low' | 'medium' | 'high';
+    reconciledObligations: ReconciledObligation[];
     radar: FinancialRadar;
     status: FinancialStatus;
   };
@@ -149,17 +233,18 @@ export async function buildHouseholdRecommendationContext(
     client.from('goals').select('name,target_amount,saved_amount,target_date').eq('household_id', householdId),
     client.from('recurring_patterns').select('pattern_type,active').eq('household_id', householdId).eq('active', true),
     client.from('financial_snapshots').select('payload').eq('household_id', householdId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
-    client.from('accounts').select('name,type,balance,periodic_payment').eq('household_id', householdId).eq('is_active', true),
+    client.from('accounts').select('id,name,type,balance,periodic_payment').eq('household_id', householdId).eq('is_active', true),
     client.from('variable_spending_profiles').select('monthly_estimate').eq('household_id', householdId),
-    client.from('transaction_groups').select('id').eq('household_id', householdId),
+    client.from('transaction_groups').select('id,note,source').eq('household_id', householdId),
     client.from('receivables').select('pending_amount,status').eq('household_id', householdId)
   ]);
 
-  const groupIds = ((groupsResult.data ?? []) as Array<{ id: string }>).map((group) => group.id);
+  const groups = (groupsResult.data ?? []) as Array<{ id: string; note?: string | null; source?: string | null }>;
+  const groupIds = groups.map((group) => group.id);
   const transactionsResult = groupIds.length
     ? await client
         .from('transactions')
-        .select('type,amount,happened_at')
+        .select('id,group_id,type,amount,happened_at,category,account_id')
         .in('group_id', groupIds)
         .order('happened_at', { ascending: false })
         .limit(90)
@@ -213,8 +298,9 @@ export async function buildHouseholdRecommendationContext(
     ? latestSnapshotPayload.diagnoses.filter((item: unknown): item is string => typeof item === 'string')
     : [];
 
-  const accounts = ((accountsResult.data ?? []) as Array<{ name: string; type: string; balance: string | number; periodic_payment?: string | number | null }>)
+  const accounts = ((accountsResult.data ?? []) as Array<{ id: string; name: string; type: string; balance: string | number; periodic_payment?: string | number | null }>)
     .map((item) => ({
+      id: item.id,
       name: item.name,
       type: item.type,
       balance: roundMoney(toNumber(item.balance, 0)),
@@ -223,12 +309,226 @@ export async function buildHouseholdRecommendationContext(
 
   const accountBalances = accounts.map(({ name, type, balance }) => ({ name, type, balance }));
   const groupedBalances = buildGroupedBalances(accountBalances.map((item) => ({ type: item.type, balance: item.balance })));
+  const accountsById = new Map(accounts.map((account) => [account.id, account]));
+  const groupMetaById = new Map(groups.map((group) => [group.id, group]));
 
-  const recentTransactions = ((transactionsResult.data ?? []) as Array<{ type: string; amount: string | number; happened_at: string | null }>)
+  const recentTransactions = ((transactionsResult.data ?? []) as Array<{
+    id?: string;
+    group_id?: string;
+    type: string;
+    amount: string | number;
+    happened_at: string | null;
+    category?: string | null;
+    account_id?: string | null;
+  }>)
     .map((item) => ({
+      id: item.id ?? null,
+      groupId: item.group_id ?? null,
       type: item.type,
       amount: roundMoney(toNumber(item.amount, 0)),
-      happenedAt: toISODate(item.happened_at)
+      happenedAt: toISODate(item.happened_at),
+      category: normalizeType(item.category ?? ''),
+      accountId: item.account_id ?? null
+    }));
+
+  const debtAccountIds = accounts.filter((account) => isDebtType(account.type)).map((account) => account.id);
+  const debtPaymentPoolResult = groupIds.length && debtAccountIds.length
+    ? await client
+        .from('transactions')
+        .select('id,group_id,type,amount,happened_at,category,account_id')
+        .in('group_id', groupIds)
+        .order('happened_at', { ascending: false })
+        .limit(600)
+    : { data: [], error: null };
+
+  const debtPaymentPool = ((debtPaymentPoolResult.data ?? []) as Array<{
+    id?: string;
+    group_id?: string;
+    type: string;
+    amount: string | number;
+    happened_at: string | null;
+    category?: string | null;
+    account_id?: string | null;
+  }>).map((item) => ({
+    id: item.id ?? null,
+    groupId: item.group_id ?? null,
+    type: normalizeType(item.type),
+    amount: roundMoney(toNumber(item.amount, 0)),
+    happenedAt: toISODate(item.happened_at),
+    category: normalizeType(item.category ?? ''),
+    accountId: item.account_id ?? null
+  }));
+
+  const debtAccountsById = new Map(
+    accounts
+      .filter((account) => isDebtType(account.type))
+      .map((account) => [account.id, account])
+  );
+  const debtPaymentCandidates = debtPaymentPool
+    .map((tx) => {
+      const account = tx.accountId ? accountsById.get(tx.accountId) : null;
+      const groupMeta = tx.groupId ? groupMetaById.get(tx.groupId) : null;
+      const groupDescription = groupMeta?.note ?? groupMeta?.source ?? '';
+      const categorySuggestsDebtPayment = ['deuda', 'pago_deuda'].includes(tx.category);
+      const groupSuggestsDebtPayment = hasDebtPaymentHint(groupDescription);
+      const accountIsDebt = Boolean(account && isDebtType(account.type));
+      const rejectionReason = !accountIsDebt
+        ? 'account_not_debt'
+        : (!categorySuggestsDebtPayment && !groupSuggestsDebtPayment)
+          ? 'category_or_group_not_debt_payment'
+          : null;
+
+      return {
+        id: tx.id,
+        groupId: tx.groupId,
+        happenedAt: tx.happenedAt,
+        category: tx.category,
+        amount: tx.amount,
+        accountId: tx.accountId,
+        accountName: account?.name ?? null,
+        accountType: account?.type ?? null,
+        direction: tx.type,
+        groupDescription,
+        isDebtPaymentCandidate: rejectionReason === null,
+        rejectionReason
+      };
+    });
+
+  logRecommendationContext('debt payment candidates', {
+    total: debtPaymentCandidates.length,
+    candidates: debtPaymentCandidates
+  });
+
+  const canonicalDebtPaymentsFromUi = groups
+    .map((group) => {
+      const lines = debtPaymentPool.filter((tx) => tx.groupId === group.id);
+      const action = inferMovementActionFromLines(lines.map((line) => ({ type: line.type, category: line.category })));
+      if (action !== 'pago_deuda') return null;
+
+      const debitLine = lines.find((line) => line.type === 'debit' && line.accountId && debtAccountsById.has(line.accountId));
+      const creditLine = lines.find((line) => line.type === 'credit' && line.accountId && !debtAccountsById.has(line.accountId));
+
+      return {
+        groupId: group.id,
+        category: 'pago_deuda',
+        description: group.note ?? null,
+        happenedAt: debitLine?.happenedAt ?? lines.find((line) => line.happenedAt)?.happenedAt ?? null,
+        amount: Math.max(debitLine?.amount ?? lines[0]?.amount ?? 0, 0),
+        sourceAccountId: creditLine?.accountId ?? null,
+        sourceAccountName: creditLine?.accountId ? (accountsById.get(creditLine.accountId)?.name ?? null) : null,
+        destinationAccountId: debitLine?.accountId ?? null,
+        destinationAccountName: debitLine?.accountId ? (accountsById.get(debitLine.accountId)?.name ?? null) : null
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+  const uiVisibilityCheck = canonicalDebtPaymentsFromUi.map((payment) => {
+    const seenAsCandidate = debtPaymentCandidates.some(
+      (candidate) => candidate.groupId === payment.groupId && candidate.accountId === payment.destinationAccountId && candidate.isDebtPaymentCandidate
+    );
+    const reason = seenAsCandidate
+      ? null
+      : !payment.destinationAccountId
+        ? 'missing_destination_debt_leg'
+        : 'candidate_not_detected_in_loader';
+    return {
+      groupId: payment.groupId,
+      category: payment.category,
+      destinationAccountId: payment.destinationAccountId,
+      destinationAccountName: payment.destinationAccountName,
+      sourceAccountId: payment.sourceAccountId,
+      sourceAccountName: payment.sourceAccountName,
+      amount: payment.amount,
+      analyticsSeesIt: seenAsCandidate,
+      reason
+    };
+  });
+
+  logRecommendationContext('ui pago_deuda visibility in analytics loader', {
+    totalUiVisibleDebtPayments: canonicalDebtPaymentsFromUi.length,
+    checks: uiVisibilityCheck
+  });
+
+  const reconciledObligations: ReconciledObligation[] = fixedObligations.map((obligation) => {
+    const expectedAmount = Math.max(obligation.amount, 0);
+    const dueDate = obligation.dueDay ? resolveUpcomingDueDate(obligation.dueDay, now) : null;
+    const cycleWindow = dueDate ? buildCycleWindow(dueDate) : null;
+    const matchedDebtAccountIds = accounts
+      .filter((account) => isDebtType(account.type))
+      .filter((account) => labelsLikelyMatch(obligation.name, account.name))
+      .map((account) => account.id);
+
+    const matchedPaymentTransactions = debtPaymentCandidates
+      .filter((payment) => payment.isDebtPaymentCandidate)
+      .filter((payment) => payment.accountId && matchedDebtAccountIds.includes(payment.accountId))
+      .filter((tx) => {
+        if (!tx.happenedAt) return false;
+        const happenedAt = new Date(tx.happenedAt).getTime();
+        if (!Number.isFinite(happenedAt)) return false;
+        if (!cycleWindow) return now.getTime() - happenedAt <= 35 * MS_PER_DAY;
+        return happenedAt >= cycleWindow.cycleStart.getTime() && happenedAt <= cycleWindow.cycleEnd.getTime();
+      });
+
+    const paidAmount = roundMoney(matchedPaymentTransactions.reduce((acc, tx) => acc + Math.max(tx.amount, 0), 0));
+
+    const remainingAmount = roundMoney(Math.max(expectedAmount - paidAmount, 0));
+    const status: ReconciledObligation['status'] = remainingAmount <= 0
+      ? 'paid'
+      : paidAmount > 0
+        ? 'partial'
+        : 'pending';
+
+    const matchedPaymentCount = matchedPaymentTransactions.length;
+
+    const matchedDestinationAccounts = matchedDebtAccountIds
+      .map((id) => accountsById.get(id)?.name ?? id)
+      .filter(Boolean);
+
+    const matchedPaymentDetails = matchedPaymentTransactions.map((tx) => {
+      const sourceAccounts = debtPaymentPool
+        .filter((line) => line.groupId && tx.groupId && line.groupId === tx.groupId)
+        .filter((line) => line.type === 'credit')
+        .filter((line) => line.accountId && line.accountId !== tx.accountId)
+        .map((line) => accountsById.get(line.accountId as string)?.name ?? (line.accountId as string));
+
+      return {
+        id: tx.id ?? null,
+        happenedAt: tx.happenedAt,
+        amount: tx.amount,
+        sourceAccounts
+      };
+    });
+
+    logRecommendationContext('obligation reconciliation', {
+      obligationName: obligation.name,
+      expectedAmount,
+      matchedDestinationAccount: matchedDestinationAccounts,
+      matchedPaymentTransactions: matchedPaymentDetails,
+      totalPaidAmount: paidAmount,
+      remainingAmount,
+      status
+    });
+
+    return {
+      name: obligation.name,
+      dueDay: obligation.dueDay,
+      dueDate: dueDate?.toISOString() ?? null,
+      expectedAmount,
+      paidAmount,
+      remainingAmount,
+      status,
+      matchedPaymentCount
+    };
+  });
+
+  const pendingReconciledObligationsForRadar = reconciledObligations
+    .filter((obligation) => obligation.status !== 'paid' && obligation.remainingAmount > 0)
+    .map((obligation) => ({
+      name: obligation.status === 'partial'
+        ? `${obligation.name} (restante ${obligation.remainingAmount.toFixed(2)})`
+        : obligation.name,
+      amount: obligation.remainingAmount,
+      dueDay: obligation.dueDay
     }));
 
   const tx30d = recentTransactions.filter((tx) => tx.happenedAt && daysUntil(tx.happenedAt, now) >= -30);
@@ -259,7 +559,7 @@ export async function buildHouseholdRecommendationContext(
   const radar = calculateFinancialRadar({
     now,
     accounts: accountBalances,
-    obligations: fixedObligations,
+    obligations: pendingReconciledObligationsForRadar,
     recentTransactions,
     fallbackMonthlyEstimate
   });
@@ -375,6 +675,7 @@ export async function buildHouseholdRecommendationContext(
       nextExtraordinaryEvent,
       tacticalPressure: inferTacticalPressure(radar),
       structuralPressure: inferStructuralPressure(status),
+      reconciledObligations,
       radar,
       status
     },

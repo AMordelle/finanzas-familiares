@@ -54,5 +54,7 @@ describe('AnalisisPage', () => {
     expect(html).toContain('Supuestos');
     expect(html).toContain('Distribución inteligente de ingreso extraordinario');
     expect(html).toContain('Recomendado:');
+    expect(html).toContain('Simulación editable de ingreso puntual');
+    expect(html).not.toContain('Aguinaldo / ingreso extraordinario');
   });
 });

@@ -40,6 +40,7 @@ type PrioritySignals = {
   liquidity: number;
   debtBalances: number;
   recentSpendingPressure: number;
+  coveredObligationsDueSoon: Array<{ name: string; dueInDays: number }>;
 };
 
 function normalizedTokens(value: string) {
@@ -94,6 +95,7 @@ function buildSignals(input: {
   recommendationContext?: HouseholdRecommendationContext | null;
 }) {
   const context = input.recommendationContext;
+  const contextNow = context ? new Date(context.generatedAt).getTime() : Date.now();
   const radar = context?.projected.radar ?? input.radar;
   const financialStatus = context?.projected.status ?? input.financialStatus;
   const liquidity = context?.observed.actualCurrentLiquidity ?? radar?.availableNow ?? 0;
@@ -119,7 +121,15 @@ function buildSignals(input: {
     monthlyMargin,
     liquidity,
     debtBalances,
-    recentSpendingPressure
+    recentSpendingPressure,
+    coveredObligationsDueSoon: (context?.projected.reconciledObligations ?? [])
+      .map((obligation) => ({
+        name: obligation.name,
+        dueInDays: obligation.dueDate ? Math.ceil((new Date(obligation.dueDate).getTime() - contextNow) / (1000 * 60 * 60 * 24)) : Number.POSITIVE_INFINITY,
+        status: obligation.status
+      }))
+      .filter((obligation) => obligation.status === 'paid' && obligation.dueInDays >= 0 && obligation.dueInDays <= 7)
+      .map(({ name, dueInDays }) => ({ name, dueInDays }))
   };
 
   return signals;
@@ -152,8 +162,11 @@ export function getPriorityDiagnostics(input: {
 
   const candidates: Candidate[] = [];
   const upcomingObligation = extractUpcomingObligation(radar);
+  const upcomingAlreadyCovered = upcomingObligation
+    ? signals.coveredObligationsDueSoon.some((item) => normalizedTokens(item.name).some((token) => normalizedTokens(upcomingObligation.name).includes(token)))
+    : false;
 
-  if (radar && upcomingObligation?.dueInDays != null && upcomingObligation.dueInDays <= 10) {
+  if (radar && upcomingObligation?.dueInDays != null && upcomingObligation.dueInDays <= 10 && !upcomingAlreadyCovered) {
     const pressurePoints = [
       radar.status === 'presion',
       signals.tacticalPressure === 'high',
@@ -171,6 +184,18 @@ export function getPriorityDiagnostics(input: {
         action: 'Congela extras esta semana y deja separado ese pago desde hoy.'
       });
     }
+  }
+
+  const coveredNow = signals.coveredObligationsDueSoon[0];
+  if (coveredNow) {
+    candidates.push({
+      key: 'obligacion-cubierta',
+      score: 76,
+      level: 'medium',
+      title: `${coveredNow.name} quedó cubierta; ahora toca proteger liquidez para lo que sigue`,
+      explanation: 'Este pago ya se tomó en cuenta para la ventana táctica actual y no debería presionar como urgencia inmediata.',
+      action: 'Reserva desde hoy una parte para la siguiente ola de pagos y evita desfondarte en extras.'
+    });
   }
 
   if (
