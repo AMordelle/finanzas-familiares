@@ -2,8 +2,43 @@ export type FinancialRadarStatus = 'estable' | 'atencion' | 'presion';
 
 import { deriveSharedTacticalMetrics } from '@/lib/finance/sharedTacticalMetrics';
 
+export type RadarBreakdownCategory = 'obligacion' | 'gasto_fijo' | 'deuda' | 'meta' | 'operativo' | 'otros';
+
+export type RadarBreakdownItem = {
+  label: string;
+  amount: number;
+  category: RadarBreakdownCategory;
+  dueInDays?: number | null;
+};
+
 export type FinancialRadar = {
   status: FinancialRadarStatus;
+  headline: string;
+  whatToDoToday: string;
+  whyItMatters: string;
+  whatIsComing: string;
+  nextBestAction: string;
+  metrics: {
+    availableNow: number;
+    upcoming7dLoad: number;
+    nearFuture8to14dLoad: number;
+    estimatedMargin: number;
+    frictionBufferRequired: number;
+    marginAfterFrictionBuffer: number;
+    tacticalPressureLevel: 'low' | 'medium' | 'high';
+    recommendationTone: 'optimista' | 'prudente' | 'contencion';
+  };
+  breakdowns: {
+    upcoming7dLoad: RadarBreakdownItem[];
+    suggestedActionBasis: string;
+    frictionGap: {
+      formula: string;
+      buffer: number;
+      immediateLoad: number;
+      availableLiquidity: number;
+      gap: number;
+    };
+  };
   windowDays: number;
   windowLabel: string;
   actionToday: string;
@@ -92,28 +127,59 @@ function daysUntilDue(dueDay: number, now: Date) {
   return daysInMonth - today + safeDueDay;
 }
 
+function classifyObligation(name?: string): RadarBreakdownCategory {
+  const normalized = normalizeName(name);
+  if (!normalized) return 'otros';
+  if (['tdc', 'tarjeta', 'credito', 'crédito', 'prestamo', 'préstamo', 'loan', 'deuda', 'mpago', 'bbva', 'sctbnk'].some((token) => normalized.includes(token))) {
+    return 'deuda';
+  }
+  if (['renta', 'hipoteca', 'colegiatura', 'colegio', 'servicio', 'luz', 'agua', 'gas', 'internet', 'telefono', 'teléfono', 'seguro'].some((token) => normalized.includes(token))) {
+    return 'gasto_fijo';
+  }
+  if (['meta', 'ahorro objetivo', 'objetivo', 'goal'].some((token) => normalized.includes(token))) {
+    return 'meta';
+  }
+  return 'obligacion';
+}
+
 function splitObligationsByHorizon(obligations: RadarObligation[], now: Date) {
   const output = {
     mandatoryTotal: 0,
     nearFutureTotal: 0,
     mandatoryHighlights: [] as string[],
-    nearFutureHighlights: [] as string[]
+    nearFutureHighlights: [] as string[],
+    upcomingBreakdown: [] as RadarBreakdownItem[]
   };
 
   for (const obligation of obligations) {
     const amount = Math.max(Number(obligation.amount) || 0, 0);
     if (amount <= 0) continue;
 
+    const named = obligation.name?.trim();
+    const category = classifyObligation(named);
+
     if (!obligation.dueDay || obligation.dueDay < 1 || obligation.dueDay > 31) {
-      output.mandatoryTotal += amount / 4.33;
+      const prorated = roundMoney(amount / 4.33);
+      output.mandatoryTotal += prorated;
+      output.upcomingBreakdown.push({
+        label: named || 'Obligación sin fecha definida',
+        amount: prorated,
+        category: category === 'gasto_fijo' ? 'gasto_fijo' : 'obligacion',
+        dueInDays: null
+      });
       continue;
     }
 
     const dueInDays = daysUntilDue(obligation.dueDay, now);
-    const named = obligation.name?.trim();
 
     if (dueInDays <= WINDOW_DAYS) {
       output.mandatoryTotal += amount;
+      output.upcomingBreakdown.push({
+        label: named || `Obligación en ${dueInDays} días`,
+        amount,
+        category,
+        dueInDays
+      });
       if (named) output.mandatoryHighlights.push(`En ${dueInDays} días vence ${named}.`);
       continue;
     }
@@ -128,8 +194,22 @@ function splitObligationsByHorizon(obligations: RadarObligation[], now: Date) {
     mandatoryTotal: roundMoney(output.mandatoryTotal),
     nearFutureTotal: roundMoney(output.nearFutureTotal),
     mandatoryHighlights: output.mandatoryHighlights.slice(0, 2),
-    nearFutureHighlights: output.nearFutureHighlights.slice(0, 2)
+    nearFutureHighlights: output.nearFutureHighlights.slice(0, 2),
+    upcomingBreakdown: output.upcomingBreakdown
+      .sort((a, b) => (a.dueInDays ?? 999) - (b.dueInDays ?? 999))
+      .slice(0, 8)
   };
+}
+
+function toActionBasis(status: FinancialRadarStatus, upcomingHighlight: string | undefined, nearFutureLoad: number, frictionGap: number) {
+  if (status === 'presion') return 'La prioridad es cubrir pagos críticos y cerrar el faltante de liquidez de esta semana.';
+  if (status === 'atencion') {
+    if (upcomingHighlight) return `Existe un pago inmediato (${upcomingHighlight.replace(/\.$/, '')}) y el colchón todavía no está completo.`;
+    return 'Hay cobertura base, pero falta proteger un margen para operar sin fricción.';
+  }
+  if (nearFutureLoad > 0) return 'La semana actual está cubierta; conviene apartar parte del excedente para la siguiente ola de pagos.';
+  if (frictionGap <= 0) return 'Con el colchón actual puedes ejecutar una acción concreta (separar reserva o adelantar pago) sin desbalancear liquidez.';
+  return 'Hay holgura táctica para fortalecer el margen semanal.';
 }
 
 export function calculateFinancialRadar(input: {
@@ -166,51 +246,100 @@ export function calculateFinancialRadar(input: {
     status = 'estable';
   }
 
-  const actionTodayByStatus: Record<FinancialRadarStatus, string> = {
-    estable: 'Hoy: puedes separar una parte para colchón.',
-    atencion: 'Hoy: hay margen nominal, pero conviene conservarlo porque la semana queda justa.',
-    presion: 'Hoy: enfócate en cubrir lo inmediato.'
+  const upcomingSummary = obligations.nearFutureHighlights[0] ?? obligations.mandatoryHighlights[0];
+  const frictionGap = roundMoney((shared.frictionBufferRequired + shared.upcoming7dLoad) - shared.availableNow);
+
+  const whatToDoTodayByStatus: Record<FinancialRadarStatus, string> = {
+    estable: nearFutureLoad > 0
+      ? 'Aparta hoy un monto para la siguiente semana de carga alta.'
+      : 'Separa hoy una parte del excedente al colchón sugerido.',
+    atencion: obligations.mandatoryHighlights[0]
+      ? `Prioriza y deja fondeado ${obligations.mandatoryHighlights[0].replace('En ', '').replace('.', '')}.`
+      : 'Cubre gasto fijo pendiente y mantén liquidez semanal sin comprometer extras.',
+    presion: obligations.mandatoryHighlights[0]
+      ? `Protege primero ${obligations.mandatoryHighlights[0].replace('En ', '').replace('.', '')}.`
+      : 'Reordena pagos próximos y cubre solo obligaciones críticas esta semana.'
   };
 
-  const actionTodayDetailByStatus: Record<FinancialRadarStatus, string> = {
-    estable: 'Con este margen, puedes avanzar un poco sin apretar tu semana.',
-    atencion: 'Cubre lo esencial y prioriza liquidez; evita comprometer colchón o extras por ahora.',
-    presion: 'Conviene enfocarte en lo esencial esta semana y postergar lo movible.'
+  const whyItMattersByStatus: Record<FinancialRadarStatus, string> = {
+    estable: nearFutureLoad > 0
+      ? 'Llegas bien a esta semana, pero ya se observa una segunda ola de pagos en 8-14 días.'
+      : 'Tu liquidez cubre la carga inmediata y también el colchón recomendado para operar sin fricción.',
+    atencion: `Cubres lo inmediato, pero faltan ${Math.max(frictionGap, 0) > 0 ? `aprox. ${Math.max(frictionGap, 0).toLocaleString('es-MX', { style: 'currency', currency: 'MXN' })}` : '0'} para sostener colchón más carga de la semana.`,
+    presion: 'La carga inmediata supera la liquidez disponible y cualquier gasto extra aumenta el faltante operativo.'
   };
 
-  const upcomingByStatus: Record<FinancialRadarStatus, string> = {
-    estable: obligations.nearFutureHighlights[0] ?? obligations.mandatoryHighlights[0] ?? 'La siguiente semana también se ve manejable.',
-    atencion: obligations.nearFutureHighlights[0] ?? obligations.mandatoryHighlights[0] ?? 'Viene una semana sensible; vale cuidar liquidez.',
-    presion: obligations.mandatoryHighlights[0] ?? obligations.nearFutureHighlights[0] ?? 'Hay compromisos cercanos que presionan esta ventana.'
+  const whatIsComingByStatus: Record<FinancialRadarStatus, string> = {
+    estable: upcomingSummary ?? 'No se detectan eventos de presión relevante en los próximos 14 días.',
+    atencion: upcomingSummary ?? 'Hay una ventana sensible en los próximos días; conviene anticipar apartados.',
+    presion: obligations.mandatoryHighlights[0] ?? upcomingSummary ?? 'Hay obligaciones cercanas que requieren reordenar pagos hoy.'
   };
 
-  const riskByStatus: Record<FinancialRadarStatus, string> = {
-    estable: nearFutureLoad > 0 ? 'Estás bien en lo inmediato; conviene anticiparte a lo que sigue.' : 'Tu semana está controlada con holgura.',
-    atencion: 'Cubres lo inmediato, pero no alcanzas el colchón de fricción recomendado.',
-    presion: 'La carga inmediata supera tu disponible actual.'
-  };
-
-  const nextStepByStatus: Record<FinancialRadarStatus, string> = {
-    estable: 'Busca cerrar la semana con margen positivo y sin tocar reservas.',
-    atencion: 'Intenta cerrar la semana con margen positivo, aunque sea pequeño.',
-    presion: 'Reordena pagos cercanos y evita gastos no esenciales por ahora.'
+  const nextBestActionByStatus: Record<FinancialRadarStatus, string> = {
+    estable: nearFutureLoad > 0
+      ? 'Fortalece liquidez semanal apartando una parte específica para la siguiente ola (8-14 días).'
+      : 'Fortalece liquidez semanal separando colchón sugerido sin usar dinero comprometido.',
+    atencion: 'Cubre primero obligaciones de esta semana y posterga gastos movibles hasta recuperar colchón mínimo.',
+    presion: 'Negocia fecha o monto de una obligación no crítica para reducir faltante de corto plazo.'
   };
 
   const statusReasonByStatus: Record<FinancialRadarStatus, string> = {
-    estable: 'Tu disponible cubre el periodo con holgura.',
-    atencion: 'Hay margen táctico, pero la semana sigue ajustada frente al colchón recomendado.',
+    estable: 'Tu disponible cubre carga inmediata y colchón de fricción.',
+    atencion: 'Hay margen táctico, pero no alcanza para operar con colchón recomendado.',
     presion: 'La carga inmediata supera tu disponible.'
   };
 
+  const upcoming7dBreakdown: RadarBreakdownItem[] = [
+    {
+      label: 'Gasto operativo estimado (7 días)',
+      amount: weeklyBaseSpending,
+      category: 'operativo',
+      dueInDays: null
+    },
+    ...obligations.upcomingBreakdown
+  ].filter((item) => item.amount > 0);
+
+  const radarHeadline = status === 'presion'
+    ? 'Semana en presión: faltante operativo inmediato'
+    : status === 'atencion'
+      ? 'Semana sensible: cubres carga, pero sin colchón suficiente'
+      : 'Semana controlada con margen operativo';
+
   return {
     status,
+    headline: radarHeadline,
+    whatToDoToday: whatToDoTodayByStatus[status],
+    whyItMatters: whyItMattersByStatus[status],
+    whatIsComing: whatIsComingByStatus[status],
+    nextBestAction: nextBestActionByStatus[status],
+    metrics: {
+      availableNow,
+      upcoming7dLoad: upcomingLoad,
+      nearFuture8to14dLoad: nearFutureLoad,
+      estimatedMargin,
+      frictionBufferRequired: shared.frictionBufferRequired,
+      marginAfterFrictionBuffer: shared.marginAfterFrictionBuffer,
+      tacticalPressureLevel: shared.tacticalPressureLevel,
+      recommendationTone: shared.recommendationTone
+    },
+    breakdowns: {
+      upcoming7dLoad: upcoming7dBreakdown,
+      suggestedActionBasis: toActionBasis(status, obligations.mandatoryHighlights[0], nearFutureLoad, frictionGap),
+      frictionGap: {
+        formula: '(colchón recomendado + carga inmediata) - liquidez disponible',
+        buffer: shared.frictionBufferRequired,
+        immediateLoad: shared.upcoming7dLoad,
+        availableLiquidity: shared.availableNow,
+        gap: frictionGap
+      }
+    },
     windowDays: WINDOW_DAYS,
     windowLabel: 'próximos 7 días',
-    actionToday: actionTodayByStatus[status],
-    actionTodayDetail: actionTodayDetailByStatus[status],
-    upcoming: upcomingByStatus[status],
-    riskText: riskByStatus[status],
-    nextBestStep: nextStepByStatus[status],
+    actionToday: `Hoy: ${whatToDoTodayByStatus[status]}`,
+    actionTodayDetail: whatToDoTodayByStatus[status],
+    upcoming: whatIsComingByStatus[status],
+    riskText: whyItMattersByStatus[status],
+    nextBestStep: nextBestActionByStatus[status],
     statusReason: statusReasonByStatus[status],
     availableNow,
     upcomingLoad,
