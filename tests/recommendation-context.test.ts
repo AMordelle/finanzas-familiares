@@ -193,6 +193,28 @@ describe('buildHouseholdRecommendationContext', () => {
     expect(context.projected.radar.upcoming).not.toContain('Pago TDC BBVA');
   });
 
+  it('un pago_deuda visible en movimientos también es visible para conciliación analítica', async () => {
+    const fakeClient = createFakeSupabase({
+      transaction_groups: [{ id: 'tg-1', household_id: 'house-1', note: 'Pago TDC BBVA abril', source: 'conversacional' }],
+      obligations: [{ id: 'ob-1', household_id: 'house-1', name: 'Pago TDC BBVA', amount: '1200', due_day: 19 }],
+      accounts: [
+        { id: 'acc-op', household_id: 'house-1', name: 'Cuenta Operativa', type: 'operational_cash', balance: '3000', is_active: true, periodic_payment: null },
+        { id: 'acc-debt', household_id: 'house-1', name: 'TDC BBVA', type: 'credit_card', balance: '8000', is_active: true, periodic_payment: '1200' }
+      ],
+      transactions: [
+        { id: 'tx-1', group_id: 'tg-1', type: 'debit', category: 'deuda', account_id: 'acc-debt', amount: '1200', happened_at: '2026-04-18T00:00:00Z' },
+        { id: 'tx-2', group_id: 'tg-1', type: 'credit', category: 'salida_cuenta', account_id: 'acc-op', amount: '1200', happened_at: '2026-04-18T00:00:00Z' }
+      ]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { buildHouseholdRecommendationContext } = await import('@/lib/finance/recommendationContext');
+    const context = await buildHouseholdRecommendationContext('house-1', fakeClient as any, { now: new Date('2026-04-19T00:00:00Z') });
+
+    expect(context.projected.reconciledObligations[0]?.matchedPaymentCount).toBe(1);
+    expect(context.projected.reconciledObligations[0]?.status).toBe('paid');
+    expect(context.projected.radar.upcoming).not.toContain('Pago TDC BBVA');
+  });
+
   it('reduce obligación cuando el pago es parcial y conserva siguiente ciclo', async () => {
     const fakeClient = createFakeSupabase({
       obligations: [{ id: 'ob-1', household_id: 'house-1', name: 'Pago TDC MPAGO', amount: '3000', due_day: 19 }],

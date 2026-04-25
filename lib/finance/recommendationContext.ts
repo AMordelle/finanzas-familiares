@@ -131,6 +131,20 @@ function buildCycleWindow(dueDate: Date) {
   return { cycleStart, cycleEnd: dueDate };
 }
 
+function inferMovementActionFromLines(lines: Array<{ type: string; category: string }>) {
+  const has = (type: string, category: string) => lines.some((line) => normalizeType(line.type) === type && normalizeType(line.category) === category);
+  if (has('debit', 'deuda') || has('credit', 'deuda') || has('debit', 'pago_deuda') || has('credit', 'pago_deuda')) return 'pago_deuda';
+  if (has('debit', 'por_cobrar')) return 'prestamo_otorgado';
+  if (has('credit', 'por_cobrar')) return 'pago_recibido';
+  if (has('debit', 'ahorro_meta')) return 'objetivo_aporte';
+  if (has('debit', 'entrada_cuenta')) return 'ingreso';
+  if (has('credit', 'salida_cuenta')) return 'gasto';
+  const debitLine = lines.find((line) => normalizeType(line.type) === 'debit');
+  const creditLine = lines.find((line) => normalizeType(line.type) === 'credit');
+  if (debitLine?.category && creditLine?.category && normalizeType(debitLine.category) === normalizeType(creditLine.category)) return 'transferencia';
+  return null;
+}
+
 type ReconciledObligation = {
   name: string;
   dueDay: number | null;
@@ -385,6 +399,56 @@ export async function buildHouseholdRecommendationContext(
     candidates: debtPaymentCandidates
   });
 
+  const canonicalDebtPaymentsFromUi = groups
+    .map((group) => {
+      const lines = debtPaymentPool.filter((tx) => tx.groupId === group.id);
+      const action = inferMovementActionFromLines(lines.map((line) => ({ type: line.type, category: line.category })));
+      if (action !== 'pago_deuda') return null;
+
+      const debitLine = lines.find((line) => line.type === 'debit' && line.accountId && debtAccountsById.has(line.accountId));
+      const creditLine = lines.find((line) => line.type === 'credit' && line.accountId && !debtAccountsById.has(line.accountId));
+
+      return {
+        groupId: group.id,
+        category: 'pago_deuda',
+        description: group.note ?? null,
+        happenedAt: debitLine?.happenedAt ?? lines.find((line) => line.happenedAt)?.happenedAt ?? null,
+        amount: Math.max(debitLine?.amount ?? lines[0]?.amount ?? 0, 0),
+        sourceAccountId: creditLine?.accountId ?? null,
+        sourceAccountName: creditLine?.accountId ? (accountsById.get(creditLine.accountId)?.name ?? null) : null,
+        destinationAccountId: debitLine?.accountId ?? null,
+        destinationAccountName: debitLine?.accountId ? (accountsById.get(debitLine.accountId)?.name ?? null) : null
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+  const uiVisibilityCheck = canonicalDebtPaymentsFromUi.map((payment) => {
+    const seenAsCandidate = debtPaymentCandidates.some(
+      (candidate) => candidate.groupId === payment.groupId && candidate.accountId === payment.destinationAccountId && candidate.isDebtPaymentCandidate
+    );
+    const reason = seenAsCandidate
+      ? null
+      : !payment.destinationAccountId
+        ? 'missing_destination_debt_leg'
+        : 'candidate_not_detected_in_loader';
+    return {
+      groupId: payment.groupId,
+      category: payment.category,
+      destinationAccountId: payment.destinationAccountId,
+      destinationAccountName: payment.destinationAccountName,
+      sourceAccountId: payment.sourceAccountId,
+      sourceAccountName: payment.sourceAccountName,
+      amount: payment.amount,
+      analyticsSeesIt: seenAsCandidate,
+      reason
+    };
+  });
+
+  logRecommendationContext('ui pago_deuda visibility in analytics loader', {
+    totalUiVisibleDebtPayments: canonicalDebtPaymentsFromUi.length,
+    checks: uiVisibilityCheck
+  });
+
   const reconciledObligations: ReconciledObligation[] = fixedObligations.map((obligation) => {
     const expectedAmount = Math.max(obligation.amount, 0);
     const dueDate = obligation.dueDay ? resolveUpcomingDueDate(obligation.dueDay, now) : null;
@@ -395,9 +459,8 @@ export async function buildHouseholdRecommendationContext(
       .map((account) => account.id);
 
     const matchedPaymentTransactions = debtPaymentCandidates
-      .filter((tx) => tx.isDebtPaymentCandidate)
-      .filter((tx) => tx.accountId && debtAccountsById.has(tx.accountId))
-      .filter((tx) => tx.accountId && matchedDebtAccountIds.includes(tx.accountId))
+      .filter((payment) => payment.isDebtPaymentCandidate)
+      .filter((payment) => payment.accountId && matchedDebtAccountIds.includes(payment.accountId))
       .filter((tx) => {
         if (!tx.happenedAt) return false;
         const happenedAt = new Date(tx.happenedAt).getTime();
