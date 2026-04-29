@@ -88,21 +88,35 @@ export function filterMovements(movements: MovementHistoryItem[], filters: Movem
 }
 
 export function buildDynamicSummary(movements: MovementHistoryItem[]) {
-  let ingresos = 0; let gastos = 0; let pagoDeuda = 0;
+  let ingresos = 0; let gastos = 0; let pagoDeuda = 0; let transferenciasInternas = 0;
   const accountCount = new Map<string, number>();
   const categoryCount = new Map<string, number>();
+  const processedIds = new Set<string>();
   for (const m of movements) {
+    if (processedIds.has(m.id)) continue;
+    processedIds.add(m.id);
+
     const t = normalizeType(m.tipoMovimiento);
     if (t === 'ingreso' || t === 'pago_recibido') ingresos += m.monto;
     else if (t === 'pago_deuda') pagoDeuda += m.monto;
     else if (t === 'gasto') gastos += m.monto;
+    else if (t === 'transferencia') transferenciasInternas += m.monto;
 
     if (m.cuentaOrigen) accountCount.set(m.cuentaOrigen, (accountCount.get(m.cuentaOrigen) ?? 0) + 1);
     if (m.cuentaDestino) accountCount.set(m.cuentaDestino, (accountCount.get(m.cuentaDestino) ?? 0) + 1);
     categoryCount.set(m.categoria, (categoryCount.get(m.categoria) ?? 0) + 1);
   }
   const top = <T extends string>(map: Map<T, number>) => [...map.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0] ?? 'N/A';
-  return { count: movements.length, ingresos, gastos, pagoDeuda, balanceNeto: ingresos - gastos - pagoDeuda, cuentaMasUsada: top(accountCount), categoriaPrincipal: top(categoryCount) };
+  return {
+    count: processedIds.size,
+    ingresos,
+    gastos,
+    pagoDeuda,
+    transferenciasInternas,
+    balanceNeto: ingresos - gastos - pagoDeuda,
+    cuentaMasUsada: top(accountCount),
+    categoriaPrincipal: top(categoryCount)
+  };
 }
 
 export function inferCategories(movements: MovementHistoryItem[]) {

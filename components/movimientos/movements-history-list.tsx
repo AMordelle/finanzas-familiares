@@ -87,6 +87,31 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
   const categories = useMemo(() => inferCategories(movements), [movements]);
   const filteredMovements = useMemo(() => filterMovements(movements, filters, accounts), [movements, filters, accounts]);
   const summary = useMemo(() => buildDynamicSummary(filteredMovements), [filteredMovements]);
+  const hasActiveFilters = useMemo(() => {
+    return (
+      filters.dateFilter !== 'all' ||
+      filters.type !== 'all' ||
+      filters.account !== '' ||
+      filters.category !== 'all' ||
+      filters.amountFilter !== 'all' ||
+      filters.search.trim() !== ''
+    );
+  }, [filters]);
+
+  const totalLabelByType: Record<string, string> = {
+    ingreso: 'Total ingresos filtrados',
+    gasto: 'Total gastos filtrados',
+    pago_deuda: 'Total pagos de deuda filtrados'
+  };
+
+  const typeTotalLabel = totalLabelByType[filters.type];
+  const typeTotalValue = filters.type === 'ingreso'
+    ? summary.ingresos
+    : filters.type === 'gasto'
+      ? summary.gastos
+      : filters.type === 'pago_deuda'
+        ? summary.pagoDeuda
+        : null;
 
   return (
     <>
@@ -109,7 +134,22 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
           <select className="rounded border p-2 text-sm" value={filters.amountFilter} onChange={(e)=>setFilters((p)=>({...p,amountFilter:e.target.value as MovementFilters['amountFilter']}))}><option value="all">Todos los montos</option><option value="lt_100">menor a 100</option><option value="100_500">100 a 500</option><option value="500_1000">500 a 1000</option><option value="gt_1000">mayor a 1000</option><option value="custom">rango personalizado</option></select>
         </div>
         <div className="mt-2 flex flex-wrap gap-2">{['gastos_hormiga','gastos_fuertes','deuda','sin_clasificar','negocio_operacion'].map((q)=><Button key={q} variant="outline" onClick={()=>setFilters((p)=>applyQuickFilter(q as any,p))}>{q}</Button>)}<Button variant="outline" onClick={()=>setFilters({ dateFilter: 'all', type: 'all', accountMode: 'any', account: '', category: 'all', amountFilter: 'all', search: '' })}>Limpiar filtros</Button></div>
-        <p className="mt-2 text-xs text-slate-600">Resultados: {summary.count} · Ingresos: {formatCurrencyMXN(summary.ingresos)} · Gastos: {formatCurrencyMXN(summary.gastos)} · Pago deuda: {formatCurrencyMXN(summary.pagoDeuda)} · Balance neto: {formatCurrencyMXN(summary.balanceNeto)} · Cuenta más usada: {summary.cuentaMasUsada} · Categoría principal: {summary.categoriaPrincipal}</p>
+        <div className="mt-2 space-y-1 text-xs text-slate-700">
+          <p className="font-medium">{hasActiveFilters ? 'Resumen del filtro aplicado' : 'Resumen del historial visible'}</p>
+          <p>Total de movimientos: {summary.count}</p>
+          {typeTotalLabel && typeTotalValue !== null ? (
+            <p>{typeTotalLabel}: {formatCurrencyMXN(typeTotalValue)}</p>
+          ) : (
+            <>
+              <p>Ingresos: {formatCurrencyMXN(summary.ingresos)}</p>
+              <p>Gastos: {formatCurrencyMXN(summary.gastos)}</p>
+              <p>Pagos de deuda: {formatCurrencyMXN(summary.pagoDeuda)}</p>
+              <p>Transferencias internas: {formatCurrencyMXN(summary.transferenciasInternas)}</p>
+              <p>Balance neto: {formatCurrencyMXN(summary.balanceNeto)}</p>
+            </>
+          )}
+          <p className="text-slate-600">Cuenta más usada: {summary.cuentaMasUsada} · Categoría principal: {summary.categoriaPrincipal}</p>
+        </div>
       </Card>
 
       <div className="mt-4 space-y-2">
