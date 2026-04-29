@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import type { AccountOption, MovementHistoryItem } from '@/lib/db/queries';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
 import { deleteMovementAction, updateMovementAction } from '@/app/movimientos/actions';
+import { applyQuickFilter, buildDynamicSummary, filterMovements, inferCategories, type MovementFilters } from '@/lib/movements/filters';
 
 type Props = {
   movements: MovementHistoryItem[];
@@ -82,14 +83,37 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
+  const [filters, setFilters] = useState<MovementFilters>({ dateFilter: 'all', type: 'all', accountMode: 'any', account: '', category: 'all', amountFilter: 'all', search: '' });
+  const categories = useMemo(() => inferCategories(movements), [movements]);
+  const filteredMovements = useMemo(() => filterMovements(movements, filters, accounts), [movements, filters, accounts]);
+  const summary = useMemo(() => buildDynamicSummary(filteredMovements), [filteredMovements]);
 
   return (
     <>
       {successMessage && <Card><p className="text-sm text-emerald-700">{successMessage}</p></Card>}
       {errorMessage && <Card><p className="text-sm text-red-600">{errorMessage}</p></Card>}
 
+
+      <Card>
+        <div className="grid gap-2 md:grid-cols-3"> 
+          <input className="rounded border p-2 text-sm" placeholder="Buscar" value={filters.search} onChange={(e)=>setFilters((p)=>({...p,search:e.target.value}))} />
+          <select className="rounded border p-2 text-sm" value={filters.dateFilter} onChange={(e)=>setFilters((p)=>({...p,dateFilter:e.target.value as MovementFilters['dateFilter']}))}>
+            <option value="all">Todas las fechas</option><option value="today">Hoy</option><option value="this_week">Esta semana</option><option value="this_month">Este mes</option><option value="previous_month">Mes anterior</option><option value="custom">Rango personalizado</option>
+          </select>
+          <select className="rounded border p-2 text-sm" value={filters.type} onChange={(e)=>setFilters((p)=>({...p,type:e.target.value}))}>
+            <option value="all">Todos los tipos</option><option value="ingreso">ingreso</option><option value="gasto">gasto</option><option value="transferencia">transferencia interna</option><option value="pago_deuda">pago_deuda</option><option value="prestamo_otorgado">prestamo_otorgado</option><option value="pago_recibido">pago_recibido</option><option value="objetivo_aporte">objetivo_aporte</option><option value="movimiento_terceros">movimiento_terceros</option><option value="compra_por_encargo">compra_por_encargo</option>
+          </select>
+          <select className="rounded border p-2 text-sm" value={filters.accountMode} onChange={(e)=>setFilters((p)=>({...p,accountMode:e.target.value as MovementFilters['accountMode']}))}><option value="any">Cualquier cuenta involucrada</option><option value="source">Cuenta origen</option><option value="destination">Cuenta destino</option><option value="involved">Cualquier involucrada</option></select>
+          <select className="rounded border p-2 text-sm" value={filters.account} onChange={(e)=>setFilters((p)=>({...p,account:e.target.value}))}><option value="">Todas las cuentas</option>{accounts.map((a)=><option key={a.id} value={a.name}>{a.name}</option>)}</select>
+          <select className="rounded border p-2 text-sm" value={filters.category} onChange={(e)=>setFilters((p)=>({...p,category:e.target.value}))}><option value="all">Todas las categorías</option><option value="__UNCLASSIFIED__">Sin clasificar</option>{categories.map((c)=><option key={c} value={c}>{c}</option>)}</select>
+          <select className="rounded border p-2 text-sm" value={filters.amountFilter} onChange={(e)=>setFilters((p)=>({...p,amountFilter:e.target.value as MovementFilters['amountFilter']}))}><option value="all">Todos los montos</option><option value="lt_100">menor a 100</option><option value="100_500">100 a 500</option><option value="500_1000">500 a 1000</option><option value="gt_1000">mayor a 1000</option><option value="custom">rango personalizado</option></select>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">{['gastos_hormiga','gastos_fuertes','deuda','sin_clasificar','negocio_operacion'].map((q)=><Button key={q} variant="outline" onClick={()=>setFilters((p)=>applyQuickFilter(q as any,p))}>{q}</Button>)}<Button variant="outline" onClick={()=>setFilters({ dateFilter: 'all', type: 'all', accountMode: 'any', account: '', category: 'all', amountFilter: 'all', search: '' })}>Limpiar filtros</Button></div>
+        <p className="mt-2 text-xs text-slate-600">Resultados: {summary.count} · Ingresos: {formatCurrencyMXN(summary.ingresos)} · Gastos: {formatCurrencyMXN(summary.gastos)} · Pago deuda: {formatCurrencyMXN(summary.pagoDeuda)} · Balance neto: {formatCurrencyMXN(summary.balanceNeto)} · Cuenta más usada: {summary.cuentaMasUsada} · Categoría principal: {summary.categoriaPrincipal}</p>
+      </Card>
+
       <div className="mt-4 space-y-2">
-        {movements.map((movement) => {
+        {filteredMovements.map((movement) => {
           const isExpanded = expandedId === movement.id;
           const isEditing = editingId === movement.id;
           const visual = getMovementVisual(movement);
