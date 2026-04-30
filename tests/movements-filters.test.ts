@@ -14,6 +14,24 @@ const f: MovementFilters = { dateFilter:'all', type:'all', accountMode:'any', ac
 
 describe('movements filters', ()=>{
   it('filtra por fecha', ()=>{ expect(filterMovements(base, { ...f, dateFilter:'today' }, [], new Date('2026-04-29T12:00:00Z')).map(m=>m.id)).toEqual(['1']); });
+
+  it('rango personalizado filtra dentro del periodo y admite fecha faltante', ()=>{
+    const onlyFrom = filterMovements(base, { ...f, dateFilter: 'custom', customDateFrom: '2026-04-28' }, []);
+    expect(onlyFrom.map((m) => m.id)).toEqual(['1','2']);
+
+    const bounded = filterMovements(base, { ...f, dateFilter: 'custom', customDateFrom: '2026-04-20', customDateTo: '2026-04-28' }, []);
+    expect(bounded.map((m) => m.id)).toEqual(['2','3','4']);
+  });
+
+  it('rango personalizado incluye todo el día final', ()=>{
+    const withEdgeDay: MovementHistoryItem[] = [
+      ...base,
+      { ...base[0], id: '6', fecha: '2026-04-28T23:59:59.500' }
+    ];
+
+    const filtered = filterMovements(withEdgeDay, { ...f, dateFilter: 'custom', customDateFrom: '2026-04-28', customDateTo: '2026-04-28' }, []);
+    expect(filtered.map((m) => m.id)).toEqual(['2','6']);
+  });
   it('filtra por tipo', ()=>{ expect(filterMovements(base, { ...f, type:'pago_de_deuda' as any }, []).length).toBe(0); expect(filterMovements(base, { ...f, type:'pago_deuda' }, []).map(m=>m.id)).toEqual(['3']); });
   it('filtra por cuenta origen/destino/involucrada', ()=>{
     expect(filterMovements(base, { ...f, accountMode:'source', account:'Banco' }, []).length).toBe(3);
@@ -74,7 +92,18 @@ describe('movements filters', ()=>{
     expect(summary.transferenciasInternas).toBe(1200);
   });
 
-  it('aplica chips rápidos y resumen dinámico sin inflar transferencias internas', ()=>{
+  
+  it('al cambiar de custom a this_month ignora rango personalizado previo', ()=>{
+    const filtered = filterMovements(base, {
+      ...f,
+      dateFilter: 'this_month',
+      customDateFrom: '2026-04-29',
+      customDateTo: '2026-04-29'
+    }, [], new Date('2026-04-29T12:00:00Z'));
+
+    expect(filtered.map((m) => m.id)).toEqual(['1','2','3','4']);
+  });
+it('aplica chips rápidos y resumen dinámico sin inflar transferencias internas', ()=>{
     const chip = applyQuickFilter('gastos_fuertes', f);
     expect(filterMovements(base, chip, []).map(m=>m.id)).toEqual(['1','4']);
   });

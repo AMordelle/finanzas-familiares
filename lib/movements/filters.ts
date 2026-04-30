@@ -50,7 +50,7 @@ export function filterMovements(movements: MovementHistoryItem[], filters: Movem
     if (filters.dateFilter === 'previous_month' && (d < startPrevMonth || d > endPrevMonth)) return false;
     if (filters.dateFilter === 'custom') {
       if (filters.customDateFrom && d < new Date(`${filters.customDateFrom}T00:00:00`)) return false;
-      if (filters.customDateTo && d > new Date(`${filters.customDateTo}T23:59:59`)) return false;
+      if (filters.customDateTo && d > new Date(`${filters.customDateTo}T23:59:59.999`)) return false;
     }
 
     if (filters.type !== 'all' && normalizeType(m.tipoMovimiento) !== filters.type) return false;

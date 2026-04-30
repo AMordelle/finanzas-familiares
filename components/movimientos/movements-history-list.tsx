@@ -83,7 +83,8 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
-  const [filters, setFilters] = useState<MovementFilters>({ dateFilter: 'all', type: 'all', accountMode: 'any', account: '', category: 'all', amountFilter: 'all', search: '' });
+  const defaultFilters: MovementFilters = { dateFilter: 'all', type: 'all', accountMode: 'any', account: '', category: 'all', amountFilter: 'all', search: '' };
+  const [filters, setFilters] = useState<MovementFilters>(defaultFilters);
   const categories = useMemo(() => inferCategories(movements), [movements]);
   const filteredMovements = useMemo(() => filterMovements(movements, filters, accounts), [movements, filters, accounts]);
   const summary = useMemo(() => buildDynamicSummary(filteredMovements), [filteredMovements]);
@@ -122,7 +123,13 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
       <Card>
         <div className="grid gap-2 md:grid-cols-3"> 
           <input className="rounded border p-2 text-sm" placeholder="Buscar" value={filters.search} onChange={(e)=>setFilters((p)=>({...p,search:e.target.value}))} />
-          <select className="rounded border p-2 text-sm" value={filters.dateFilter} onChange={(e)=>setFilters((p)=>({...p,dateFilter:e.target.value as MovementFilters['dateFilter']}))}>
+          <select className="rounded border p-2 text-sm" value={filters.dateFilter} onChange={(e)=>setFilters((p)=>{
+            const dateFilter = e.target.value as MovementFilters['dateFilter'];
+            if (dateFilter !== 'custom') {
+              return { ...p, dateFilter, customDateFrom: undefined, customDateTo: undefined };
+            }
+            return { ...p, dateFilter };
+          })}>
             <option value="all">Todas las fechas</option><option value="today">Hoy</option><option value="this_week">Esta semana</option><option value="this_month">Este mes</option><option value="previous_month">Mes anterior</option><option value="custom">Rango personalizado</option>
           </select>
           <select className="rounded border p-2 text-sm" value={filters.type} onChange={(e)=>setFilters((p)=>({...p,type:e.target.value}))}>
@@ -133,7 +140,32 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
           <select className="rounded border p-2 text-sm" value={filters.category} onChange={(e)=>setFilters((p)=>({...p,category:e.target.value}))}><option value="all">Todas las categorías</option><option value="__UNCLASSIFIED__">Sin clasificar</option>{categories.map((c)=><option key={c} value={c}>{c}</option>)}</select>
           <select className="rounded border p-2 text-sm" value={filters.amountFilter} onChange={(e)=>setFilters((p)=>({...p,amountFilter:e.target.value as MovementFilters['amountFilter']}))}><option value="all">Todos los montos</option><option value="lt_100">menor a 100</option><option value="100_500">100 a 500</option><option value="500_1000">500 a 1000</option><option value="gt_1000">mayor a 1000</option><option value="custom">rango personalizado</option></select>
         </div>
-        <div className="mt-2 flex flex-wrap gap-2">{['gastos_hormiga','gastos_fuertes','deuda','sin_clasificar','negocio_operacion'].map((q)=><Button key={q} variant="outline" onClick={()=>setFilters((p)=>applyQuickFilter(q as any,p))}>{q}</Button>)}<Button variant="outline" onClick={()=>setFilters({ dateFilter: 'all', type: 'all', accountMode: 'any', account: '', category: 'all', amountFilter: 'all', search: '' })}>Limpiar filtros</Button></div>
+        {filters.dateFilter === 'custom' && (
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
+            <label className="flex flex-col gap-1 text-xs text-slate-700">
+              <span>Desde</span>
+              <input
+                type="date"
+                className="rounded border p-2 text-sm"
+                value={filters.customDateFrom ?? ''}
+                onChange={(e) => setFilters((p) => ({ ...p, customDateFrom: e.target.value || undefined }))}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-xs text-slate-700">
+              <span>Hasta</span>
+              <input
+                type="date"
+                className="rounded border p-2 text-sm"
+                value={filters.customDateTo ?? ''}
+                onChange={(e) => setFilters((p) => ({ ...p, customDateTo: e.target.value || undefined }))}
+              />
+            </label>
+            {(!filters.customDateFrom || !filters.customDateTo) && (
+              <p className="sm:col-span-2 text-xs text-slate-500">Selecciona fecha inicial y final</p>
+            )}
+          </div>
+        )}
+        <div className="mt-2 flex flex-wrap gap-2">{['gastos_hormiga','gastos_fuertes','deuda','sin_clasificar','negocio_operacion'].map((q)=><Button key={q} variant="outline" onClick={()=>setFilters((p)=>applyQuickFilter(q as any,p))}>{q}</Button>)}<Button variant="outline" onClick={()=>setFilters(defaultFilters)}>Limpiar filtros</Button></div>
         <div className="mt-2 space-y-1 text-xs text-slate-700">
           <p className="font-medium">{hasActiveFilters ? 'Resumen del filtro aplicado' : 'Resumen del historial visible'}</p>
           <p>Total de movimientos: {summary.count}</p>
