@@ -783,42 +783,70 @@ export async function saveAccountDisplayOrder(rawInput: unknown, client: Supabas
     throw new Error('La lista de orden contiene cuentas duplicadas.');
   }
 
-  const { data, error } = await client
+  const { data: requestedData, error: requestedError } = await client
     .from('accounts')
-    .select('id,household_id,type,balance,is_active')
+    .select('id,household_id,type,name,display_order,balance,is_active')
     .in('id', input.accountIds);
 
-  if (error) {
-    throw new Error(`No fue posible validar las cuentas: ${error.message}`);
+  if (requestedError) {
+    throw new Error(`No fue posible validar las cuentas: ${requestedError.message}`);
   }
 
-  const rows = (data ?? []) as Array<{ id: string; household_id: string; type: string; balance: string | number; is_active: boolean | null }>;
-  if (rows.length !== input.accountIds.length) {
+  const requestedRows = (requestedData ?? []) as Array<{ id: string; household_id: string; type: string; name: string; display_order: number | null; balance: string | number; is_active: boolean | null }>;
+  if (requestedRows.length !== input.accountIds.length) {
     throw new Error('Todas las cuentas del orden deben existir.');
   }
 
-  if (rows.some((account) => account.household_id !== householdId)) {
+  if (requestedRows.some((account) => account.household_id !== householdId)) {
     throw new Error('No puedes ordenar cuentas de otro hogar.');
   }
 
-  const visualGroupKeys = rows.map((account) => normalizeAccountVisualGroup(account.type));
+  const visualGroupKeys = requestedRows.map((account) => normalizeAccountVisualGroup(account.type));
   if (visualGroupKeys.some((group) => group === null) || new Set(visualGroupKeys).size !== 1) {
     throw new Error('Solo puedes reordenar cuentas dentro del mismo grupo.');
   }
 
-  await Promise.all(input.accountIds.map(async (accountId, index) => {
+  const visualGroup = visualGroupKeys[0];
+  const { data: householdAccountsData, error: householdAccountsError } = await client
+    .from('accounts')
+    .select('id,household_id,type,name,display_order,balance,is_active')
+    .eq('household_id', householdId);
+
+  if (householdAccountsError) {
+    throw new Error(`No fue posible validar el grupo completo: ${householdAccountsError.message}`);
+  }
+
+  const householdGroupRows = ((householdAccountsData ?? []) as Array<{ id: string; household_id: string; type: string; name: string; display_order: number | null; balance: string | number; is_active: boolean | null }>)
+    .filter((account) => normalizeAccountVisualGroup(account.type) === visualGroup)
+    .sort((a, b) => compareAccountsForManagement(a, b));
+
+  const requestedIdSet = new Set(input.accountIds);
+  const missingGroupAccountIds = householdGroupRows
+    .map((account) => account.id)
+    .filter((accountId) => !requestedIdSet.has(accountId));
+  const finalOrderedAccountIds = [...input.accountIds, ...missingGroupAccountIds];
+
+  const updatedRows: Array<{ id: string; display_order: number | null }> = [];
+  await Promise.all(finalOrderedAccountIds.map(async (accountId, index) => {
     const updateResult = await client
       .from('accounts')
-      .update({ display_order: index })
+      .update({ display_order: index }, { count: 'exact' })
       .eq('id', accountId)
-      .eq('household_id', householdId);
+      .eq('household_id', householdId)
+      .select('id,display_order');
 
     if (updateResult.error) {
       throw new Error(`No fue posible guardar el orden: ${updateResult.error.message}`);
     }
+
+    const rows = (updateResult.data ?? []) as Array<{ id: string; display_order: number | null }>;
+    if (rows.length !== 1 || rows[0]?.display_order !== index) {
+      throw new Error('No fue posible confirmar que el orden se guardó correctamente.');
+    }
+    updatedRows.push(rows[0]);
   }));
 
-  return { success: true };
+  return { success: true, updatedCount: updatedRows.length, orderedAccountIds: finalOrderedAccountIds };
 }
 
 export async function createAccount(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {

@@ -269,6 +269,39 @@ describe('accounts management', () => {
     expect(fakeClient.db.accounts.find((account) => account.id.endsWith('41'))).toMatchObject({ display_order: 1, balance: '100.00', type: 'operational_cash' });
   });
 
+
+  it('initializes displayOrder for every account in a group when some existing orders are null', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.accounts.push(
+      { id: '00000000-0000-4000-8000-000000000071', household_id: 'house-1', name: 'Cuenta A', type: 'operational_cash', balance: '100.00', display_order: null, is_active: true },
+      { id: '00000000-0000-4000-8000-000000000072', household_id: 'house-1', name: 'Cuenta B', type: 'operational_cash', balance: '200.00', display_order: null, is_active: true },
+      { id: '00000000-0000-4000-8000-000000000073', household_id: 'house-1', name: 'Cuenta C', type: 'operational_cash', balance: '300.00', display_order: null, is_active: true },
+      { id: '00000000-0000-4000-8000-000000000074', household_id: 'house-1', name: 'Cuenta D', type: 'operational_cash', balance: '400.00', display_order: null, is_active: true },
+      { id: '00000000-0000-4000-8000-000000000075', household_id: 'house-1', name: 'Cuenta E', type: 'operational_cash', balance: '500.00', display_order: null, is_active: true }
+    );
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { saveAccountDisplayOrder } = await import('@/lib/db/queries');
+
+    const result = await saveAccountDisplayOrder({
+      accountIds: [
+        '00000000-0000-4000-8000-000000000073',
+        '00000000-0000-4000-8000-000000000071',
+        '00000000-0000-4000-8000-000000000072',
+        '00000000-0000-4000-8000-000000000074',
+        '00000000-0000-4000-8000-000000000075'
+      ]
+    }, fakeClient as never);
+
+    expect(result).toMatchObject({ success: true, updatedCount: 5 });
+    expect(fakeClient.db.accounts.map((account) => ({ id: account.id, displayOrder: account.display_order }))).toEqual([
+      { id: '00000000-0000-4000-8000-000000000071', displayOrder: 1 },
+      { id: '00000000-0000-4000-8000-000000000072', displayOrder: 2 },
+      { id: '00000000-0000-4000-8000-000000000073', displayOrder: 0 },
+      { id: '00000000-0000-4000-8000-000000000074', displayOrder: 3 },
+      { id: '00000000-0000-4000-8000-000000000075', displayOrder: 4 }
+    ]);
+  });
+
   it('rejects ordering accounts from another household', async () => {
     const fakeClient = createFakeSupabase();
     fakeClient.db.accounts.push(

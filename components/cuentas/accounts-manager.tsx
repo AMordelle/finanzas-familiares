@@ -30,6 +30,24 @@ type FormState = {
   counterparty: string;
 };
 
+type DragMeasurement = {
+  id: string;
+  top: number;
+  height: number;
+};
+
+type DragState = {
+  activeId: string;
+  groupKey: ManagedAccountType;
+  startY: number;
+  currentY: number;
+  activeIndex: number;
+  overIndex: number;
+  activeHeight: number;
+  itemShift: number;
+  measurements: DragMeasurement[];
+};
+
 const defaultForm: FormState = {
   type: 'operational_cash',
   name: '',
@@ -59,7 +77,15 @@ function supportsPeriodicFields(type: ManagedAccountType) {
   return type === 'credit_card' || type === 'loan';
 }
 
-function moveWithinGroup(accounts: ManagedAccount[], groupKey: ManagedAccountType, activeId: string, overId: string) {
+function arrayMove<T>(items: T[], oldIndex: number, newIndex: number) {
+  if (oldIndex === newIndex) return items;
+  const next = [...items];
+  const [moved] = next.splice(oldIndex, 1);
+  next.splice(newIndex, 0, moved);
+  return next;
+}
+
+export function buildReorderedAccounts(accounts: ManagedAccount[], groupKey: ManagedAccountType, activeId: string, overId: string) {
   if (activeId === overId) return accounts;
 
   const groupAccounts = accounts.filter((account) => normalizeType(account.type) === groupKey);
@@ -67,17 +93,69 @@ function moveWithinGroup(accounts: ManagedAccount[], groupKey: ManagedAccountTyp
   const newIndex = groupAccounts.findIndex((account) => account.id === overId);
   if (oldIndex < 0 || newIndex < 0) return accounts;
 
-  const reorderedGroup = [...groupAccounts];
-  const [moved] = reorderedGroup.splice(oldIndex, 1);
-  reorderedGroup.splice(newIndex, 0, moved);
-
+  const reorderedGroup = arrayMove(groupAccounts, oldIndex, newIndex);
   let cursor = 0;
   return accounts.map((account) => (normalizeType(account.type) === groupKey ? reorderedGroup[cursor++] : account));
+}
+
+export function getAccountIdsForGroup(accounts: ManagedAccount[], groupKey: ManagedAccountType) {
+  return accounts
+    .filter((account) => normalizeType(account.type) === groupKey)
+    .map((account) => account.id);
+}
+
+export async function persistOptimisticAccountReorder({
+  accounts,
+  groupKey,
+  activeId,
+  overId,
+  persist
+}: {
+  accounts: ManagedAccount[];
+  groupKey: ManagedAccountType;
+  activeId: string;
+  overId: string;
+  persist: (payload: { accountIds: string[] }) => Promise<unknown>;
+}) {
+  const nextAccounts = buildReorderedAccounts(accounts, groupKey, activeId, overId);
+  const accountIds = getAccountIdsForGroup(nextAccounts, groupKey);
+  await persist({ accountIds });
+  return { nextAccounts, accountIds };
+}
+
+function getClosestIndex(pointerY: number, measurements: DragMeasurement[]) {
+  return measurements.reduce((closest, measurement, index) => {
+    const center = measurement.top + measurement.height / 2;
+    const closestCenter = measurements[closest].top + measurements[closest].height / 2;
+    return Math.abs(pointerY - center) < Math.abs(pointerY - closestCenter) ? index : closest;
+  }, 0);
+}
+
+function getItemTransform(accountId: string, dragState: DragState | null) {
+  if (!dragState) return undefined;
+  const itemIndex = dragState.measurements.findIndex((item) => item.id === accountId);
+  if (itemIndex < 0) return undefined;
+
+  if (accountId === dragState.activeId) {
+    return `translate3d(0, ${dragState.currentY - dragState.startY}px, 0) scale(1.015)`;
+  }
+
+  const isMovingDown = dragState.overIndex > dragState.activeIndex;
+  const isMovingUp = dragState.overIndex < dragState.activeIndex;
+  if (isMovingDown && itemIndex > dragState.activeIndex && itemIndex <= dragState.overIndex) {
+    return `translate3d(0, -${dragState.itemShift}px, 0)`;
+  }
+  if (isMovingUp && itemIndex >= dragState.overIndex && itemIndex < dragState.activeIndex) {
+    return `translate3d(0, ${dragState.itemShift}px, 0)`;
+  }
+
+  return undefined;
 }
 
 function DraggableAccountItem({
   account,
   isDragging,
+  transform,
   disabled,
   onDeactivate,
   onEdit,
@@ -85,6 +163,7 @@ function DraggableAccountItem({
 }: {
   account: ManagedAccount;
   isDragging: boolean;
+  transform: string | undefined;
   disabled: boolean;
   onDeactivate: (accountId: string) => void;
   onEdit: (account: ManagedAccount) => void;
@@ -93,9 +172,15 @@ function DraggableAccountItem({
   return (
     <li
       data-account-id={account.id}
+      style={{
+        transform,
+        transition: isDragging ? 'none' : 'transform 180ms ease, box-shadow 180ms ease, opacity 180ms ease',
+        zIndex: isDragging ? 20 : undefined,
+        position: 'relative'
+      }}
       className={cn(
-        'rounded-md border border-slate-200 bg-white p-2 transition-[box-shadow,opacity,transform] duration-150',
-        isDragging && 'scale-[1.015] border-teal-300 opacity-80 shadow-lg ring-2 ring-teal-100'
+        'rounded-md border border-slate-200 bg-white p-2 will-change-transform',
+        isDragging && 'border-teal-300 opacity-90 shadow-xl ring-2 ring-teal-100'
       )}
     >
       <div className="flex items-start justify-between gap-2">
@@ -130,71 +215,86 @@ function DraggableAccountItem({
 function AccountGroupCard({
   group,
   disabled,
-  draggingId,
+  dragState,
   onDeactivate,
   onEdit,
-  onReorder,
-  onReorderError,
-  onReorderSettled
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+  onDragCancel
 }: {
   group: AccountGroupSummary<ManagedAccount>;
   disabled: boolean;
-  draggingId: string | null;
+  dragState: DragState | null;
   onDeactivate: (accountId: string) => void;
   onEdit: (account: ManagedAccount) => void;
-  onReorder: (groupKey: ManagedAccountType, activeId: string, overId: string) => void;
-  onReorderError: (message: string) => void;
-  onReorderSettled: () => void;
+  onDragStart: (state: DragState) => void;
+  onDragMove: (currentY: number, overIndex: number) => void;
+  onDragEnd: (state: DragState) => void;
+  onDragCancel: () => void;
 }) {
   const listRef = useRef<HTMLUListElement | null>(null);
 
   const onPointerStart = (event: React.PointerEvent<HTMLButtonElement>, activeId: string) => {
-    if (disabled || group.accounts.length < 2) return;
+    if (disabled || group.accounts.length < 2 || !listRef.current) return;
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
 
-    let lastOverId = activeId;
-    const handle = event.currentTarget;
+    const measurements = Array.from(listRef.current.querySelectorAll<HTMLElement>('[data-account-id]'))
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          id: element.dataset.accountId ?? '',
+          top: rect.top,
+          height: rect.height
+        };
+      })
+      .filter((measurement) => Boolean(measurement.id));
+
+    const activeIndex = measurements.findIndex((item) => item.id === activeId);
+    if (activeIndex < 0) return;
+
+    const nextDragState: DragState = {
+      activeId,
+      groupKey: group.key,
+      startY: event.clientY,
+      currentY: event.clientY,
+      activeIndex,
+      overIndex: activeIndex,
+      activeHeight: measurements[activeIndex].height,
+      itemShift: measurements[activeIndex].height + 8,
+      measurements
+    };
+
+    let latestDragState = nextDragState;
+    onDragStart(nextDragState);
 
     const onMove = (moveEvent: PointerEvent) => {
-      const element = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY)?.closest('[data-account-id]') as HTMLElement | null;
-      const overId = element?.dataset.accountId;
-      if (!overId || overId === lastOverId || !group.accounts.some((account) => account.id === overId)) return;
-      lastOverId = overId;
-      onReorder(group.key, activeId, overId);
+      moveEvent.preventDefault();
+      const overIndex = getClosestIndex(moveEvent.clientY, measurements);
+      latestDragState = { ...latestDragState, currentY: moveEvent.clientY, overIndex };
+      onDragMove(moveEvent.clientY, overIndex);
     };
 
-    const finish = async () => {
-      handle.removeEventListener('pointermove', onMove);
-      handle.removeEventListener('pointerup', finish);
-      handle.removeEventListener('pointercancel', finish);
-      try {
-        handle.releasePointerCapture(event.pointerId);
-      } catch {
-        // The pointer may already have been released by the browser.
-      }
-
-      const orderedIds = Array.from(listRef.current?.querySelectorAll<HTMLElement>('[data-account-id]') ?? [])
-        .map((element) => element.dataset.accountId)
-        .filter((id): id is string => Boolean(id));
-
-      if (orderedIds.length > 1 && lastOverId !== activeId) {
-        try {
-          await reorderAccountsAction({ accountIds: orderedIds });
-        } catch (error) {
-          onReorderError(error instanceof Error ? error.message : 'No fue posible guardar el orden. Recarga la página para recuperar el último orden guardado.');
-        } finally {
-          onReorderSettled();
-        }
-      } else {
-        onReorderSettled();
-      }
+    const finish = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', cancel);
+      onDragEnd(latestDragState);
     };
 
-    handle.addEventListener('pointermove', onMove);
-    handle.addEventListener('pointerup', finish, { once: true });
-    handle.addEventListener('pointercancel', finish, { once: true });
+    const cancel = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', cancel);
+      onDragCancel();
+    };
+
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', finish, { once: true });
+    window.addEventListener('pointercancel', cancel, { once: true });
   };
+
+  const activeGroupDragState = dragState?.groupKey === group.key ? dragState : null;
 
   return (
     <Card>
@@ -210,7 +310,8 @@ function AccountGroupCard({
           <DraggableAccountItem
             key={account.id}
             account={account}
-            isDragging={draggingId === account.id}
+            isDragging={activeGroupDragState?.activeId === account.id}
+            transform={getItemTransform(account.id, activeGroupDragState)}
             disabled={disabled}
             onDeactivate={onDeactivate}
             onEdit={onEdit}
@@ -225,15 +326,23 @@ function AccountGroupCard({
 export function AccountsManager({ accounts }: { accounts: ManagedAccount[] }) {
   const [form, setForm] = useState<FormState>(defaultForm);
   const [orderedAccounts, setOrderedAccounts] = useState(accounts);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const orderedAccountsRef = useRef(accounts);
+  const [dragState, setDragState] = useState<DragState | null>(null);
   const [isFormExpanded, setIsFormExpanded] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const isSavingOrderRef = useRef(false);
 
   useEffect(() => {
     setOrderedAccounts(accounts);
+    orderedAccountsRef.current = accounts;
   }, [accounts]);
+
+  const setLocalOrderedAccounts = (nextAccounts: ManagedAccount[]) => {
+    orderedAccountsRef.current = nextAccounts;
+    setOrderedAccounts(nextAccounts);
+  };
 
   const groupedSummaries = useMemo(() => buildAccountGroupSummaries(orderedAccounts), [orderedAccounts]);
 
@@ -300,14 +409,30 @@ export function AccountsManager({ accounts }: { accounts: ManagedAccount[] }) {
     setIsFormExpanded((current) => accountsFormVisibilityReducer(current, 'start_edit'));
   };
 
-  const onReorder = (groupKey: ManagedAccountType, activeId: string, overId: string) => {
-    setDraggingId(activeId);
-    setOrderedAccounts((current) => moveWithinGroup(current, groupKey, activeId, overId));
-  };
+  const onDragEnd = (finishedDrag: DragState) => {
+    setDragState(null);
+    if (finishedDrag.overIndex === finishedDrag.activeIndex || isSavingOrderRef.current) return;
 
-  const onReorderError = (messageText: string) => {
-    setOrderedAccounts(accounts);
-    setError(messageText);
+    const previousAccounts = orderedAccountsRef.current;
+    const overId = finishedDrag.measurements[finishedDrag.overIndex]?.id;
+    if (!overId) return;
+
+    const nextAccounts = buildReorderedAccounts(previousAccounts, finishedDrag.groupKey, finishedDrag.activeId, overId);
+    const accountIds = getAccountIdsForGroup(nextAccounts, finishedDrag.groupKey);
+    setLocalOrderedAccounts(nextAccounts);
+    clearState();
+    isSavingOrderRef.current = true;
+
+    startTransition(async () => {
+      try {
+        await reorderAccountsAction({ accountIds });
+      } catch (actionError) {
+        setLocalOrderedAccounts(previousAccounts);
+        setError(actionError instanceof Error ? actionError.message : 'No fue posible guardar el nuevo orden. Se restauró el orden anterior.');
+      } finally {
+        isSavingOrderRef.current = false;
+      }
+    });
   };
 
   return (
@@ -414,13 +539,19 @@ export function AccountsManager({ accounts }: { accounts: ManagedAccount[] }) {
           <AccountGroupCard
             key={group.key}
             group={group}
-            disabled={isPending}
-            draggingId={draggingId}
+            disabled={isPending || isSavingOrderRef.current}
+            dragState={dragState}
             onDeactivate={onDeactivate}
             onEdit={onEdit}
-            onReorder={onReorder}
-            onReorderError={onReorderError}
-            onReorderSettled={() => setDraggingId(null)}
+            onDragStart={(state) => {
+              clearState();
+              setDragState(state);
+            }}
+            onDragMove={(currentY, overIndex) => {
+              setDragState((current) => (current ? { ...current, currentY, overIndex } : current));
+            }}
+            onDragEnd={onDragEnd}
+            onDragCancel={() => setDragState(null)}
           />
         ))}
       </div>

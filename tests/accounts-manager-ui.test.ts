@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { accountsFormVisibilityReducer, buildAccountGroupSummaries } from '@/components/cuentas/accounts-manager.helpers';
+import { buildReorderedAccounts, getAccountIdsForGroup, persistOptimisticAccountReorder } from '@/components/cuentas/accounts-manager';
+
+vi.mock('@/app/cuentas/actions', () => ({
+  createAccountAction: vi.fn(),
+  updateAccountAction: vi.fn(),
+  deactivateAccountAction: vi.fn(),
+  reorderAccountsAction: vi.fn()
+}));
 
 type ManagedAccountLike = {
   id: string;
@@ -78,5 +86,59 @@ describe('AccountsManager collapsible form behavior', () => {
 
   it('keeps form open after successful edit to avoid breaking edit flow', () => {
     expect(accountsFormVisibilityReducer(true, 'submit_success_edit')).toBe(true);
+  });
+});
+
+
+describe('AccountsManager reorder helpers', () => {
+  it('builds the updated account order inside only one group', () => {
+    const accounts = [
+      makeAccount({ id: 'cash-1', name: 'Caja 1', type: 'operational_cash' }),
+      makeAccount({ id: 'cash-2', name: 'Caja 2', type: 'operational_cash' }),
+      makeAccount({ id: 'cash-3', name: 'Caja 3', type: 'operational_cash' }),
+      makeAccount({ id: 'card-1', name: 'Tarjeta', type: 'credit_card' })
+    ];
+
+    const next = buildReorderedAccounts(accounts, 'operational_cash', 'cash-1', 'cash-3');
+
+    expect(next.map((account) => account.id)).toEqual(['cash-2', 'cash-3', 'cash-1', 'card-1']);
+    expect(getAccountIdsForGroup(next, 'operational_cash')).toEqual(['cash-2', 'cash-3', 'cash-1']);
+    expect(getAccountIdsForGroup(next, 'credit_card')).toEqual(['card-1']);
+  });
+
+  it('passes the updated order to the persistence action instead of the previous order', async () => {
+    const persist = vi.fn().mockResolvedValue({ success: true });
+    const accounts = [
+      makeAccount({ id: 'cash-1', name: 'Caja 1', type: 'operational_cash' }),
+      makeAccount({ id: 'cash-2', name: 'Caja 2', type: 'operational_cash' }),
+      makeAccount({ id: 'cash-3', name: 'Caja 3', type: 'operational_cash' })
+    ];
+
+    const result = await persistOptimisticAccountReorder({
+      accounts,
+      groupKey: 'operational_cash',
+      activeId: 'cash-1',
+      overId: 'cash-3',
+      persist
+    });
+
+    expect(result.accountIds).toEqual(['cash-2', 'cash-3', 'cash-1']);
+    expect(persist).toHaveBeenCalledWith({ accountIds: ['cash-2', 'cash-3', 'cash-1'] });
+  });
+
+  it('propagates persistence errors so the UI can revert the visual order', async () => {
+    const persist = vi.fn().mockRejectedValue(new Error('falló supabase'));
+    const accounts = [
+      makeAccount({ id: 'cash-1', name: 'Caja 1', type: 'operational_cash' }),
+      makeAccount({ id: 'cash-2', name: 'Caja 2', type: 'operational_cash' })
+    ];
+
+    await expect(persistOptimisticAccountReorder({
+      accounts,
+      groupKey: 'operational_cash',
+      activeId: 'cash-1',
+      overId: 'cash-2',
+      persist
+    })).rejects.toThrow('falló supabase');
   });
 });
