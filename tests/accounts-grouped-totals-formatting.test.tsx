@@ -7,7 +7,8 @@ import { formatCurrencyMXN } from '@/lib/formatters/currency';
 vi.mock('@/app/cuentas/actions', () => ({
   createAccountAction: vi.fn(),
   updateAccountAction: vi.fn(),
-  deactivateAccountAction: vi.fn()
+  deactivateAccountAction: vi.fn(),
+  reorderAccountsAction: vi.fn()
 }));
 
 const accounts = [
@@ -19,7 +20,8 @@ const accounts = [
     isActive: true,
     periodicPayment: null,
     paymentDay: null,
-    counterparty: null
+    counterparty: null,
+    displayOrder: null
   },
   {
     id: 'acc-2',
@@ -29,7 +31,8 @@ const accounts = [
     isActive: true,
     periodicPayment: null,
     paymentDay: null,
-    counterparty: null
+    counterparty: null,
+    displayOrder: null
   },
   {
     id: 'acc-3',
@@ -39,7 +42,8 @@ const accounts = [
     isActive: true,
     periodicPayment: 1200,
     paymentDay: 15,
-    counterparty: null
+    counterparty: null,
+    displayOrder: null
   }
 ];
 

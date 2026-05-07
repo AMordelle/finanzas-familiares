@@ -43,6 +43,7 @@ export const accounts = pgTable('accounts', {
   periodicPayment: numeric('periodic_payment', { precision: 14, scale: 2 }),
   paymentDay: integer('payment_day'),
   counterparty: text('counterparty'),
+  displayOrder: integer('display_order'),
   isActive: boolean('is_active').notNull().default(true)
 });
 
