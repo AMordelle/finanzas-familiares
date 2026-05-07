@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 class FakeQueryBuilder {
   private action: 'select' | 'insert' | 'upsert' | 'update' | 'delete' = 'select';
-  private filters: Array<{ field: string; value: unknown; op: 'eq' | 'neq' }> = [];
+  private filters: Array<{ field: string; value: unknown; op: 'eq' | 'neq' | 'in' }> = [];
   private limitValue: number | null = null;
   private selected = '*';
   private payload: any = null;
@@ -48,6 +48,11 @@ class FakeQueryBuilder {
     return this;
   }
 
+  in(field: string, value: unknown[]) {
+    this.filters.push({ field, value, op: 'in' });
+    return this;
+  }
+
   order(field: string, options?: { ascending?: boolean }) {
     this.orderBy.push({ field, ascending: options?.ascending ?? true });
     return this;
@@ -77,6 +82,7 @@ class FakeQueryBuilder {
   private matches(row: Record<string, unknown>) {
     return this.filters.every((filter) => {
       if (filter.op === 'eq') return row[filter.field] === filter.value;
+      if (filter.op === 'in') return Array.isArray(filter.value) && filter.value.includes(row[filter.field]);
       return row[filter.field] !== filter.value;
     });
   }
@@ -123,6 +129,8 @@ class FakeQueryBuilder {
     for (const order of this.orderBy) {
       selectedRows.sort((a, b) => {
         if (a[order.field] === b[order.field]) return 0;
+        if (a[order.field] === null || a[order.field] === undefined) return 1;
+        if (b[order.field] === null || b[order.field] === undefined) return -1;
         if (order.ascending) return a[order.field] > b[order.field] ? 1 : -1;
         return a[order.field] < b[order.field] ? 1 : -1;
       });
@@ -225,6 +233,66 @@ describe('accounts management', () => {
     await deactivateAccount({ accountId: '00000000-0000-4000-8000-000000000022' }, fakeClient as never);
 
     expect(fakeClient.db.accounts[0].is_active).toBe(false);
+  });
+
+
+
+  it('returns management accounts ordered by displayOrder and stable fallback', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.accounts.push(
+      { id: '00000000-0000-4000-8000-000000000031', household_id: 'house-1', name: 'Zeta', type: 'operational_cash', balance: '10.00', display_order: null, is_active: true },
+      { id: '00000000-0000-4000-8000-000000000032', household_id: 'house-1', name: 'Primera', type: 'operational_cash', balance: '20.00', display_order: 0, is_active: true },
+      { id: '00000000-0000-4000-8000-000000000033', household_id: 'house-1', name: 'Alpha', type: 'operational_cash', balance: '30.00', display_order: null, is_active: true },
+      { id: '00000000-0000-4000-8000-000000000034', household_id: 'house-1', name: 'Segunda', type: 'operational_cash', balance: '40.00', display_order: 1, is_active: true }
+    );
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getAccountsForManagement } = await import('@/lib/db/queries');
+
+    const accounts = await getAccountsForManagement(fakeClient as never);
+
+    expect(accounts.map((account) => account.name)).toEqual(['Primera', 'Segunda', 'Alpha', 'Zeta']);
+    expect(accounts.map((account) => account.displayOrder)).toEqual([0, 1, null, null]);
+  });
+
+  it('updates displayOrder without changing balances or account types', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.accounts.push(
+      { id: '00000000-0000-4000-8000-000000000041', household_id: 'house-1', name: 'Caja A', type: 'operational_cash', balance: '100.00', display_order: 0, is_active: true },
+      { id: '00000000-0000-4000-8000-000000000042', household_id: 'house-1', name: 'Caja B', type: 'operational_cash', balance: '200.00', display_order: 1, is_active: true }
+    );
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { saveAccountDisplayOrder } = await import('@/lib/db/queries');
+
+    await saveAccountDisplayOrder({ accountIds: ['00000000-0000-4000-8000-000000000042', '00000000-0000-4000-8000-000000000041'] }, fakeClient as never);
+
+    expect(fakeClient.db.accounts.find((account) => account.id.endsWith('42'))).toMatchObject({ display_order: 0, balance: '200.00', type: 'operational_cash' });
+    expect(fakeClient.db.accounts.find((account) => account.id.endsWith('41'))).toMatchObject({ display_order: 1, balance: '100.00', type: 'operational_cash' });
+  });
+
+  it('rejects ordering accounts from another household', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.accounts.push(
+      { id: '00000000-0000-4000-8000-000000000051', household_id: 'house-1', name: 'Caja', type: 'operational_cash', balance: '100.00', display_order: 0, is_active: true },
+      { id: '00000000-0000-4000-8000-000000000052', household_id: 'house-2', name: 'Caja externa', type: 'operational_cash', balance: '200.00', display_order: 1, is_active: true }
+    );
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { saveAccountDisplayOrder } = await import('@/lib/db/queries');
+
+    await expect(saveAccountDisplayOrder({ accountIds: ['00000000-0000-4000-8000-000000000051', '00000000-0000-4000-8000-000000000052'] }, fakeClient as never))
+      .rejects.toThrow('otro hogar');
+  });
+
+  it('rejects ordering accounts from different visual groups', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.accounts.push(
+      { id: '00000000-0000-4000-8000-000000000061', household_id: 'house-1', name: 'Caja', type: 'operational_cash', balance: '100.00', display_order: 0, is_active: true },
+      { id: '00000000-0000-4000-8000-000000000062', household_id: 'house-1', name: 'VISA', type: 'credit_card', balance: '200.00', display_order: 1, is_active: true }
+    );
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { saveAccountDisplayOrder } = await import('@/lib/db/queries');
+
+    await expect(saveAccountDisplayOrder({ accountIds: ['00000000-0000-4000-8000-000000000061', '00000000-0000-4000-8000-000000000062'] }, fakeClient as never))
+      .rejects.toThrow('mismo grupo');
   });
 
   it('dashboard availableMoney after account changes', async () => {

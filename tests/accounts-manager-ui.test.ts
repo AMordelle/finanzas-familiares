@@ -10,6 +10,7 @@ type ManagedAccountLike = {
   periodicPayment: number | null;
   paymentDay: number | null;
   counterparty: string | null;
+  displayOrder: number | null;
 };
 
 function makeAccount(overrides: Partial<ManagedAccountLike>): ManagedAccountLike {
@@ -21,7 +22,8 @@ function makeAccount(overrides: Partial<ManagedAccountLike>): ManagedAccountLike
     isActive: overrides.isActive ?? true,
     periodicPayment: overrides.periodicPayment ?? null,
     paymentDay: overrides.paymentDay ?? null,
-    counterparty: overrides.counterparty ?? null
+    counterparty: overrides.counterparty ?? null,
+    displayOrder: overrides.displayOrder ?? null
   };
 }
 

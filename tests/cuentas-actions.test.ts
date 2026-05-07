@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const createMock = vi.fn();
 const updateMock = vi.fn();
 const deactivateMock = vi.fn();
+const reorderMock = vi.fn();
 const revalidatePathMock = vi.fn();
 
 const upsertSchemaParse = vi.fn((payload) => payload);
@@ -18,9 +19,11 @@ describe('cuentas actions revalidation', () => {
       accountUpsertSchema: { safeParse: (payload: unknown) => ({ success: true, data: upsertSchemaParse(payload) }) },
       accountUpdateSchema: { safeParse: (payload: unknown) => ({ success: true, data: upsertSchemaParse(payload) }) },
       accountDeactivateSchema: { safeParse: (payload: unknown) => ({ success: true, data: deactivateSchemaParse(payload) }), shape: { accountId: {} } },
+      accountReorderSchema: { safeParse: (payload: unknown) => ({ success: true, data: payload }) },
       createAccount: createMock,
       updateAccount: updateMock,
-      deactivateAccount: deactivateMock
+      deactivateAccount: deactivateMock,
+      saveAccountDisplayOrder: reorderMock
     }));
   });
 
@@ -42,6 +45,14 @@ describe('cuentas actions revalidation', () => {
     expect(revalidatePathMock).toHaveBeenCalledWith('/cuentas');
     expect(revalidatePathMock).toHaveBeenCalledWith('/dashboard');
     expect(revalidatePathMock).toHaveBeenCalledWith('/registro');
+  });
+
+  it('revalida rutas tras reordenar cuentas', async () => {
+    const { reorderAccountsAction } = await import('@/app/cuentas/actions');
+    await reorderAccountsAction({ accountIds: ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'] });
+
+    expect(reorderMock).toHaveBeenCalledWith({ accountIds: ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'] });
+    expect(revalidatePathMock).toHaveBeenCalledWith('/cuentas');
   });
 
   it('revalida rutas tras desactivar', async () => {

@@ -66,6 +66,10 @@ export const accountDeactivateSchema = z.object({
   accountId: z.string().uuid()
 });
 
+export const accountReorderSchema = z.object({
+  accountIds: z.array(z.string().uuid()).min(1, 'Debes ordenar al menos una cuenta.')
+});
+
 export const accountUpdateSchema = accountUpsertSchema.extend({
   accountId: z.string().uuid()
 });
@@ -82,6 +86,7 @@ export type ManagedAccount = AccountOption & {
   periodicPayment: number | null;
   paymentDay: number | null;
   counterparty: string | null;
+  displayOrder: number | null;
 };
 
 export type RegistrationSetupStatus = {
@@ -701,9 +706,10 @@ export async function getAccountsForManagement(client: SupabaseClientLike = supa
 
   const { data, error } = await client
     .from('accounts')
-    .select('id,name,type,balance,is_active,periodic_payment,payment_day,counterparty')
+    .select('id,name,type,balance,is_active,periodic_payment,payment_day,counterparty,display_order')
     .eq('household_id', householdId)
     .order('type')
+    .order('display_order', { ascending: true, nullsFirst: false })
     .order('name');
 
   if (error) {
@@ -719,8 +725,10 @@ export async function getAccountsForManagement(client: SupabaseClientLike = supa
     periodic_payment: string | null;
     payment_day: number | null;
     counterparty: string | null;
+    display_order: number | null;
   }>)
     .filter((account) => accountTypeValues.includes(account.type as (typeof accountTypeValues)[number]))
+    .sort((a, b) => compareAccountsForManagement(a, b))
     .map((account) => ({
       id: account.id,
       name: account.name,
@@ -729,8 +737,88 @@ export async function getAccountsForManagement(client: SupabaseClientLike = supa
       isActive: account.is_active !== false,
       periodicPayment: account.periodic_payment === null ? null : Number(account.periodic_payment),
       paymentDay: account.payment_day ?? null,
-      counterparty: account.counterparty ?? null
+      counterparty: account.counterparty ?? null,
+      displayOrder: account.display_order ?? null
     }));
+}
+
+function compareAccountsForManagement(a: { type: string; name: string; display_order: number | null }, b: { type: string; name: string; display_order: number | null }) {
+  const aGroup = normalizeAccountVisualGroup(a.type) ?? a.type;
+  const bGroup = normalizeAccountVisualGroup(b.type) ?? b.type;
+  if (aGroup !== bGroup) return aGroup.localeCompare(bGroup, 'es');
+
+  const aHasOrder = a.display_order !== null && a.display_order !== undefined;
+  const bHasOrder = b.display_order !== null && b.display_order !== undefined;
+  if (aHasOrder && bHasOrder && a.display_order !== b.display_order) return Number(a.display_order) - Number(b.display_order);
+  if (aHasOrder !== bHasOrder) return aHasOrder ? -1 : 1;
+  return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' });
+}
+
+function normalizeAccountVisualGroup(rawType: string) {
+  const aliases: Record<string, string> = {
+    operativa: 'operational_cash',
+    fondo: 'savings_fund',
+    inversion: 'investment',
+    deuda: 'loan',
+    por_cobrar: 'receivable',
+    operational_cash: 'operational_cash',
+    savings_fund: 'savings_fund',
+    investment: 'investment',
+    credit_card: 'credit_card',
+    loan: 'loan',
+    receivable: 'receivable'
+  };
+  return aliases[rawType] ?? null;
+}
+
+export async function saveAccountDisplayOrder(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) {
+    throw new Error('No existe un hogar configurado para ordenar cuentas.');
+  }
+
+  const input = accountReorderSchema.parse(rawInput);
+  const uniqueAccountIds = Array.from(new Set(input.accountIds));
+  if (uniqueAccountIds.length !== input.accountIds.length) {
+    throw new Error('La lista de orden contiene cuentas duplicadas.');
+  }
+
+  const { data, error } = await client
+    .from('accounts')
+    .select('id,household_id,type,balance,is_active')
+    .in('id', input.accountIds);
+
+  if (error) {
+    throw new Error(`No fue posible validar las cuentas: ${error.message}`);
+  }
+
+  const rows = (data ?? []) as Array<{ id: string; household_id: string; type: string; balance: string | number; is_active: boolean | null }>;
+  if (rows.length !== input.accountIds.length) {
+    throw new Error('Todas las cuentas del orden deben existir.');
+  }
+
+  if (rows.some((account) => account.household_id !== householdId)) {
+    throw new Error('No puedes ordenar cuentas de otro hogar.');
+  }
+
+  const visualGroupKeys = rows.map((account) => normalizeAccountVisualGroup(account.type));
+  if (visualGroupKeys.some((group) => group === null) || new Set(visualGroupKeys).size !== 1) {
+    throw new Error('Solo puedes reordenar cuentas dentro del mismo grupo.');
+  }
+
+  await Promise.all(input.accountIds.map(async (accountId, index) => {
+    const updateResult = await client
+      .from('accounts')
+      .update({ display_order: index })
+      .eq('id', accountId)
+      .eq('household_id', householdId);
+
+    if (updateResult.error) {
+      throw new Error(`No fue posible guardar el orden: ${updateResult.error.message}`);
+    }
+  }));
+
+  return { success: true };
 }
 
 export async function createAccount(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
