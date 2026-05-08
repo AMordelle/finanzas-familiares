@@ -47,7 +47,7 @@ export const movementDeleteSchema = z.object({
 });
 
 
-const extraWorkTypeValues = ['overtime', 'piecework'] as const;
+const extraWorkTypeValues = ['overtime', 'piecework', 'meals'] as const;
 const extraWorkStatusValues = ['pending', 'paid'] as const;
 
 export const extraWorkCreateSchema = z.object({
@@ -150,6 +150,7 @@ export type ExtrasSummary = {
   pendingCount: number;
   pendingOvertimeHours: number;
   pendingPieceworkUnits: number;
+  pendingMealsAmount: number;
 };
 
 export type ExtrasData = {
@@ -773,10 +774,12 @@ export function calculateExtrasSummary(entries: ExtraWorkEntry[]): ExtrasSummary
         summary.pendingOvertimeHours += entry.quantity;
       } else if (entry.type === 'piecework') {
         summary.pendingPieceworkUnits += entry.quantity;
+      } else if (entry.type === 'meals') {
+        summary.pendingMealsAmount += entry.quantity;
       }
       return summary;
     },
-    { pendingCount: 0, pendingOvertimeHours: 0, pendingPieceworkUnits: 0 }
+    { pendingCount: 0, pendingOvertimeHours: 0, pendingPieceworkUnits: 0, pendingMealsAmount: 0 }
   );
 }
 
