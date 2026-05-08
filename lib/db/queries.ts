@@ -50,7 +50,7 @@ export const movementDeleteSchema = z.object({
 const extraWorkTypeValues = ['overtime', 'piecework', 'meals'] as const;
 const extraWorkStatusValues = ['pending', 'paid'] as const;
 
-export const extraWorkCreateSchema = z.object({
+const extraWorkEditableFieldsSchema = z.object({
   householdId: z.string().min(1, 'El hogar es obligatorio.').optional(),
   workDate: z.string().trim().min(1, 'La fecha es obligatoria.'),
   type: z.enum(extraWorkTypeValues, { required_error: 'El tipo de trabajo es obligatorio.' }),
@@ -58,10 +58,19 @@ export const extraWorkCreateSchema = z.object({
   notes: z.string().trim().optional().nullable()
 });
 
-export const extraWorkPaidSchema = z.object({
+export const extraWorkCreateSchema = extraWorkEditableFieldsSchema;
+
+export const extraWorkUpdateSchema = extraWorkEditableFieldsSchema.extend({
+  entryId: z.string().min(1, 'El registro es obligatorio.')
+});
+
+export const extraWorkEntrySchema = z.object({
   entryId: z.string().min(1, 'El registro es obligatorio.'),
   householdId: z.string().min(1, 'El hogar es obligatorio.').optional()
 });
+
+export const extraWorkPaidSchema = extraWorkEntrySchema;
+export const extraWorkDeleteSchema = extraWorkEntrySchema;
 
 const accountTypeValues = ['operativa', 'fondo', 'inversion', 'deuda', 'por_cobrar', 'operational_cash', 'savings_fund', 'investment', 'credit_card', 'loan', 'receivable'] as const;
 
@@ -823,6 +832,43 @@ export async function createExtraWorkEntry(rawInput: unknown, client: SupabaseCl
   return mapExtraWorkEntry(data as Parameters<typeof mapExtraWorkEntry>[0]);
 }
 
+export async function updateExtraWorkEntry(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = extraWorkUpdateSchema.parse(rawInput);
+  const householdId = input.householdId ?? (await getDefaultHouseholdId(client));
+
+  if (!householdId) {
+    throw new Error('El hogar es obligatorio para editar extras.');
+  }
+
+  const notes = input.notes?.trim() ? input.notes.trim() : null;
+  const updatedAt = new Date().toISOString();
+  const { data, error } = await client
+    .from('extra_work_entries')
+    .update({
+      work_date: input.workDate,
+      type: input.type,
+      quantity: input.quantity.toString(),
+      notes,
+      status: 'pending',
+      updated_at: updatedAt
+    })
+    .eq('id', input.entryId)
+    .eq('household_id', householdId)
+    .eq('status', 'pending')
+    .select('id,household_id,work_date,type,quantity,status,paid_at,notes,created_at,updated_at')
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`No fue posible editar el extra: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error('No se encontró el extra pendiente en este hogar.');
+  }
+
+  return mapExtraWorkEntry(data as Parameters<typeof mapExtraWorkEntry>[0]);
+}
+
 export async function getPendingExtraWorkEntries(client: SupabaseClientLike = supabaseAdmin): Promise<ExtrasData> {
   const householdId = await getDefaultHouseholdId(client);
   if (!householdId) {
@@ -869,11 +915,40 @@ export async function markExtraWorkEntryAsPaid(rawInput: unknown, client: Supaba
     .update({ status: 'paid', paid_at: paidAt, updated_at: paidAt })
     .eq('id', input.entryId)
     .eq('household_id', householdId)
+    .eq('status', 'pending')
     .select('id,household_id,work_date,type,quantity,status,paid_at,notes,created_at,updated_at')
     .maybeSingle();
 
   if (error) {
     throw new Error(`No fue posible marcar el extra como pagado: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error('No se encontró el extra pendiente en este hogar.');
+  }
+
+  return mapExtraWorkEntry(data as Parameters<typeof mapExtraWorkEntry>[0]);
+}
+
+export async function deleteExtraWorkEntry(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = extraWorkDeleteSchema.parse(rawInput);
+  const householdId = input.householdId ?? (await getDefaultHouseholdId(client));
+
+  if (!householdId) {
+    throw new Error('El hogar es obligatorio para eliminar extras.');
+  }
+
+  const { data, error } = await client
+    .from('extra_work_entries')
+    .delete()
+    .eq('id', input.entryId)
+    .eq('household_id', householdId)
+    .eq('status', 'pending')
+    .select('id,household_id,work_date,type,quantity,status,paid_at,notes,created_at,updated_at')
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`No fue posible eliminar el extra: ${error.message}`);
   }
 
   if (!data) {

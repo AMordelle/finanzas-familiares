@@ -1,10 +1,11 @@
 import type { ExtraWorkEntry, ExtraWorkType } from '@/lib/db/queries';
 
-type ExtrasFormVisibilityAction = 'collapse' | 'expand_new' | 'submit_success';
+type ExtrasFormVisibilityAction = 'collapse' | 'expand_new' | 'start_edit' | 'submit_success';
 
 export function extrasFormVisibilityReducer(current: boolean, action: ExtrasFormVisibilityAction) {
   switch (action) {
     case 'expand_new':
+    case 'start_edit':
       return true;
     case 'collapse':
     case 'submit_success':
