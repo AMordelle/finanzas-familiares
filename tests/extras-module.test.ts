@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { extrasFormVisibilityReducer, quantityLabel, quantityWithUnit, typeLabel } from '@/components/extras/extras-manager.helpers';
 
 class FakeQueryBuilder {
   private action: 'select' | 'insert' | 'upsert' | 'update' | 'delete' = 'select';
@@ -24,6 +25,11 @@ class FakeQueryBuilder {
   update(payload: any) {
     this.action = 'update';
     this.payload = payload;
+    return this;
+  }
+
+  delete() {
+    this.action = 'delete';
     return this;
   }
 
@@ -89,9 +95,16 @@ class FakeQueryBuilder {
     }
 
     if (this.action === 'update') {
+      const matchedIndexes = rows.map((row, index) => (this.matches(row) ? index : -1)).filter((index) => index >= 0);
       const updatedRows = rows.map((row) => (this.matches(row) ? { ...row, ...this.payload } : row));
       this.db[this.table] = updatedRows;
-      return { data: this.pickColumns(updatedRows.filter((row) => this.matches(row))), error: null };
+      return { data: this.pickColumns(matchedIndexes.map((index) => updatedRows[index])), error: null };
+    }
+
+    if (this.action === 'delete') {
+      const deletedRows = rows.filter((row) => this.matches(row));
+      this.db[this.table] = rows.filter((row) => !this.matches(row));
+      return { data: this.pickColumns(deletedRows), error: null };
     }
 
     let selectedRows = rows.filter((row) => this.matches(row));
@@ -127,7 +140,9 @@ function createFakeSupabase() {
     extra_work_entries: [],
     transaction_groups: [],
     transactions: [],
-    accounts: []
+    accounts: [],
+    income_sources: [],
+    financial_snapshots: []
   };
 
   return {
@@ -137,6 +152,34 @@ function createFakeSupabase() {
     }
   };
 }
+
+describe('UI del módulo Extras', () => {
+  it('la tarjeta de registro inicia contraída y se despliega bajo demanda', () => {
+    expect(extrasFormVisibilityReducer(false, 'collapse')).toBe(false);
+    expect(extrasFormVisibilityReducer(false, 'expand_new')).toBe(true);
+  });
+
+  it('la tarjeta se contrae después de registrar correctamente', () => {
+    expect(extrasFormVisibilityReducer(true, 'submit_success')).toBe(false);
+  });
+
+  it('expone etiquetas dinámicas para comidas', () => {
+    expect(typeLabel('meals')).toBe('Comidas');
+    expect(quantityLabel('meals')).toBe('Importe');
+    expect(quantityWithUnit({
+      id: 'meal-1',
+      householdId: 'house-1',
+      workDate: '2026-05-07',
+      type: 'meals',
+      quantity: 250,
+      status: 'pending',
+      paidAt: null,
+      notes: null,
+      createdAt: '2026-05-07T00:00:00.000Z',
+      updatedAt: '2026-05-07T00:00:00.000Z'
+    })).toBe('Comidas · $250');
+  });
+});
 
 describe('módulo Extras', () => {
   beforeEach(() => {
@@ -172,6 +215,24 @@ describe('módulo Extras', () => {
     expect(entry.quantity).toBe(2);
   });
 
+  it('crea comidas pendientes con importes monetarios decimales sin movimientos financieros', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createExtraWorkEntry } = await import('@/lib/db/queries');
+
+    const entry = await createExtraWorkEntry({ workDate: '2026-05-05', type: 'meals', quantity: 250.5, notes: 'Línea foránea' });
+
+    expect(entry.status).toBe('pending');
+    expect(entry.type).toBe('meals');
+    expect(entry.quantity).toBe(250.5);
+    expect(fakeClient.db.extra_work_entries).toHaveLength(1);
+    expect(fakeClient.db.transaction_groups).toHaveLength(0);
+    expect(fakeClient.db.transactions).toHaveLength(0);
+    expect(fakeClient.db.accounts).toHaveLength(0);
+    expect(fakeClient.db.income_sources).toHaveLength(0);
+    expect(fakeClient.db.financial_snapshots).toHaveLength(0);
+  });
+
   it('rechaza cantidad cero, negativa y tipos inválidos', async () => {
     const fakeClient = createFakeSupabase();
     vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
@@ -189,15 +250,189 @@ describe('módulo Extras', () => {
       { id: 'old-paid', household_id: 'house-1', work_date: '2026-05-01', type: 'overtime', quantity: '8', status: 'paid', paid_at: '2026-05-06T00:00:00.000Z', notes: null, created_at: '2026-05-01T10:00:00.000Z', updated_at: '2026-05-06T00:00:00.000Z' },
       { id: 'hours', household_id: 'house-1', work_date: '2026-05-03', type: 'overtime', quantity: '8', status: 'pending', paid_at: null, notes: null, created_at: '2026-05-03T10:00:00.000Z', updated_at: '2026-05-03T10:00:00.000Z' },
       { id: 'pieces', household_id: 'house-1', work_date: '2026-05-04', type: 'piecework', quantity: '2', status: 'pending', paid_at: null, notes: null, created_at: '2026-05-04T10:00:00.000Z', updated_at: '2026-05-04T10:00:00.000Z' },
-      { id: 'other-house', household_id: 'house-2', work_date: '2026-05-05', type: 'piecework', quantity: '5', status: 'pending', paid_at: null, notes: null, created_at: '2026-05-05T10:00:00.000Z', updated_at: '2026-05-05T10:00:00.000Z' }
+      { id: 'meals', household_id: 'house-1', work_date: '2026-05-05', type: 'meals', quantity: '1250.50', status: 'pending', paid_at: null, notes: null, created_at: '2026-05-05T10:00:00.000Z', updated_at: '2026-05-05T10:00:00.000Z' },
+      { id: 'other-house', household_id: 'house-2', work_date: '2026-05-06', type: 'meals', quantity: '500', status: 'pending', paid_at: null, notes: null, created_at: '2026-05-06T10:00:00.000Z', updated_at: '2026-05-06T10:00:00.000Z' }
     );
     vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
     const { getPendingExtraWorkEntries } = await import('@/lib/db/queries');
 
     const data = await getPendingExtraWorkEntries();
 
-    expect(data.pendingEntries.map((entry: any) => entry.id)).toEqual(['pieces', 'hours']);
-    expect(data.summary).toEqual({ pendingCount: 2, pendingOvertimeHours: 8, pendingPieceworkUnits: 2 });
+    expect(data.pendingEntries.map((entry: any) => entry.id)).toEqual(['meals', 'pieces', 'hours']);
+    expect(data.pendingEntries.find((entry: any) => entry.id === 'meals')?.quantity).toBe(1250.5);
+    expect(data.summary).toEqual({ pendingCount: 3, pendingOvertimeHours: 8, pendingPieceworkUnits: 2, pendingMealsAmount: 1250.5 });
+  });
+
+  it('edita un extra de tiempo extra conservando id, hogar y estado pendiente', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.extra_work_entries.push({
+      id: 'hours-edit',
+      household_id: 'house-1',
+      work_date: '2026-05-02',
+      type: 'overtime',
+      quantity: '8',
+      status: 'pending',
+      paid_at: null,
+      notes: 'Original',
+      created_at: '2026-05-02T10:00:00.000Z',
+      updated_at: '2026-05-02T10:00:00.000Z'
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { updateExtraWorkEntry } = await import('@/lib/db/queries');
+
+    const updated = await updateExtraWorkEntry({ entryId: 'hours-edit', workDate: '2026-05-03', type: 'overtime', quantity: 10.5, notes: 'Corregido' });
+
+    expect(updated.id).toBe('hours-edit');
+    expect(updated.householdId).toBe('house-1');
+    expect(updated.status).toBe('pending');
+    expect(updated.workDate).toBe('2026-05-03');
+    expect(updated.type).toBe('overtime');
+    expect(updated.quantity).toBe(10.5);
+    expect(updated.notes).toBe('Corregido');
+    expect(fakeClient.db.extra_work_entries).toHaveLength(1);
+    expect(fakeClient.db.transaction_groups).toHaveLength(0);
+    expect(fakeClient.db.transactions).toHaveLength(0);
+    expect(fakeClient.db.accounts).toHaveLength(0);
+  });
+
+  it('edita un destajo pendiente', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.extra_work_entries.push({
+      id: 'piece-edit',
+      household_id: 'house-1',
+      work_date: '2026-05-04',
+      type: 'piecework',
+      quantity: '2',
+      status: 'pending',
+      paid_at: null,
+      notes: null,
+      created_at: '2026-05-04T10:00:00.000Z',
+      updated_at: '2026-05-04T10:00:00.000Z'
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { updateExtraWorkEntry } = await import('@/lib/db/queries');
+
+    const updated = await updateExtraWorkEntry({ entryId: 'piece-edit', workDate: '2026-05-05', type: 'piecework', quantity: 3, notes: 'Tres destajos' });
+
+    expect(updated.type).toBe('piecework');
+    expect(updated.quantity).toBe(3);
+    expect(updated.notes).toBe('Tres destajos');
+    expect(fakeClient.db.transaction_groups).toHaveLength(0);
+    expect(fakeClient.db.transactions).toHaveLength(0);
+    expect(fakeClient.db.accounts).toHaveLength(0);
+  });
+
+  it('edita comidas pendientes con importes monetarios', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.extra_work_entries.push({
+      id: 'meal-edit',
+      household_id: 'house-1',
+      work_date: '2026-05-05',
+      type: 'meals',
+      quantity: '250',
+      status: 'pending',
+      paid_at: null,
+      notes: 'Comida original',
+      created_at: '2026-05-05T10:00:00.000Z',
+      updated_at: '2026-05-05T10:00:00.000Z'
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { updateExtraWorkEntry } = await import('@/lib/db/queries');
+
+    const updated = await updateExtraWorkEntry({ entryId: 'meal-edit', workDate: '2026-05-06', type: 'meals', quantity: 180.75, notes: '' });
+
+    expect(updated.type).toBe('meals');
+    expect(updated.quantity).toBe(180.75);
+    expect(updated.notes).toBeNull();
+    expect(fakeClient.db.income_sources).toHaveLength(0);
+    expect(fakeClient.db.financial_snapshots).toHaveLength(0);
+  });
+
+  it('cambia un tiempo extra a comidas y recalcula el resumen', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.extra_work_entries.push(
+      { id: 'to-meals', household_id: 'house-1', work_date: '2026-05-05', type: 'overtime', quantity: '8', status: 'pending', paid_at: null, notes: null, created_at: '2026-05-05T10:00:00.000Z', updated_at: '2026-05-05T10:00:00.000Z' },
+      { id: 'pieces', household_id: 'house-1', work_date: '2026-05-04', type: 'piecework', quantity: '2', status: 'pending', paid_at: null, notes: null, created_at: '2026-05-04T10:00:00.000Z', updated_at: '2026-05-04T10:00:00.000Z' }
+    );
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getPendingExtraWorkEntries, updateExtraWorkEntry } = await import('@/lib/db/queries');
+
+    const updated = await updateExtraWorkEntry({ entryId: 'to-meals', workDate: '2026-05-05', type: 'meals', quantity: 250.5, notes: 'Comidas' });
+    const pending = await getPendingExtraWorkEntries();
+
+    expect(updated.type).toBe('meals');
+    expect(updated.quantity).toBe(250.5);
+    expect(pending.summary).toEqual({ pendingCount: 2, pendingOvertimeHours: 0, pendingPieceworkUnits: 2, pendingMealsAmount: 250.5 });
+  });
+
+  it('rechaza edición con cantidad cero o negativa', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.extra_work_entries.push({
+      id: 'invalid-edit',
+      household_id: 'house-1',
+      work_date: '2026-05-05',
+      type: 'overtime',
+      quantity: '8',
+      status: 'pending',
+      paid_at: null,
+      notes: null,
+      created_at: '2026-05-05T10:00:00.000Z',
+      updated_at: '2026-05-05T10:00:00.000Z'
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { updateExtraWorkEntry } = await import('@/lib/db/queries');
+
+    await expect(updateExtraWorkEntry({ entryId: 'invalid-edit', workDate: '2026-05-05', type: 'overtime', quantity: 0 })).rejects.toThrow();
+    await expect(updateExtraWorkEntry({ entryId: 'invalid-edit', workDate: '2026-05-05', type: 'overtime', quantity: -1 })).rejects.toThrow();
+    expect(fakeClient.db.extra_work_entries[0].quantity).toBe('8');
+  });
+
+  it('elimina un extra pendiente y ya no aparece en pendientes sin afectar finanzas', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.extra_work_entries.push(
+      { id: 'delete-me', household_id: 'house-1', work_date: '2026-05-05', type: 'meals', quantity: '250', status: 'pending', paid_at: null, notes: null, created_at: '2026-05-05T10:00:00.000Z', updated_at: '2026-05-05T10:00:00.000Z' },
+      { id: 'keep-me', household_id: 'house-1', work_date: '2026-05-04', type: 'overtime', quantity: '8', status: 'pending', paid_at: null, notes: null, created_at: '2026-05-04T10:00:00.000Z', updated_at: '2026-05-04T10:00:00.000Z' }
+    );
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { deleteExtraWorkEntry, getPendingExtraWorkEntries } = await import('@/lib/db/queries');
+
+    const deleted = await deleteExtraWorkEntry({ entryId: 'delete-me' });
+    const pending = await getPendingExtraWorkEntries();
+
+    expect(deleted.id).toBe('delete-me');
+    expect(fakeClient.db.extra_work_entries.map((entry) => entry.id)).toEqual(['keep-me']);
+    expect(pending.pendingEntries.map((entry: any) => entry.id)).toEqual(['keep-me']);
+    expect(fakeClient.db.transaction_groups).toHaveLength(0);
+    expect(fakeClient.db.transactions).toHaveLength(0);
+    expect(fakeClient.db.accounts).toHaveLength(0);
+    expect(fakeClient.db.income_sources).toHaveLength(0);
+    expect(fakeClient.db.financial_snapshots).toHaveLength(0);
+  });
+
+  it('rechaza editar y eliminar registros de otro household', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.extra_work_entries.push({
+      id: 'other-house-entry',
+      household_id: 'house-2',
+      work_date: '2026-05-05',
+      type: 'meals',
+      quantity: '250',
+      status: 'pending',
+      paid_at: null,
+      notes: null,
+      created_at: '2026-05-05T10:00:00.000Z',
+      updated_at: '2026-05-05T10:00:00.000Z'
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { deleteExtraWorkEntry, updateExtraWorkEntry } = await import('@/lib/db/queries');
+
+    await expect(updateExtraWorkEntry({ entryId: 'other-house-entry', workDate: '2026-05-06', type: 'meals', quantity: 500 })).rejects.toThrow('No se encontró');
+    await expect(deleteExtraWorkEntry({ entryId: 'other-house-entry' })).rejects.toThrow('No se encontró');
+    expect(fakeClient.db.extra_work_entries).toHaveLength(1);
+    expect(fakeClient.db.extra_work_entries[0].household_id).toBe('house-2');
+    expect(fakeClient.db.transaction_groups).toHaveLength(0);
+    expect(fakeClient.db.transactions).toHaveLength(0);
+    expect(fakeClient.db.accounts).toHaveLength(0);
   });
 
   it('marca un registro como pagado, desaparece de pendientes y conserva el registro en BD', async () => {
@@ -206,8 +441,8 @@ describe('módulo Extras', () => {
       id: 'extra-1',
       household_id: 'house-1',
       work_date: '2026-05-02',
-      type: 'overtime',
-      quantity: '8',
+      type: 'meals',
+      quantity: '180.75',
       status: 'pending',
       paid_at: null,
       notes: null,
@@ -227,5 +462,7 @@ describe('módulo Extras', () => {
     expect(fakeClient.db.extra_work_entries[0].status).toBe('paid');
     expect(fakeClient.db.transaction_groups).toHaveLength(0);
     expect(fakeClient.db.transactions).toHaveLength(0);
+    expect(fakeClient.db.accounts).toHaveLength(0);
+    expect(fakeClient.db.financial_snapshots).toHaveLength(0);
   });
 });

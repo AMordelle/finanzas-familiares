@@ -1,5 +1,5 @@
-import { relations } from 'drizzle-orm';
-import { boolean, date, integer, numeric, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { relations, sql } from 'drizzle-orm';
+import { boolean, check, date, integer, numeric, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const accountTypeEnum = pgEnum('account_type', [
   'operativa',
@@ -109,7 +109,11 @@ export const extraWorkEntries = pgTable('extra_work_entries', {
   notes: text('notes'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull()
-});
+}, (table) => ({
+  typeCheck: check('extra_work_entries_type_check', sql`${table.type} IN ('overtime', 'piecework', 'meals')`),
+  quantityPositiveCheck: check('extra_work_entries_quantity_check', sql`${table.quantity} > 0`),
+  statusCheck: check('extra_work_entries_status_check', sql`${table.status} IN ('pending', 'paid')`)
+}));
 
 export const financialSnapshots = pgTable('financial_snapshots', {
   id: uuid('id').primaryKey().defaultRandom(),

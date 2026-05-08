@@ -3,11 +3,15 @@
 import { revalidatePath } from 'next/cache';
 import {
   createExtraWorkEntry,
+  deleteExtraWorkEntry,
   extraWorkCreateSchema,
+  extraWorkDeleteSchema,
   extraWorkPaidSchema,
+  extraWorkUpdateSchema,
   getExtraWorkHistory,
   getPendingExtraWorkEntries,
-  markExtraWorkEntryAsPaid
+  markExtraWorkEntryAsPaid,
+  updateExtraWorkEntry
 } from '@/lib/db/queries';
 
 export async function createExtraWorkAction(payload: unknown) {
@@ -20,6 +24,30 @@ export async function createExtraWorkAction(payload: unknown) {
   revalidatePath('/extras');
 
   return { success: true, message: 'Extra registrado correctamente.' };
+}
+
+export async function updateExtraWorkAction(payload: unknown) {
+  const parsed = extraWorkUpdateSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(parsed.error.errors[0]?.message ?? 'No se pudo validar el extra a editar.');
+  }
+
+  await updateExtraWorkEntry(parsed.data);
+  revalidatePath('/extras');
+
+  return { success: true, message: 'Extra actualizado correctamente.' };
+}
+
+export async function deleteExtraWorkAction(payload: unknown) {
+  const parsed = extraWorkDeleteSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(parsed.error.errors[0]?.message ?? 'No se pudo validar el extra a eliminar.');
+  }
+
+  await deleteExtraWorkEntry(parsed.data);
+  revalidatePath('/extras');
+
+  return { success: true, message: 'Extra eliminado correctamente.' };
 }
 
 export async function markExtraWorkAsPaidAction(payload: unknown) {
