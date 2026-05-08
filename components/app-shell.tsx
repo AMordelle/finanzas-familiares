@@ -1,3 +1,4 @@
+import React from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 
@@ -7,10 +8,6 @@ const nav = [
   ['Cuentas', '/cuentas'],
   ['Movimientos', '/movimientos'],
   ['Extras', '/extras'],
-  ['Análisis', '/analisis'],
-  ['Simulación', '/simulacion'],
-  ['Calendario', '/calendario'],
-  ['Objetivos', '/objetivos'],
   ['Cierre', '/cierre']
 ] as const;
 
