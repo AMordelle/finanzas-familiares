@@ -3,149 +3,8 @@ import { AppShell } from '@/components/app-shell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { createFinancialClosureAction, deleteFinancialClosureAction, recalculateFinancialClosureAction } from '@/app/cierre/actions';
-import { ClosureActions } from '@/components/cierre/closure-actions';
-import { getFinancialClosures, type FinancialClosure, type FinancialClosureType } from '@/lib/db/queries';
-
-const currency = new Intl.NumberFormat('es-MX', {
-  style: 'currency',
-  currency: 'MXN'
-});
-
-function formatMoney(value: number) {
-  return currency.format(value);
-}
-
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00.000Z`));
-}
-
-function typeLabel(type: FinancialClosureType) {
-  return type === 'weekly' ? 'Semanal' : 'Mensual';
-}
-
-function AmountMetric({ label, value }: { label: string; value: number }) {
-  const tone = value > 0 ? 'text-emerald-700' : value < 0 ? 'text-rose-700' : 'text-slate-700';
-  return (
-    <div className="rounded-xl bg-slate-50 p-3">
-      <dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt>
-      <dd className={`mt-1 text-lg font-semibold ${tone}`}>{formatMoney(value)}</dd>
-    </div>
-  );
-}
-
-function AccountChangesTable({ accounts }: { accounts: FinancialClosure['accountSnapshots'] }) {
-  if (!accounts.length) {
-    return <p className="mt-3 text-sm text-slate-600">No hay cuentas en esta sección.</p>;
-  }
-
-  return (
-    <div className="mt-3 overflow-x-auto">
-      <table className="min-w-full divide-y divide-slate-200 text-sm">
-        <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-          <tr>
-            <th className="px-3 py-2">Cuenta</th>
-            <th className="px-3 py-2">Saldo inicial</th>
-            <th className="px-3 py-2">Saldo final</th>
-            <th className="px-3 py-2">Diferencia</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-100">
-          {accounts.map((account) => (
-            <tr key={account.accountId}>
-              <td className="px-3 py-2 font-medium text-slate-800">
-                {account.accountName}
-                <span className="ml-2 text-xs font-normal text-slate-500">{account.accountType}</span>
-              </td>
-              <td className="px-3 py-2">{formatMoney(account.openingBalance)}</td>
-              <td className="px-3 py-2">{formatMoney(account.closingBalance)}</td>
-              <td className={account.difference < 0 ? 'px-3 py-2 text-rose-700' : 'px-3 py-2 text-emerald-700'}>{formatMoney(account.difference)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function ClosureCard({ closure }: { closure: FinancialClosure }) {
-  const operationalAccounts = closure.accountSnapshots.filter((account) => account.accountScope === 'operational');
-  const complementaryAccounts = closure.accountSnapshots.filter((account) => account.accountScope === 'complementary');
-
-  return (
-    <Card className="space-y-4">
-      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-        <div>
-          <p className="text-sm font-semibold text-primaria">Tipo: {typeLabel(closure.type)}</p>
-          <h3 className="text-xl font-semibold text-slate-900">
-            {formatDate(closure.periodStart)} — {formatDate(closure.periodEnd)}
-          </h3>
-        </div>
-        <div className="flex flex-col gap-2 md:items-end">
-          <p className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-800">
-            Dinero operativo final: {formatMoney(closure.closingTotal)}
-          </p>
-          <ClosureActions
-            closureId={closure.id}
-            recalculateAction={recalculateFinancialClosureAction}
-            deleteAction={deleteFinancialClosureAction}
-          />
-        </div>
-      </div>
-
-      <div>
-        <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Dinero operativo real</h4>
-        <dl className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <AmountMetric label="Total inicial" value={closure.openingTotal} />
-          <AmountMetric label="Total final" value={closure.closingTotal} />
-          <AmountMetric label="Cambio neto" value={closure.netChange} />
-          <AmountMetric label="Ingresos del periodo" value={closure.incomeTotal} />
-          <AmountMetric label="Gastos del periodo" value={closure.expenseTotal} />
-          <AmountMetric label="Balance del periodo" value={closure.netFlow} />
-        </dl>
-        <p className="mt-2 text-xs text-slate-500">El total inicial/final usa solo cuentas operativas líquidas; las complementarias se muestran aparte.</p>
-      </div>
-
-      <details className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
-        <summary className="cursor-pointer font-semibold text-emerald-900">Ver cuentas complementarias</summary>
-        <AccountChangesTable accounts={complementaryAccounts} />
-      </details>
-
-      <details className="rounded-xl border border-slate-200 p-4">
-        <summary className="cursor-pointer font-semibold text-slate-800">Ver detalle del cierre</summary>
-        <div className="mt-4 space-y-5">
-          <section>
-            <h4 className="font-semibold text-slate-900">Resumen general</h4>
-            <dl className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <AmountMetric label="Total inicial" value={closure.openingTotal} />
-              <AmountMetric label="Total final" value={closure.closingTotal} />
-              <AmountMetric label="Cambio neto" value={closure.netChange} />
-              <AmountMetric label="Ingresos" value={closure.incomeTotal} />
-              <AmountMetric label="Gastos" value={closure.expenseTotal} />
-              <AmountMetric label="Balance" value={closure.netFlow} />
-            </dl>
-          </section>
-
-          <section>
-            <h4 className="font-semibold text-slate-900">Cuentas operativas</h4>
-            <AccountChangesTable accounts={operationalAccounts} />
-          </section>
-
-          <section>
-            <h4 className="font-semibold text-slate-900">Cuentas complementarias</h4>
-            <AccountChangesTable accounts={complementaryAccounts} />
-          </section>
-
-          {closure.notes ? (
-            <section>
-              <h4 className="font-semibold text-slate-900">Notas</h4>
-              <p className="mt-2 whitespace-pre-line rounded-xl bg-amber-50 p-3 text-sm text-slate-700">{closure.notes}</p>
-            </section>
-          ) : null}
-        </div>
-      </details>
-    </Card>
-  );
-}
+import { ClosureCard } from '@/components/cierre/closure-card';
+import { getFinancialClosures } from '@/lib/db/queries';
 
 export default async function CierrePage() {
   const { hasHousehold, closures } = await getFinancialClosures();
@@ -198,11 +57,18 @@ export default async function CierrePage() {
         <section className="space-y-4">
           <div>
             <h2 className="text-xl font-semibold text-slate-900">Cierres creados</h2>
-            <p className="text-sm text-slate-600">Los valores se guardan como snapshot al momento de crear cada cierre.</p>
+            <p className="text-sm text-slate-600">Cada cierre inicia compacto. Abre solo el periodo que quieras revisar.</p>
           </div>
 
           {closures.length ? (
-            closures.map((closure) => <ClosureCard key={closure.id} closure={closure} />)
+            closures.map((closure) => (
+              <ClosureCard
+                key={closure.id}
+                closure={closure}
+                recalculateAction={recalculateFinancialClosureAction}
+                deleteAction={deleteFinancialClosureAction}
+              />
+            ))
           ) : (
             <Card>
               <p className="text-sm text-slate-600">Aún no hay cierres creados. Usa el formulario para guardar el primero.</p>

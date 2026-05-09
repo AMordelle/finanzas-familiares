@@ -377,8 +377,30 @@ describe('cierres financieros', () => {
   });
 });
 
+const sampleClosure = {
+  id: 'closure-1',
+  householdId: 'house-1',
+  type: 'weekly' as const,
+  periodStart: '2026-05-01',
+  periodEnd: '2026-05-07',
+  openingTotal: 1600,
+  closingTotal: 1900,
+  netChange: 300,
+  incomeTotal: 500,
+  expenseTotal: 200,
+  netFlow: 300,
+  accountSnapshots: [
+    { accountId: 'cash-1', accountName: 'Efectivo', accountType: 'operational_cash', accountScope: 'operational' as const, openingBalance: 1000, closingBalance: 1200, difference: 200 },
+    { accountId: 'card-1', accountName: 'TDC BBVA', accountType: 'credit_card', accountScope: 'complementary' as const, openingBalance: 4500, closingBalance: 5000, difference: 500 }
+  ],
+  movementSummary: null,
+  notes: 'Semana de prueba',
+  createdAt: '2026-05-08T00:00:00.000Z',
+  updatedAt: '2026-05-08T00:00:00.000Z'
+};
+
 describe('CierrePage', () => {
-  it('renderiza pantalla /cierre con formulario y lista', async () => {
+  it('renderiza cada cierre en modo compacto dentro del historial', async () => {
     vi.resetModules();
     vi.doMock('@/components/app-shell', () => ({
       AppShell: ({ title, children }: { title: string; children: React.ReactNode }) => <main><h1>{title}</h1>{children}</main>
@@ -387,27 +409,7 @@ describe('CierrePage', () => {
     vi.doMock('@/lib/db/queries', () => ({
       getFinancialClosures: vi.fn(async () => ({
         hasHousehold: true,
-        closures: [{
-          id: 'closure-1',
-          householdId: 'house-1',
-          type: 'weekly',
-          periodStart: '2026-05-01',
-          periodEnd: '2026-05-07',
-          openingTotal: 1600,
-          closingTotal: 1900,
-          netChange: 300,
-          incomeTotal: 500,
-          expenseTotal: 200,
-          netFlow: 300,
-          accountSnapshots: [
-            { accountId: 'cash-1', accountName: 'Efectivo', accountType: 'operational_cash', accountScope: 'operational', openingBalance: 1000, closingBalance: 1200, difference: 200 },
-            { accountId: 'card-1', accountName: 'TDC BBVA', accountType: 'credit_card', accountScope: 'complementary', openingBalance: 4500, closingBalance: 5000, difference: 500 }
-          ],
-          movementSummary: null,
-          notes: 'Semana de prueba',
-          createdAt: '2026-05-08T00:00:00.000Z',
-          updatedAt: '2026-05-08T00:00:00.000Z'
-        }]
+        closures: [sampleClosure]
       }))
     }));
     const CierrePage = (await import('@/app/cierre/page')).default;
@@ -415,20 +417,65 @@ describe('CierrePage', () => {
     const html = renderToStaticMarkup(await CierrePage());
 
     expect(html).toContain('Cierre');
-    expect(html).toContain('Compara cómo empezaste y cómo terminaste un periodo.');
     expect(html).toContain('Tipo de cierre');
     expect(html).toContain('Fecha inicial');
     expect(html).toContain('Fecha final');
     expect(html).toContain('Crear cierre');
     expect(html).toContain('Cierres creados');
     expect(html).toContain('Semanal');
+    expect(html).toContain('1 may 2026 — 7 may 2026');
+    expect(html).toContain('Dinero operativo final:');
+    expect(html).toContain('$1,900.00');
+    expect(html).toContain('Ver cierre');
+
+    expect(html).not.toContain('Total inicial');
+    expect(html).not.toContain('Cambio neto');
+    expect(html).not.toContain('Ingresos del periodo');
+    expect(html).not.toContain('Gastos del periodo');
+    expect(html).not.toContain('Balance del periodo');
+    expect(html).not.toContain('Ver cuentas complementarias');
+    expect(html).not.toContain('Ver detalle del cierre');
+    expect(html).not.toContain('Recalcular cierre');
+    expect(html).not.toContain('Eliminar cierre');
+    expect(html).not.toContain('TDC BBVA');
+  });
+});
+
+describe('ClosureCard desplegado', () => {
+  it('muestra análisis completo, acciones y métricas operativas en orden al abrir', async () => {
+    const { ClosureCard } = await import('@/components/cierre/closure-card');
+    const noopAction = vi.fn(async () => undefined);
+
+    const html = renderToStaticMarkup(
+      <ClosureCard
+        closure={sampleClosure}
+        recalculateAction={noopAction}
+        deleteAction={noopAction}
+        initialOpen
+      />
+    );
+
+    expect(html).toContain('Ocultar cierre');
     expect(html).toContain('Dinero operativo real');
     expect(html).toContain('Ver cuentas complementarias');
-    expect(html).toContain('Cuentas operativas');
-    expect(html).toContain('Cuentas complementarias');
+    expect(html).toContain('Ver detalle del cierre');
     expect(html).toContain('Recalcular cierre');
     expect(html).toContain('Eliminar cierre');
     expect(html).toContain('Efectivo');
     expect(html).toContain('TDC BBVA');
+    expect(html).toContain('grid grid-cols-1 gap-3 md:grid-cols-3');
+
+    const metricOrder = [
+      'Total inicial',
+      'Total final',
+      'Cambio neto',
+      'Ingresos del periodo',
+      'Gastos del periodo',
+      'Balance del periodo'
+    ];
+    const firstMetricPositions = metricOrder.map((label) => html.indexOf(label));
+
+    expect(firstMetricPositions.every((position) => position >= 0)).toBe(true);
+    expect([...firstMetricPositions].sort((a, b) => a - b)).toEqual(firstMetricPositions);
   });
 });
