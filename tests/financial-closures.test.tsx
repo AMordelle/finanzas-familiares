@@ -186,6 +186,38 @@ function createFakeSupabase(dbOverrides: Partial<Db> = {}) {
   };
 }
 
+
+function addHistoricalPostPeriodFixture(fakeClient: ReturnType<typeof createFakeSupabase>) {
+  fakeClient.db.accounts = fakeClient.db.accounts.map((account) => {
+    if (account.id === 'cash-1') return { ...account, balance: '1800.00' };
+    if (account.id === 'bank-1') return { ...account, balance: '600.00' };
+    if (account.id === 'fund-1') return { ...account, balance: '3300.00' };
+    if (account.id === 'other-1') return { ...account, balance: '10699.00' };
+    return account;
+  });
+
+  fakeClient.db.transaction_groups.push(
+    { id: 'post-income-cash', household_id: 'house-1', note: 'Ingreso posterior efectivo', created_at: '2026-05-10T00:00:00.000Z' },
+    { id: 'post-expense-cash', household_id: 'house-1', note: 'Gasto posterior efectivo', created_at: '2026-05-11T00:00:00.000Z' },
+    { id: 'post-income-bank', household_id: 'house-1', note: 'Ingreso posterior banco', created_at: '2026-05-12T00:00:00.000Z' },
+    { id: 'post-fund-transfer', household_id: 'house-1', note: 'Aporte posterior fondo', created_at: '2026-05-13T00:00:00.000Z' },
+    { id: 'foreign-post-income', household_id: 'house-2', note: 'Ingreso posterior otro hogar', created_at: '2026-05-10T00:00:00.000Z' }
+  );
+
+  fakeClient.db.transactions.push(
+    { id: 'tx-9', group_id: 'post-income-cash', account_id: 'cash-1', type: 'debit', category: 'entrada_cuenta', amount: '1000.00', happened_at: '2026-05-10T12:00:00.000Z' },
+    { id: 'tx-10', group_id: 'post-income-cash', account_id: null, type: 'credit', category: 'ingreso_extra', amount: '1000.00', happened_at: '2026-05-10T12:00:00.000Z' },
+    { id: 'tx-11', group_id: 'post-expense-cash', account_id: null, type: 'debit', category: 'comida', amount: '400.00', happened_at: '2026-05-11T12:00:00.000Z' },
+    { id: 'tx-12', group_id: 'post-expense-cash', account_id: 'cash-1', type: 'credit', category: 'salida_cuenta', amount: '400.00', happened_at: '2026-05-11T12:00:00.000Z' },
+    { id: 'tx-13', group_id: 'post-income-bank', account_id: 'bank-1', type: 'debit', category: 'entrada_cuenta', amount: '200.00', happened_at: '2026-05-12T12:00:00.000Z' },
+    { id: 'tx-14', group_id: 'post-income-bank', account_id: null, type: 'credit', category: 'ingreso_extra', amount: '200.00', happened_at: '2026-05-12T12:00:00.000Z' },
+    { id: 'tx-15', group_id: 'post-fund-transfer', account_id: 'fund-1', type: 'debit', category: 'ahorro_meta', amount: '300.00', happened_at: '2026-05-13T12:00:00.000Z' },
+    { id: 'tx-16', group_id: 'post-fund-transfer', account_id: 'bank-1', type: 'credit', category: 'salida_cuenta', amount: '300.00', happened_at: '2026-05-13T12:00:00.000Z' },
+    { id: 'tx-17', group_id: 'foreign-post-income', account_id: 'other-1', type: 'debit', category: 'entrada_cuenta', amount: '700.00', happened_at: '2026-05-10T12:00:00.000Z' },
+    { id: 'tx-18', group_id: 'foreign-post-income', account_id: null, type: 'credit', category: 'ingreso_otro', amount: '700.00', happened_at: '2026-05-10T12:00:00.000Z' }
+  );
+}
+
 describe('cierres financieros', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -215,6 +247,86 @@ describe('cierres financieros', () => {
     ]));
     expect(closure.accountSnapshots.reduce((acc, account) => acc + account.closingBalance, 0)).toBe(10800);
     expect(fakeClient.db.financial_closures).toHaveLength(1);
+  });
+
+  it('reconstruye saldos históricos deshaciendo movimientos posteriores al cierre', async () => {
+    const fakeClient = createFakeSupabase();
+    addHistoricalPostPeriodFixture(fakeClient);
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createFinancialClosure } = await import('@/lib/db/queries');
+
+    const firstWeek = await createFinancialClosure({ type: 'weekly', periodStart: '2026-05-01', periodEnd: '2026-05-07' });
+    const secondWeek = await createFinancialClosure({ type: 'weekly', periodStart: '2026-05-08', periodEnd: '2026-05-14' });
+
+    expect(firstWeek.openingTotal).toBe(1600);
+    expect(firstWeek.closingTotal).toBe(1900);
+    expect(firstWeek.netChange).toBe(300);
+    expect(firstWeek.accountSnapshots).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 'cash-1', openingBalance: 1000, closingBalance: 1200, difference: 200 }),
+      expect.objectContaining({ accountId: 'bank-1', openingBalance: 600, closingBalance: 700, difference: 100 }),
+      expect.objectContaining({ accountId: 'fund-1', accountScope: 'complementary', openingBalance: 3000, closingBalance: 3000, difference: 0 })
+    ]));
+
+    expect(secondWeek.openingTotal).toBe(1900);
+    expect(secondWeek.closingTotal).toBe(2400);
+    expect(secondWeek.netChange).toBe(500);
+    expect(secondWeek.accountSnapshots).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 'cash-1', openingBalance: 1200, closingBalance: 1800, difference: 600 }),
+      expect.objectContaining({ accountId: 'bank-1', openingBalance: 700, closingBalance: 600, difference: -100 }),
+      expect.objectContaining({ accountId: 'fund-1', accountScope: 'complementary', openingBalance: 3000, closingBalance: 3300, difference: 300 })
+    ]));
+    expect(firstWeek.closingTotal).not.toBe(secondWeek.closingTotal);
+    expect(firstWeek.openingTotal).not.toBe(secondWeek.openingTotal);
+  });
+
+  it('no mezcla movimientos posteriores de otros hogares al reconstruir cierres históricos', async () => {
+    const fakeClient = createFakeSupabase();
+    addHistoricalPostPeriodFixture(fakeClient);
+    fakeClient.db.transaction_groups.push({ id: 'foreign-cash-noise', household_id: 'house-2', note: 'Ruido de otro hogar', created_at: '2026-05-10T00:00:00.000Z' });
+    fakeClient.db.transactions.push(
+      { id: 'tx-19', group_id: 'foreign-cash-noise', account_id: 'cash-1', type: 'debit', category: 'entrada_cuenta', amount: '9999.00', happened_at: '2026-05-10T12:00:00.000Z' },
+      { id: 'tx-20', group_id: 'foreign-cash-noise', account_id: null, type: 'credit', category: 'ingreso_otro', amount: '9999.00', happened_at: '2026-05-10T12:00:00.000Z' }
+    );
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createFinancialClosure } = await import('@/lib/db/queries');
+
+    const closure = await createFinancialClosure({ type: 'weekly', periodStart: '2026-05-01', periodEnd: '2026-05-07' });
+
+    expect(closure.closingTotal).toBe(1900);
+    expect(closure.accountSnapshots).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 'cash-1', closingBalance: 1200 }),
+      expect.objectContaining({ accountId: 'bank-1', closingBalance: 700 })
+    ]));
+  });
+
+  it('usa saldos actuales como cierre histórico cuando no hay movimientos posteriores', async () => {
+    const fakeClient = createFakeSupabase();
+    addHistoricalPostPeriodFixture(fakeClient);
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createFinancialClosure } = await import('@/lib/db/queries');
+
+    const closure = await createFinancialClosure({ type: 'weekly', periodStart: '2026-05-08', periodEnd: '2026-05-14' });
+
+    expect(closure.closingTotal).toBe(2400);
+    expect(closure.accountSnapshots).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 'cash-1', closingBalance: 1800 }),
+      expect.objectContaining({ accountId: 'bank-1', closingBalance: 600 }),
+      expect.objectContaining({ accountId: 'fund-1', closingBalance: 3300 })
+    ]));
+  });
+
+  it('la reconstrucción histórica no modifica balances reales ni movimientos', async () => {
+    const fakeClient = createFakeSupabase();
+    addHistoricalPostPeriodFixture(fakeClient);
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createFinancialClosure } = await import('@/lib/db/queries');
+    const accountsBefore = JSON.stringify(fakeClient.db.accounts);
+    const transactionsBefore = JSON.stringify(fakeClient.db.transactions);
+
+    await createFinancialClosure({ type: 'weekly', periodStart: '2026-05-01', periodEnd: '2026-05-07' });
+
+    expect(JSON.stringify(fakeClient.db.accounts)).toBe(accountsBefore);
+    expect(JSON.stringify(fakeClient.db.transactions)).toBe(transactionsBefore);
   });
 
   it('crea cierre mensual', async () => {
@@ -278,6 +390,52 @@ describe('cierres financieros', () => {
 
     expect(closure.closingTotal).toBe(1900);
     expect(closure.accountSnapshots.filter((account) => account.accountScope === 'complementary').map((account) => account.accountId)).toEqual(['card-1', 'fund-1', 'receivable-1']);
+  });
+
+  it('recalcular cierre corrige snapshots viejos con reconstrucción histórica', async () => {
+    const fakeClient = createFakeSupabase({
+      financial_closures: [{
+        id: 'closure-recalc-history',
+        household_id: 'house-1',
+        type: 'weekly',
+        period_start: '2026-05-01',
+        period_end: '2026-05-07',
+        opening_total: '9999.00',
+        closing_total: '9999.00',
+        net_change: '0.00',
+        income_total: '0.00',
+        expense_total: '0.00',
+        net_flow: '0.00',
+        account_snapshots: [
+          { accountId: 'cash-1', accountName: 'Efectivo', accountType: 'operational_cash', accountScope: 'operational', openingBalance: 9999, closingBalance: 1800, difference: 0 }
+        ],
+        movement_summary: null,
+        notes: 'Snapshot viejo',
+        created_at: '2026-05-08T00:00:00.000Z',
+        updated_at: '2026-05-08T00:00:00.000Z'
+      }]
+    });
+    addHistoricalPostPeriodFixture(fakeClient);
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { recalculateFinancialClosure } = await import('@/lib/db/queries');
+    const accountsBefore = JSON.stringify(fakeClient.db.accounts);
+    const transactionsBefore = JSON.stringify(fakeClient.db.transactions);
+
+    const closure = await recalculateFinancialClosure({ closureId: 'closure-recalc-history' });
+
+    expect(closure.id).toBe('closure-recalc-history');
+    expect(closure.notes).toBe('Snapshot viejo');
+    expect(closure.openingTotal).toBe(1600);
+    expect(closure.closingTotal).toBe(1900);
+    expect(closure.netChange).toBe(300);
+    expect(closure.accountSnapshots).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 'cash-1', openingBalance: 1000, closingBalance: 1200, difference: 200 }),
+      expect.objectContaining({ accountId: 'bank-1', openingBalance: 600, closingBalance: 700, difference: 100 }),
+      expect.objectContaining({ accountId: 'fund-1', accountScope: 'complementary', openingBalance: 3000, closingBalance: 3000, difference: 0 })
+    ]));
+    expect(fakeClient.db.financial_closures[0].closing_total).toBe('1900.00');
+    expect(JSON.stringify(fakeClient.db.accounts)).toBe(accountsBefore);
+    expect(JSON.stringify(fakeClient.db.transactions)).toBe(transactionsBefore);
   });
 
   it('recalcular cierre actualiza snapshot y mantiene el mismo id', async () => {
