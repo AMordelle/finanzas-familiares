@@ -67,6 +67,10 @@ export const financialClosureCreateSchema = z.object({
   }
 });
 
+export const financialClosureActionSchema = z.object({
+  closureId: z.string().min(1, 'El cierre es obligatorio.')
+});
+
 
 const extraWorkTypeValues = ['overtime', 'piecework', 'meals'] as const;
 const extraWorkStatusValues = ['pending', 'paid'] as const;
@@ -163,10 +167,13 @@ export type MovementsHistoryData = {
 
 export type FinancialClosureType = (typeof financialClosureTypeValues)[number];
 
+export type FinancialClosureAccountScope = 'operational' | 'complementary';
+
 export type FinancialClosureAccountSnapshot = {
   accountId: string;
   accountName: string;
   accountType: string;
+  accountScope: FinancialClosureAccountScope;
   openingBalance: number;
   closingBalance: number;
   difference: number;
@@ -1727,7 +1734,7 @@ function summarizePeriodMovements(groupedLines: Record<string, ClosureTransactio
     const creditLine = lines.find((line) => line.type === 'credit');
     const amount = Number(debitLine?.amount ?? creditLine?.amount ?? 0);
 
-    // Criterio conservador v1: se consideran ingresos/gastos solo los movimientos
+    // Criterio conservador v2: se consideran ingresos/gastos solo los movimientos
     // clasificados como ingreso o gasto por las categorías contables existentes.
     // Transferencias internas, aportes a objetivos, préstamos y pagos de deuda no se
     // suman al flujo neto para evitar inflar ingresos/gastos del hogar.
@@ -1746,7 +1753,7 @@ function summarizePeriodMovements(groupedLines: Record<string, ClosureTransactio
     expenseTotal: roundMoney(expenseTotal),
     netFlow: roundMoney(incomeTotal - expenseTotal),
     movementSummary: {
-      criteria: 'Cierre v1 cuenta solo movimientos inferidos como ingreso o gasto; transferencias internas, objetivos, préstamos y deuda quedan fuera del flujo neto.',
+      criteria: 'Cierre v2 cuenta solo movimientos inferidos como ingreso o gasto; transferencias internas, objetivos, préstamos y deuda quedan fuera del flujo neto.',
       movementCount: Object.keys(groupedLines).length,
       incomeMovementCount,
       expenseMovementCount
@@ -1794,6 +1801,57 @@ type FinancialClosureRow = {
   updated_at: string;
 };
 
+type FinancialClosureCalculationInput = {
+  householdId: string;
+  type: FinancialClosureType;
+  periodStart: string;
+  periodEnd: string;
+  notes?: string | null;
+};
+
+type FinancialClosurePersistencePayload = {
+  household_id: string;
+  type: FinancialClosureType;
+  period_start: string;
+  period_end: string;
+  opening_total: string;
+  closing_total: string;
+  net_change: string;
+  income_total: string;
+  expense_total: string;
+  net_flow: string;
+  account_snapshots: FinancialClosureAccountSnapshot[];
+  movement_summary: FinancialClosureMovementSummary;
+  notes: string | null;
+  updated_at: string;
+};
+
+function isOperationalClosureAccountType(type: string) {
+  const normalized = type.toLowerCase().trim();
+
+  // Dinero operativo real v2: solo cuentas que representan efectivo o dinero
+  // líquido de uso diario. Incluye los nombres históricos y actuales del proyecto
+  // para efectivo/cuentas operativas, y excluye explícitamente crédito, fondos,
+  // inversiones, receivables, deudas y cuentas técnicas para que el resumen
+  // principal responda "¿cómo terminó mi dinero operativo real?".
+  const operationalTypes = new Set([
+    'operativa',
+    'operational_cash',
+    'cash',
+    'debit',
+    'debit_card',
+    'checking',
+    'bank_account',
+    'operative'
+  ]);
+
+  return operationalTypes.has(normalized);
+}
+
+export function getFinancialClosureAccountScope(accountType: string): FinancialClosureAccountScope {
+  return isOperationalClosureAccountType(accountType) ? 'operational' : 'complementary';
+}
+
 function mapFinancialClosure(row: FinancialClosureRow): FinancialClosure {
   return {
     id: row.id,
@@ -1807,7 +1865,10 @@ function mapFinancialClosure(row: FinancialClosureRow): FinancialClosure {
     incomeTotal: Number(row.income_total),
     expenseTotal: Number(row.expense_total),
     netFlow: Number(row.net_flow),
-    accountSnapshots: (row.account_snapshots ?? []) as FinancialClosureAccountSnapshot[],
+    accountSnapshots: ((row.account_snapshots ?? []) as Array<FinancialClosureAccountSnapshot & { accountScope?: FinancialClosureAccountScope }>).map((snapshot) => ({
+      ...snapshot,
+      accountScope: snapshot.accountScope ?? getFinancialClosureAccountScope(snapshot.accountType)
+    })),
     movementSummary: (row.movement_summary ?? null) as FinancialClosureMovementSummary | null,
     notes: row.notes ?? null,
     createdAt: row.created_at,
@@ -1815,19 +1876,13 @@ function mapFinancialClosure(row: FinancialClosureRow): FinancialClosure {
   };
 }
 
-export async function createFinancialClosure(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin): Promise<FinancialClosure> {
-  const householdId = await getDefaultHouseholdId(client);
-  if (!householdId) {
-    throw new Error('No existe un hogar configurado para crear cierres.');
-  }
-
-  const input = financialClosureCreateSchema.parse(rawInput);
+async function buildFinancialClosurePayload(input: FinancialClosureCalculationInput, client: SupabaseClientLike): Promise<FinancialClosurePersistencePayload> {
   const { start, end } = dateRangeToTimestamps(input.periodStart, input.periodEnd);
 
   const { data: accountsData, error: accountsError } = await client
     .from('accounts')
     .select('id,name,type,balance,household_id,is_active')
-    .eq('household_id', householdId);
+    .eq('household_id', input.householdId);
 
   if (accountsError) {
     throw new Error(`No fue posible leer cuentas para el cierre: ${accountsError.message}`);
@@ -1846,7 +1901,7 @@ export async function createFinancialClosure(rawInput: unknown, client: Supabase
   const { data: groupsData, error: groupsError } = await client
     .from('transaction_groups')
     .select('id,household_id,note,created_at')
-    .eq('household_id', householdId);
+    .eq('household_id', input.householdId);
 
   if (groupsError) {
     throw new Error(`No fue posible leer movimientos para el cierre: ${groupsError.message}`);
@@ -1871,27 +1926,29 @@ export async function createFinancialClosure(rawInput: unknown, client: Supabase
   const periodDeltas = calculatePeriodAccountDeltas(groupedLines, accountList);
   const accountSnapshots = accountList.map((account) => {
     const closingBalance = roundMoney(account.balance);
-    // Aproximación v1: el saldo inicial se reconstruye restando del saldo actual
-    // el efecto neto de los movimientos del periodo, usando las reglas actuales de
-    // actualización de saldos. Esto conserva una foto consistente al crear el cierre,
-    // aunque no intenta reconstruir estados históricos fuera del periodo elegido.
+    // Aproximación v2: el saldo inicial de cada cuenta se reconstruye restando
+    // del saldo actual el efecto neto de movimientos del periodo, usando las
+    // reglas actuales de actualización de saldos. El resumen principal suma solo
+    // snapshots operativos; las cuentas complementarias se conservan para detalle.
     const openingBalance = roundMoney(closingBalance - (periodDeltas.get(account.id) ?? 0));
     return {
       accountId: account.id,
       accountName: account.name,
       accountType: account.type,
+      accountScope: getFinancialClosureAccountScope(account.type),
       openingBalance,
       closingBalance,
       difference: roundMoney(closingBalance - openingBalance)
     };
   });
 
-  const closingTotal = roundMoney(accountSnapshots.reduce((acc, account) => acc + account.closingBalance, 0));
-  const openingTotal = roundMoney(accountSnapshots.reduce((acc, account) => acc + account.openingBalance, 0));
+  const operationalSnapshots = accountSnapshots.filter((account) => account.accountScope === 'operational');
+  const closingTotal = roundMoney(operationalSnapshots.reduce((acc, account) => acc + account.closingBalance, 0));
+  const openingTotal = roundMoney(operationalSnapshots.reduce((acc, account) => acc + account.openingBalance, 0));
   const movementTotals = summarizePeriodMovements(groupedLines);
 
-  const payload = {
-    household_id: householdId,
+  return {
+    household_id: input.householdId,
     type: input.type,
     period_start: input.periodStart,
     period_end: input.periodEnd,
@@ -1906,6 +1963,37 @@ export async function createFinancialClosure(rawInput: unknown, client: Supabase
     notes: input.notes?.trim() ? input.notes.trim() : null,
     updated_at: new Date().toISOString()
   };
+}
+
+async function getOwnedFinancialClosureRow(householdId: string, closureId: string, client: SupabaseClientLike) {
+  const { data, error } = await client
+    .from('financial_closures')
+    .select('id,household_id,type,period_start,period_end,opening_total,closing_total,net_change,income_total,expense_total,net_flow,account_snapshots,movement_summary,notes,created_at,updated_at')
+    .eq('household_id', householdId)
+    .eq('id', closureId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`No fue posible leer el cierre financiero: ${error.message}`);
+  }
+
+  return data ? (data as FinancialClosureRow) : null;
+}
+
+export async function createFinancialClosure(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin): Promise<FinancialClosure> {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) {
+    throw new Error('No existe un hogar configurado para crear cierres.');
+  }
+
+  const input = financialClosureCreateSchema.parse(rawInput);
+  const payload = await buildFinancialClosurePayload({
+    householdId,
+    type: input.type,
+    periodStart: input.periodStart,
+    periodEnd: input.periodEnd,
+    notes: input.notes
+  }, client);
 
   const { data, error } = await client
     .from('financial_closures')
@@ -1917,7 +2005,75 @@ export async function createFinancialClosure(rawInput: unknown, client: Supabase
     throw new Error(error?.message ?? 'No fue posible guardar el cierre financiero.');
   }
 
-  return mapFinancialClosure(data);
+  return mapFinancialClosure(data as FinancialClosureRow);
+}
+
+export async function recalculateFinancialClosure(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin): Promise<FinancialClosure> {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) {
+    throw new Error('No existe un hogar configurado para recalcular cierres.');
+  }
+
+  const input = financialClosureActionSchema.parse(rawInput);
+  const existing = await getOwnedFinancialClosureRow(householdId, input.closureId, client);
+  if (!existing) {
+    throw new Error('No se encontró el cierre en este hogar.');
+  }
+
+  const payload = await buildFinancialClosurePayload({
+    householdId,
+    type: existing.type,
+    periodStart: existing.period_start,
+    periodEnd: existing.period_end,
+    notes: existing.notes
+  }, client);
+
+  const { data, error } = await client
+    .from('financial_closures')
+    .update({
+      opening_total: payload.opening_total,
+      closing_total: payload.closing_total,
+      net_change: payload.net_change,
+      income_total: payload.income_total,
+      expense_total: payload.expense_total,
+      net_flow: payload.net_flow,
+      account_snapshots: payload.account_snapshots,
+      movement_summary: payload.movement_summary,
+      updated_at: payload.updated_at
+    })
+    .eq('id', existing.id)
+    .eq('household_id', householdId)
+    .select('id,household_id,type,period_start,period_end,opening_total,closing_total,net_change,income_total,expense_total,net_flow,account_snapshots,movement_summary,notes,created_at,updated_at')
+    .single();
+
+  if (error || !data) {
+    throw new Error(error?.message ?? 'No fue posible recalcular el cierre financiero.');
+  }
+
+  return mapFinancialClosure(data as FinancialClosureRow);
+}
+
+export async function deleteFinancialClosure(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) {
+    throw new Error('No existe un hogar configurado para eliminar cierres.');
+  }
+
+  const input = financialClosureActionSchema.parse(rawInput);
+  const existing = await getOwnedFinancialClosureRow(householdId, input.closureId, client);
+  if (!existing) {
+    throw new Error('No se encontró el cierre en este hogar.');
+  }
+
+  const { error } = await client
+    .from('financial_closures')
+    .delete()
+    .eq('id', existing.id)
+    .eq('household_id', householdId);
+
+  if (error) {
+    throw new Error(`No fue posible eliminar el cierre financiero: ${error.message}`);
+  }
 }
 
 export async function getFinancialClosures(client: SupabaseClientLike = supabaseAdmin): Promise<FinancialClosuresData> {
@@ -1947,19 +2103,10 @@ export async function getFinancialClosureDetail(closureId: string, client: Supab
   const householdId = await getDefaultHouseholdId(client);
   if (!householdId) return null;
 
-  const { data, error } = await client
-    .from('financial_closures')
-    .select('id,household_id,type,period_start,period_end,opening_total,closing_total,net_change,income_total,expense_total,net_flow,account_snapshots,movement_summary,notes,created_at,updated_at')
-    .eq('household_id', householdId)
-    .eq('id', closureId)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(`No fue posible leer el detalle del cierre: ${error.message}`);
-  }
-
+  const data = await getOwnedFinancialClosureRow(householdId, closureId, client);
   return data ? mapFinancialClosure(data) : null;
 }
+
 
 async function persistAccountDeltas(householdId: string, deltas: Map<string, number>) {
   if (!deltas.size) return;

@@ -125,6 +125,12 @@ class FakeQueryBuilder {
       return { data: updated, error: null };
     }
 
+    if (this.action === 'delete') {
+      const deleted = rows.filter((row) => this.matches(row));
+      this.db[this.table] = rows.filter((row) => !this.matches(row));
+      return { data: deleted, error: null };
+    }
+
     let data = rows.filter((row) => this.matches(row));
     for (const order of [...this.orderBy].reverse()) {
       data = [...data].sort((a, b) => {
@@ -144,6 +150,9 @@ function createFakeSupabase(dbOverrides: Partial<Db> = {}) {
     accounts: [
       { id: 'cash-1', household_id: 'house-1', name: 'Efectivo', type: 'operational_cash', balance: '1200.00', is_active: true },
       { id: 'bank-1', household_id: 'house-1', name: 'Banco', type: 'operational_cash', balance: '700.00', is_active: true },
+      { id: 'card-1', household_id: 'house-1', name: 'TDC BBVA', type: 'credit_card', balance: '5000.00', is_active: true },
+      { id: 'fund-1', household_id: 'house-1', name: 'Fondo emergencia', type: 'savings_fund', balance: '3000.00', is_active: true },
+      { id: 'receivable-1', household_id: 'house-1', name: 'Préstamo Juan', type: 'receivable', balance: '900.00', is_active: true },
       { id: 'other-1', household_id: 'house-2', name: 'Otro hogar', type: 'operational_cash', balance: '9999.00', is_active: true }
     ],
     transaction_groups: [
@@ -183,7 +192,7 @@ describe('cierres financieros', () => {
     process.env.DEV_PROFILE_ID = 'profile-1';
   });
 
-  it('crea cierre semanal con snapshot y totales del periodo', async () => {
+  it('crea cierre semanal con totales principales solo operativos y snapshots completos', async () => {
     const fakeClient = createFakeSupabase();
     vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
     const { createFinancialClosure } = await import('@/lib/db/queries');
@@ -198,9 +207,13 @@ describe('cierres financieros', () => {
     expect(closure.openingTotal).toBe(1600);
     expect(closure.netChange).toBe(300);
     expect(closure.accountSnapshots).toEqual(expect.arrayContaining([
-      expect.objectContaining({ accountId: 'cash-1', openingBalance: 1000, closingBalance: 1200, difference: 200 }),
-      expect.objectContaining({ accountId: 'bank-1', openingBalance: 600, closingBalance: 700, difference: 100 })
+      expect.objectContaining({ accountId: 'cash-1', accountScope: 'operational', openingBalance: 1000, closingBalance: 1200, difference: 200 }),
+      expect.objectContaining({ accountId: 'bank-1', accountScope: 'operational', openingBalance: 600, closingBalance: 700, difference: 100 }),
+      expect.objectContaining({ accountId: 'card-1', accountScope: 'complementary', closingBalance: 5000 }),
+      expect.objectContaining({ accountId: 'fund-1', accountScope: 'complementary', closingBalance: 3000 }),
+      expect.objectContaining({ accountId: 'receivable-1', accountScope: 'complementary', closingBalance: 900 })
     ]));
+    expect(closure.accountSnapshots.reduce((acc, account) => acc + account.closingBalance, 0)).toBe(10800);
     expect(fakeClient.db.financial_closures).toHaveLength(1);
   });
 
@@ -254,6 +267,114 @@ describe('cierres financieros', () => {
     expect(JSON.stringify(fakeClient.db.accounts)).toBe(accountsBefore);
     expect(JSON.stringify(fakeClient.db.transactions)).toBe(transactionsBefore);
   });
+
+
+  it('tarjetas, fondos y receivables quedan como complementarias y no inflan dinero operativo', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createFinancialClosure } = await import('@/lib/db/queries');
+
+    const closure = await createFinancialClosure({ type: 'weekly', periodStart: '2026-05-01', periodEnd: '2026-05-07' });
+
+    expect(closure.closingTotal).toBe(1900);
+    expect(closure.accountSnapshots.filter((account) => account.accountScope === 'complementary').map((account) => account.accountId)).toEqual(['card-1', 'fund-1', 'receivable-1']);
+  });
+
+  it('recalcular cierre actualiza snapshot y mantiene el mismo id', async () => {
+    const fakeClient = createFakeSupabase({
+      financial_closures: [{
+        id: 'closure-recalc',
+        household_id: 'house-1',
+        type: 'weekly',
+        period_start: '2026-05-01',
+        period_end: '2026-05-07',
+        opening_total: '9999.00',
+        closing_total: '9999.00',
+        net_change: '0.00',
+        income_total: '0.00',
+        expense_total: '0.00',
+        net_flow: '0.00',
+        account_snapshots: [],
+        movement_summary: null,
+        notes: 'Mantener nota',
+        created_at: '2026-05-08T00:00:00.000Z',
+        updated_at: '2026-05-08T00:00:00.000Z'
+      }]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { recalculateFinancialClosure } = await import('@/lib/db/queries');
+
+    const closure = await recalculateFinancialClosure({ closureId: 'closure-recalc' });
+
+    expect(closure.id).toBe('closure-recalc');
+    expect(closure.createdAt).toBe('2026-05-08T00:00:00.000Z');
+    expect(closure.notes).toBe('Mantener nota');
+    expect(closure.openingTotal).toBe(1600);
+    expect(closure.closingTotal).toBe(1900);
+    expect(closure.accountSnapshots).toEqual(expect.arrayContaining([
+      expect.objectContaining({ accountId: 'card-1', accountScope: 'complementary' })
+    ]));
+  });
+
+  it('recalcular y eliminar validan ownership por household', async () => {
+    const fakeClient = createFakeSupabase({
+      financial_closures: [{
+        id: 'foreign-closure',
+        household_id: 'house-2',
+        type: 'weekly',
+        period_start: '2026-05-01',
+        period_end: '2026-05-07',
+        opening_total: '1.00',
+        closing_total: '1.00',
+        net_change: '0.00',
+        income_total: '0.00',
+        expense_total: '0.00',
+        net_flow: '0.00',
+        account_snapshots: [],
+        movement_summary: null,
+        notes: null,
+        created_at: '2026-05-08T00:00:00.000Z',
+        updated_at: '2026-05-08T00:00:00.000Z'
+      }]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { deleteFinancialClosure, recalculateFinancialClosure } = await import('@/lib/db/queries');
+
+    await expect(recalculateFinancialClosure({ closureId: 'foreign-closure' })).rejects.toThrow('No se encontró');
+    await expect(deleteFinancialClosure({ closureId: 'foreign-closure' })).rejects.toThrow('No se encontró');
+    expect(fakeClient.db.financial_closures).toHaveLength(1);
+  });
+
+  it('eliminar cierre funciona y lo remueve del listado', async () => {
+    const fakeClient = createFakeSupabase({
+      financial_closures: [{
+        id: 'closure-delete',
+        household_id: 'house-1',
+        type: 'monthly',
+        period_start: '2026-05-01',
+        period_end: '2026-05-31',
+        opening_total: '100.00',
+        closing_total: '120.00',
+        net_change: '20.00',
+        income_total: '20.00',
+        expense_total: '0.00',
+        net_flow: '20.00',
+        account_snapshots: [],
+        movement_summary: null,
+        notes: null,
+        created_at: '2026-05-08T00:00:00.000Z',
+        updated_at: '2026-05-08T00:00:00.000Z'
+      }]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { deleteFinancialClosure, getFinancialClosures } = await import('@/lib/db/queries');
+
+    await deleteFinancialClosure({ closureId: 'closure-delete' });
+    const result = await getFinancialClosures();
+
+    expect(result.closures).toHaveLength(0);
+    expect(fakeClient.db.financial_closures).toHaveLength(0);
+  });
 });
 
 describe('CierrePage', () => {
@@ -262,7 +383,7 @@ describe('CierrePage', () => {
     vi.doMock('@/components/app-shell', () => ({
       AppShell: ({ title, children }: { title: string; children: React.ReactNode }) => <main><h1>{title}</h1>{children}</main>
     }));
-    vi.doMock('@/app/cierre/actions', () => ({ createFinancialClosureAction: vi.fn() }));
+    vi.doMock('@/app/cierre/actions', () => ({ createFinancialClosureAction: vi.fn(), recalculateFinancialClosureAction: vi.fn(), deleteFinancialClosureAction: vi.fn() }));
     vi.doMock('@/lib/db/queries', () => ({
       getFinancialClosures: vi.fn(async () => ({
         hasHousehold: true,
@@ -278,7 +399,10 @@ describe('CierrePage', () => {
           incomeTotal: 500,
           expenseTotal: 200,
           netFlow: 300,
-          accountSnapshots: [{ accountId: 'cash-1', accountName: 'Efectivo', accountType: 'operational_cash', openingBalance: 1000, closingBalance: 1200, difference: 200 }],
+          accountSnapshots: [
+            { accountId: 'cash-1', accountName: 'Efectivo', accountType: 'operational_cash', accountScope: 'operational', openingBalance: 1000, closingBalance: 1200, difference: 200 },
+            { accountId: 'card-1', accountName: 'TDC BBVA', accountType: 'credit_card', accountScope: 'complementary', openingBalance: 4500, closingBalance: 5000, difference: 500 }
+          ],
           movementSummary: null,
           notes: 'Semana de prueba',
           createdAt: '2026-05-08T00:00:00.000Z',
@@ -298,6 +422,13 @@ describe('CierrePage', () => {
     expect(html).toContain('Crear cierre');
     expect(html).toContain('Cierres creados');
     expect(html).toContain('Semanal');
+    expect(html).toContain('Dinero operativo real');
+    expect(html).toContain('Ver cuentas complementarias');
+    expect(html).toContain('Cuentas operativas');
+    expect(html).toContain('Cuentas complementarias');
+    expect(html).toContain('Recalcular cierre');
+    expect(html).toContain('Eliminar cierre');
     expect(html).toContain('Efectivo');
+    expect(html).toContain('TDC BBVA');
   });
 });

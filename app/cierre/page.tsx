@@ -2,7 +2,8 @@ import React from 'react';
 import { AppShell } from '@/components/app-shell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { createFinancialClosureAction } from '@/app/cierre/actions';
+import { createFinancialClosureAction, deleteFinancialClosureAction, recalculateFinancialClosureAction } from '@/app/cierre/actions';
+import { ClosureActions } from '@/components/cierre/closure-actions';
 import { getFinancialClosures, type FinancialClosure, type FinancialClosureType } from '@/lib/db/queries';
 
 const currency = new Intl.NumberFormat('es-MX', {
@@ -32,7 +33,44 @@ function AmountMetric({ label, value }: { label: string; value: number }) {
   );
 }
 
+function AccountChangesTable({ accounts }: { accounts: FinancialClosure['accountSnapshots'] }) {
+  if (!accounts.length) {
+    return <p className="mt-3 text-sm text-slate-600">No hay cuentas en esta sección.</p>;
+  }
+
+  return (
+    <div className="mt-3 overflow-x-auto">
+      <table className="min-w-full divide-y divide-slate-200 text-sm">
+        <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="px-3 py-2">Cuenta</th>
+            <th className="px-3 py-2">Saldo inicial</th>
+            <th className="px-3 py-2">Saldo final</th>
+            <th className="px-3 py-2">Diferencia</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {accounts.map((account) => (
+            <tr key={account.accountId}>
+              <td className="px-3 py-2 font-medium text-slate-800">
+                {account.accountName}
+                <span className="ml-2 text-xs font-normal text-slate-500">{account.accountType}</span>
+              </td>
+              <td className="px-3 py-2">{formatMoney(account.openingBalance)}</td>
+              <td className="px-3 py-2">{formatMoney(account.closingBalance)}</td>
+              <td className={account.difference < 0 ? 'px-3 py-2 text-rose-700' : 'px-3 py-2 text-emerald-700'}>{formatMoney(account.difference)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ClosureCard({ closure }: { closure: FinancialClosure }) {
+  const operationalAccounts = closure.accountSnapshots.filter((account) => account.accountScope === 'operational');
+  const complementaryAccounts = closure.accountSnapshots.filter((account) => account.accountScope === 'complementary');
+
   return (
     <Card className="space-y-4">
       <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
@@ -42,19 +80,35 @@ function ClosureCard({ closure }: { closure: FinancialClosure }) {
             {formatDate(closure.periodStart)} — {formatDate(closure.periodEnd)}
           </h3>
         </div>
-        <p className="rounded-full bg-slate-100 px-3 py-1 text-sm font-medium text-slate-700">
-          Balance del periodo: {formatMoney(closure.netFlow)}
-        </p>
+        <div className="flex flex-col gap-2 md:items-end">
+          <p className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-800">
+            Dinero operativo final: {formatMoney(closure.closingTotal)}
+          </p>
+          <ClosureActions
+            closureId={closure.id}
+            recalculateAction={recalculateFinancialClosureAction}
+            deleteAction={deleteFinancialClosureAction}
+          />
+        </div>
       </div>
 
-      <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <AmountMetric label="Total inicial" value={closure.openingTotal} />
-        <AmountMetric label="Total final" value={closure.closingTotal} />
-        <AmountMetric label="Cambio neto" value={closure.netChange} />
-        <AmountMetric label="Ingresos del periodo" value={closure.incomeTotal} />
-        <AmountMetric label="Gastos del periodo" value={closure.expenseTotal} />
-        <AmountMetric label="Balance del periodo" value={closure.netFlow} />
-      </dl>
+      <div>
+        <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Dinero operativo real</h4>
+        <dl className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <AmountMetric label="Total inicial" value={closure.openingTotal} />
+          <AmountMetric label="Total final" value={closure.closingTotal} />
+          <AmountMetric label="Cambio neto" value={closure.netChange} />
+          <AmountMetric label="Ingresos del periodo" value={closure.incomeTotal} />
+          <AmountMetric label="Gastos del periodo" value={closure.expenseTotal} />
+          <AmountMetric label="Balance del periodo" value={closure.netFlow} />
+        </dl>
+        <p className="mt-2 text-xs text-slate-500">El total inicial/final usa solo cuentas operativas líquidas; las complementarias se muestran aparte.</p>
+      </div>
+
+      <details className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
+        <summary className="cursor-pointer font-semibold text-emerald-900">Ver cuentas complementarias</summary>
+        <AccountChangesTable accounts={complementaryAccounts} />
+      </details>
 
       <details className="rounded-xl border border-slate-200 p-4">
         <summary className="cursor-pointer font-semibold text-slate-800">Ver detalle del cierre</summary>
@@ -72,32 +126,13 @@ function ClosureCard({ closure }: { closure: FinancialClosure }) {
           </section>
 
           <section>
-            <h4 className="font-semibold text-slate-900">Cambios por cuenta</h4>
-            <div className="mt-3 overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-3 py-2">Cuenta</th>
-                    <th className="px-3 py-2">Saldo inicial</th>
-                    <th className="px-3 py-2">Saldo final</th>
-                    <th className="px-3 py-2">Diferencia</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {closure.accountSnapshots.map((account) => (
-                    <tr key={account.accountId}>
-                      <td className="px-3 py-2 font-medium text-slate-800">
-                        {account.accountName}
-                        <span className="ml-2 text-xs font-normal text-slate-500">{account.accountType}</span>
-                      </td>
-                      <td className="px-3 py-2">{formatMoney(account.openingBalance)}</td>
-                      <td className="px-3 py-2">{formatMoney(account.closingBalance)}</td>
-                      <td className={account.difference < 0 ? 'px-3 py-2 text-rose-700' : 'px-3 py-2 text-emerald-700'}>{formatMoney(account.difference)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <h4 className="font-semibold text-slate-900">Cuentas operativas</h4>
+            <AccountChangesTable accounts={operationalAccounts} />
+          </section>
+
+          <section>
+            <h4 className="font-semibold text-slate-900">Cuentas complementarias</h4>
+            <AccountChangesTable accounts={complementaryAccounts} />
           </section>
 
           {closure.notes ? (
@@ -121,7 +156,7 @@ export default async function CierrePage() {
         <Card>
           <p className="text-sm font-medium text-primaria">Cierre</p>
           <h2 className="mt-1 text-2xl font-semibold text-slate-900">Compara cómo empezaste y cómo terminaste un periodo.</h2>
-          <p className="mt-2 text-slate-600">Crea cierres semanales o mensuales para guardar una foto financiera del hogar sin modificar saldos ni movimientos.</p>
+          <p className="mt-2 text-slate-600">Crea cierres semanales o mensuales para guardar una foto del dinero operativo real sin modificar saldos ni movimientos.</p>
         </Card>
 
         <Card>
