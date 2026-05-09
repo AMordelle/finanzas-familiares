@@ -1,8 +1,8 @@
 import React from 'react';
 import { AppShell } from '@/components/app-shell';
-import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { createFinancialClosureAction, deleteFinancialClosureAction, recalculateFinancialClosureAction } from '@/app/cierre/actions';
+import { ClosureCreateCard } from '@/components/cierre/closure-create-card';
 import { ClosureCard } from '@/components/cierre/closure-card';
 import { getFinancialClosures } from '@/lib/db/queries';
 
@@ -18,41 +18,14 @@ export default async function CierrePage() {
           <p className="mt-2 text-slate-600">Crea cierres semanales o mensuales para guardar una foto del dinero operativo real sin modificar saldos ni movimientos.</p>
         </Card>
 
-        <Card>
-          <h2 className="text-lg font-semibold text-slate-900">Crear cierre</h2>
-          {!hasHousehold ? (
+        {!hasHousehold ? (
+          <Card>
+            <h2 className="text-lg font-semibold text-slate-900">Crear cierre</h2>
             <p className="mt-3 text-sm text-slate-600">Primero configura un hogar para poder crear cierres.</p>
-          ) : (
-            <form action={createFinancialClosureAction} className="mt-4 grid gap-4 md:grid-cols-2">
-              <label className="space-y-1 text-sm font-medium text-slate-700">
-                Tipo de cierre
-                <select name="type" required className="w-full rounded-xl border border-slate-300 px-3 py-2">
-                  <option value="weekly">Semanal</option>
-                  <option value="monthly">Mensual</option>
-                </select>
-              </label>
-
-              <label className="space-y-1 text-sm font-medium text-slate-700">
-                Fecha inicial
-                <input name="periodStart" type="date" required className="w-full rounded-xl border border-slate-300 px-3 py-2" />
-              </label>
-
-              <label className="space-y-1 text-sm font-medium text-slate-700">
-                Fecha final
-                <input name="periodEnd" type="date" required className="w-full rounded-xl border border-slate-300 px-3 py-2" />
-              </label>
-
-              <label className="space-y-1 text-sm font-medium text-slate-700 md:col-span-2">
-                Notas opcionales
-                <textarea name="notes" rows={3} className="w-full rounded-xl border border-slate-300 px-3 py-2" placeholder="Ej. Semana con pago de renta, gastos escolares o ingreso extra." />
-              </label>
-
-              <div className="md:col-span-2">
-                <Button type="submit">Crear cierre</Button>
-              </div>
-            </form>
-          )}
-        </Card>
+          </Card>
+        ) : (
+          <ClosureCreateCard createAction={createFinancialClosureAction} />
+        )}
 
         <section className="space-y-4">
           <div>

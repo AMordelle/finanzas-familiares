@@ -417,11 +417,13 @@ describe('CierrePage', () => {
     const html = renderToStaticMarkup(await CierrePage());
 
     expect(html).toContain('Cierre');
-    expect(html).toContain('Tipo de cierre');
-    expect(html).toContain('Fecha inicial');
-    expect(html).toContain('Fecha final');
+    expect(html).toContain('Nuevo cierre');
     expect(html).toContain('Crear cierre');
     expect(html).toContain('Cierres creados');
+    expect(html).not.toContain('Tipo de cierre');
+    expect(html).not.toContain('Fecha inicial');
+    expect(html).not.toContain('Fecha final');
+    expect(html).not.toContain('Notas opcionales');
     expect(html).toContain('Semanal');
     expect(html).toContain('1 may 2026 — 7 may 2026');
     expect(html).toContain('Dinero operativo final:');
@@ -438,6 +440,47 @@ describe('CierrePage', () => {
     expect(html).not.toContain('Recalcular cierre');
     expect(html).not.toContain('Eliminar cierre');
     expect(html).not.toContain('TDC BBVA');
+  });
+});
+
+describe('ClosureCreateCard', () => {
+  it('inicia contraído y solo muestra el disparador compacto', async () => {
+    const { ClosureCreateCard } = await import('@/components/cierre/closure-create-card');
+    const noopAction = vi.fn(async () => undefined);
+
+    const html = renderToStaticMarkup(<ClosureCreateCard createAction={noopAction} />);
+
+    expect(html).toContain('Crear cierre');
+    expect(html).toContain('Nuevo cierre');
+    expect(html).toContain('Guarda un snapshot solo cuando quieras cerrar un periodo.');
+    expect(html).not.toContain('Tipo de cierre');
+    expect(html).not.toContain('Fecha inicial');
+    expect(html).not.toContain('Fecha final');
+    expect(html).not.toContain('Notas opcionales');
+    expect(html).not.toContain('Selecciona el rango');
+  });
+
+  it('al abrir muestra campos, botón Crear cierre y Cancelar', async () => {
+    const { ClosureCreateCard } = await import('@/components/cierre/closure-create-card');
+    const noopAction = vi.fn(async () => undefined);
+
+    const html = renderToStaticMarkup(<ClosureCreateCard createAction={noopAction} initialOpen />);
+
+    expect(html).toContain('Tipo de cierre');
+    expect(html).toContain('Fecha inicial');
+    expect(html).toContain('Fecha final');
+    expect(html).toContain('Notas opcionales');
+    expect(html).toContain('Crear cierre');
+    expect(html).toContain('Cancelar');
+    expect(html).not.toContain('Nuevo cierre');
+  });
+
+  it('se contrae al cancelar o tras crear exitosamente según reducer', async () => {
+    const { closureCreateFormVisibilityReducer } = await import('@/components/cierre/closure-create-card');
+
+    expect(closureCreateFormVisibilityReducer(false, 'expand_new')).toBe(true);
+    expect(closureCreateFormVisibilityReducer(true, 'cancel')).toBe(false);
+    expect(closureCreateFormVisibilityReducer(true, 'submit_success')).toBe(false);
   });
 });
 
