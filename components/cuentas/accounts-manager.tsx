@@ -445,7 +445,10 @@ export function AccountsManager({ accounts }: { accounts: ManagedAccount[] }) {
           </div>
         ) : (
           <>
-            <h2 className="text-lg font-semibold">{form.accountId ? 'Editar cuenta' : 'Nueva cuenta'}</h2>
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">{form.accountId ? 'Editar cuenta' : 'Nueva cuenta'}</h2>
+              <Button variant="outline" onClick={resetFormAndCollapse} disabled={isPending}>Cancelar</Button>
+            </div>
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <label className="text-sm">
                 Tipo
@@ -524,7 +527,6 @@ export function AccountsManager({ accounts }: { accounts: ManagedAccount[] }) {
 
             <div className="mt-4 flex flex-wrap gap-2">
               <Button onClick={submit} disabled={isPending}>{form.accountId ? 'Guardar cambios' : 'Crear cuenta'}</Button>
-              <Button variant="outline" onClick={resetFormAndCollapse} disabled={isPending}>Cancelar</Button>
             </div>
           </>
         )}
