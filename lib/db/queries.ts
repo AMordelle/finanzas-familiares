@@ -1915,21 +1915,34 @@ async function buildFinancialClosurePayload(input: FinancialClosureCalculationIn
       .select('id,group_id,account_id,type,category,amount,happened_at')
       .in('group_id', groupIds)
       .gte('happened_at', start)
-      .lte('happened_at', end)
     : { data: [] as ClosureTransactionLine[], error: null };
 
   if (transactionsError) {
     throw new Error(`No fue posible leer transacciones para el cierre: ${transactionsError.message}`);
   }
 
-  const groupedLines = groupTransactionLines((transactionsData ?? []) as ClosureTransactionLine[]);
+  const closureLines = ((transactionsData ?? []) as ClosureTransactionLine[]).filter((line) => line.happened_at >= start);
+  const periodLines = closureLines.filter((line) => line.happened_at <= end);
+  const postPeriodLines = closureLines.filter((line) => line.happened_at > end);
+  const groupedLines = groupTransactionLines(periodLines);
+  const groupedPostPeriodLines = groupTransactionLines(postPeriodLines);
   const periodDeltas = calculatePeriodAccountDeltas(groupedLines, accountList);
+  const postPeriodDeltas = calculatePeriodAccountDeltas(groupedPostPeriodLines, accountList);
   const accountSnapshots = accountList.map((account) => {
-    const closingBalance = roundMoney(account.balance);
-    // Aproximación v2: el saldo inicial de cada cuenta se reconstruye restando
-    // del saldo actual el efecto neto de movimientos del periodo, usando las
-    // reglas actuales de actualización de saldos. El resumen principal suma solo
-    // snapshots operativos; las cuentas complementarias se conservan para detalle.
+    // Reconstrucción histórica v3:
+    // 1. Los saldos reales en `accounts.balance` representan el estado actual y
+    //    no se modifican al calcular ni recalcular cierres.
+    // 2. Para obtener el saldo real al cierre histórico, partimos del saldo
+    //    actual y deshacemos únicamente los movimientos del mismo household que
+    //    ocurrieron después de `periodEnd` (postPeriodDeltas). Esto conserva la
+    //    lógica contable existente, incluyendo transferencias internas, y evita
+    //    que todos los cierres antiguos hereden el mismo saldo actual.
+    // 3. Una vez reconstruido el cierre histórico, el saldo inicial se obtiene
+    //    restando el efecto neto de los movimientos dentro del periodo.
+    // Los movimientos incompletos que no pueden resolverse con las reglas
+    // actuales se ignoran de forma consistente tanto dentro como después del
+    // periodo, igual que en el cálculo previo de snapshots.
+    const closingBalance = roundMoney(account.balance - (postPeriodDeltas.get(account.id) ?? 0));
     const openingBalance = roundMoney(closingBalance - (periodDeltas.get(account.id) ?? 0));
     return {
       accountId: account.id,
