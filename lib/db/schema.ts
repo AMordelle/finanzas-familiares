@@ -1,5 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
-import { boolean, check, date, integer, numeric, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, date, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 export const accountTypeEnum = pgEnum('account_type', [
   'operativa',
@@ -113,6 +113,29 @@ export const extraWorkEntries = pgTable('extra_work_entries', {
   typeCheck: check('extra_work_entries_type_check', sql`${table.type} IN ('overtime', 'piecework', 'meals')`),
   quantityPositiveCheck: check('extra_work_entries_quantity_check', sql`${table.quantity} > 0`),
   statusCheck: check('extra_work_entries_status_check', sql`${table.status} IN ('pending', 'paid')`)
+}));
+
+
+export const financialClosures = pgTable('financial_closures', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').references(() => households.id).notNull(),
+  type: text('type').notNull(),
+  periodStart: date('period_start').notNull(),
+  periodEnd: date('period_end').notNull(),
+  openingTotal: numeric('opening_total', { precision: 14, scale: 2 }).notNull(),
+  closingTotal: numeric('closing_total', { precision: 14, scale: 2 }).notNull(),
+  netChange: numeric('net_change', { precision: 14, scale: 2 }).notNull(),
+  incomeTotal: numeric('income_total', { precision: 14, scale: 2 }).notNull(),
+  expenseTotal: numeric('expense_total', { precision: 14, scale: 2 }).notNull(),
+  netFlow: numeric('net_flow', { precision: 14, scale: 2 }).notNull(),
+  accountSnapshots: jsonb('account_snapshots').notNull(),
+  movementSummary: jsonb('movement_summary'),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull()
+}, (table) => ({
+  typeCheck: check('financial_closures_type_check', sql`${table.type} IN ('weekly', 'monthly')`),
+  periodRangeCheck: check('financial_closures_period_range_check', sql`${table.periodStart} <= ${table.periodEnd}`)
 }));
 
 export const financialSnapshots = pgTable('financial_snapshots', {
