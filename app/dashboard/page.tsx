@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { getDashboardData } from '@/lib/db/queries';
 import { AnalyticsAdvisorCards } from '@/components/dashboard/analytics-advisor-cards';
+import { FinancialAdvisorCard } from '@/components/dashboard/financial-advisor-card';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 export default async function DashboardPage() {
@@ -46,6 +47,7 @@ export default async function DashboardPage() {
         financialPressure={financialPressure}
         priorityDiagnostics={data.priorityDiagnostics}
       />
+      <FinancialAdvisorCard />
       <section className="mt-4 grid gap-4 md:grid-cols-2">
         {financialInsight ? (
           <Card>
