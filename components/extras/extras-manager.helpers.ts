@@ -1,6 +1,7 @@
 import type { ExtraWorkEntry, ExtraWorkType } from '@/lib/db/queries';
 
 type ExtrasFormVisibilityAction = 'collapse' | 'expand_new' | 'start_edit' | 'submit_success';
+type PaidHistoryVisibilityAction = 'collapse' | 'toggle' | 'show';
 
 export function extrasFormVisibilityReducer(current: boolean, action: ExtrasFormVisibilityAction) {
   switch (action) {
@@ -9,6 +10,19 @@ export function extrasFormVisibilityReducer(current: boolean, action: ExtrasForm
       return true;
     case 'collapse':
     case 'submit_success':
+      return false;
+    default:
+      return current;
+  }
+}
+
+export function paidHistoryVisibilityReducer(current: boolean, action: PaidHistoryVisibilityAction) {
+  switch (action) {
+    case 'toggle':
+      return !current;
+    case 'show':
+      return true;
+    case 'collapse':
       return false;
     default:
       return current;

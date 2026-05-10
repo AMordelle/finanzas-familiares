@@ -1,14 +1,21 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import React, { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { createExtraWorkAction, deleteExtraWorkAction, markExtraWorkAsPaidAction, updateExtraWorkAction } from '@/app/extras/actions';
+import {
+  createExtraWorkAction,
+  deleteExtraWorkAction,
+  markExtraWorkAsPaidAction,
+  restoreExtraWorkEntryToPending,
+  updateExtraWorkAction
+} from '@/app/extras/actions';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import {
   extrasFormVisibilityReducer,
   formatMoneyAmount,
   formatQuantity,
+  paidHistoryVisibilityReducer,
   quantityLabel,
   quantityPlaceholder,
   quantityWithUnit,
@@ -31,6 +38,13 @@ function formatWorkDate(value: string) {
   return date.toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
 }
 
+function formatPaidDate(value: string | null) {
+  if (!value) return 'Fecha no disponible';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Fecha no disponible';
+  return date.toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' });
+}
+
 export function ExtrasManager({ initialData }: Props) {
   const router = useRouter();
   const [workDate, setWorkDate] = useState(todayAsInputValue());
@@ -38,6 +52,7 @@ export function ExtrasManager({ initialData }: Props) {
   const [quantity, setQuantity] = useState('');
   const [isFormExpanded, setIsFormExpanded] = useState(false);
   const [editingEntryId, setEditingEntryId] = useState<string | null>(null);
+  const [isPaidHistoryExpanded, setIsPaidHistoryExpanded] = useState(false);
   const [notes, setNotes] = useState('');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -259,6 +274,64 @@ export function ExtrasManager({ initialData }: Props) {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+      </Card>
+
+      <Card className="border-slate-200 bg-slate-50/60">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold text-slate-800">Pagados</h3>
+            <p className="mt-1 text-sm text-slate-600">Historial compacto para consultar o corregir pagos marcados por error.</p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => setIsPaidHistoryExpanded((current) => paidHistoryVisibilityReducer(current, 'toggle'))}
+            aria-expanded={isPaidHistoryExpanded}
+          >
+            {isPaidHistoryExpanded ? 'Ocultar historial de pagados' : `Ver historial de pagados (${initialData.paidEntries.length})`}
+          </Button>
+        </div>
+
+        {isPaidHistoryExpanded && (
+          <div className="mt-3 space-y-2">
+            {!initialData.paidEntries.length ? (
+              <p className="rounded-xl border border-dashed border-slate-300 bg-white p-3 text-sm text-slate-600">No hay extras pagados en el historial.</p>
+            ) : (
+              initialData.paidEntries.map((entry) => (
+                <div key={entry.id} className="rounded-xl border border-slate-200 bg-white p-3 text-sm">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div className="space-y-1">
+                      <p className="font-semibold text-slate-800">
+                        {entry.type === 'meals' ? quantityWithUnit(entry) : `${typeLabel(entry.type)} · ${quantityWithUnit(entry)}`}
+                      </p>
+                      <p className="text-slate-600">Trabajo: {formatWorkDate(entry.workDate)}</p>
+                      <p className="text-slate-600">Pagado: {formatPaidDate(entry.paidAt)}</p>
+                      {entry.notes && <p className="text-slate-700">Notas: {entry.notes}</p>}
+                    </div>
+                    <Button
+                      variant="outline"
+                      disabled={isPending}
+                      onClick={() => {
+                        setErrorMessage(null);
+                        setSuccessMessage(null);
+                        startTransition(async () => {
+                          try {
+                            const result = await restoreExtraWorkEntryToPending({ entryId: entry.id });
+                            setSuccessMessage(result.message);
+                            router.refresh();
+                          } catch (error) {
+                            setErrorMessage(error instanceof Error ? error.message : 'No se pudo regresar el extra a pendientes.');
+                          }
+                        });
+                      }}
+                    >
+                      Regresar a pendientes
+                    </Button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         )}
       </Card>
