@@ -1,9 +1,15 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { isApprovedCategory } from '@/lib/ai/semanticCategory';
-import { applyFollowUpAnswer, enforceFinancialConsistency, interpretTransaction, transactionIntentSchema } from '@/lib/ai/transactionInterpreter';
-import { getAccountsForRegistration, saveConversationalTransaction } from '@/lib/db/queries';
+import { resolveCategoryInput } from '@/lib/ai/semanticCategory';
+import {
+  applyFollowUpAnswer,
+  batchTransactionInterpretationSchema,
+  enforceFinancialConsistency,
+  interpretTransactions,
+  transactionIntentSchema
+} from '@/lib/ai/transactionInterpreter';
+import { getAccountsForRegistration, saveConversationalTransaction, saveConversationalTransactionBatch } from '@/lib/db/queries';
 
 export async function getRegistrationAccountsAction() {
   return getAccountsForRegistration();
@@ -11,7 +17,7 @@ export async function getRegistrationAccountsAction() {
 
 export async function interpretTransactionAction(text: string) {
   const accounts = await getAccountsForRegistration();
-  return interpretTransaction(text, accounts);
+  return interpretTransactions(text, accounts);
 }
 
 export async function applyFollowUpAnswerAction(current: unknown, answer: string) {
@@ -31,15 +37,41 @@ export async function saveInterpretedTransactionAction(payload: unknown) {
   await saveConversationalTransaction(intent, {
     happenedAt: resolveMovementDate(payload)
   });
-  revalidatePath('/dashboard');
-  revalidatePath('/movimientos');
-  revalidatePath('/cuentas');
-  revalidatePath('/registro');
+  revalidateRegistrationPaths();
 
   return {
     success: true,
     message: 'Movimiento registrado correctamente.'
   };
+}
+
+export async function saveInterpretedTransactionBatchAction(payload: unknown) {
+  const parsedBatch = batchTransactionInterpretationSchema.parse(payload);
+  const incompleteItems = parsedBatch.items.filter((item) => item.missingFieldKinds.length > 0);
+  if (incompleteItems.length > 0) {
+    throw new Error(`Hay ${parsedBatch.items.length - incompleteItems.length} movimientos listos y ${incompleteItems.length} necesita aclaración. Corrige el texto y vuelve a interpretarlo.`);
+  }
+
+  const intents = parsedBatch.items.map((item, index) => enforceFinancialConsistency({
+    ...item,
+    category: resolvePayloadCategory(item.category, `movimiento ${index + 1}`)
+  }));
+  await saveConversationalTransactionBatch(intents, {
+    happenedAt: resolveMovementDate(payload)
+  });
+  revalidateRegistrationPaths();
+
+  return {
+    success: true,
+    message: `${intents.length} movimientos registrados correctamente.`
+  };
+}
+
+function revalidateRegistrationPaths() {
+  revalidatePath('/dashboard');
+  revalidatePath('/movimientos');
+  revalidatePath('/cuentas');
+  revalidatePath('/registro');
 }
 
 function resolveMovementDate(payload: unknown) {
@@ -65,6 +97,17 @@ function extractMovementDate(payload: unknown) {
 function extractCategoryOverride(payload: unknown) {
   if (!payload || typeof payload !== 'object') return null;
   const override = (payload as Record<string, unknown>).categoryOverride;
-  if (typeof override !== 'string' || !isApprovedCategory(override)) return null;
-  return override;
+  if (typeof override !== 'string') return null;
+  return resolvePayloadCategory(override, 'movimiento');
+}
+
+function resolvePayloadCategory(category: unknown, label: string) {
+  if (typeof category !== 'string') {
+    throw new Error(`La categoría del ${label} no puede estar vacía.`);
+  }
+  const resolved = resolveCategoryInput(category);
+  if (resolved.error || !resolved.value) {
+    throw new Error(`${resolved.error ?? 'Categoría inválida'} (${label}).`);
+  }
+  return resolved.value;
 }

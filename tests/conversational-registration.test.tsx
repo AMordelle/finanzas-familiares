@@ -11,7 +11,8 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/app/registro/actions', () => ({
   interpretTransactionAction: vi.fn(),
   applyFollowUpAnswerAction: vi.fn(),
-  saveInterpretedTransactionAction: vi.fn()
+  saveInterpretedTransactionAction: vi.fn(),
+  saveInterpretedTransactionBatchAction: vi.fn()
 }));
 
 function buildIntent(partial: Partial<TransactionIntent>): TransactionIntent {
@@ -115,5 +116,57 @@ describe('ConversationalRegistration follow-up sync', () => {
 
     expect(html).toContain('<option value="TDC BBVA">TDC BBVA</option>');
     expect(html).toContain('<option value="TDC SEARS">TDC SEARS</option>');
+  });
+
+  it('shows visual confirmation for a custom category in preview', () => {
+    const batch = {
+      mode: 'batch' as const,
+      items: [
+        buildIntent({ rawText: '300 escuela desde efectivo', amount: 300, category: 'gasto_escolar', sourceAccountName: 'Efectivo', sourceAccountType: 'operational_cash' })
+      ],
+      missingFields: [],
+      needsConfirmation: true
+    };
+
+    const html = renderToStaticMarkup(
+      <ConversationalRegistration
+        hasHousehold
+        accounts={[{ id: 'acc-ef', name: 'Efectivo', type: 'operational_cash' }]}
+        initialInterpretation={batch}
+      />
+    );
+
+    expect(html).toContain('Nueva categoría: Gasto escolar');
+    expect(html).toContain('value="gasto_escolar"');
+  });
+
+});
+
+
+describe('ConversationalRegistration batch category preview', () => {
+  it('renders editable category controls for each detected batch movement', () => {
+    const batch = {
+      mode: 'batch' as const,
+      items: [
+        buildIntent({ rawText: 'Gasté 300 en Oxxo con TDD BBVA', amount: 300, category: 'comida', sourceAccountName: 'TDD BBVA', sourceAccountType: 'operational_cash' }),
+        buildIntent({ rawText: 'Recibí 200 de Juan en PrimeIPTV', intent: 'income', visibleType: 'Ingreso', action: 'ingreso', amount: 200, category: 'ingreso_extra', destinationAccountName: 'PrimeIPTV', destinationAccountType: 'operational_cash' })
+      ],
+      missingFields: [],
+      needsConfirmation: true
+    };
+
+    const html = renderToStaticMarkup(
+      <ConversationalRegistration
+        hasHousehold
+        accounts={[{ id: 'acc-tdd', name: 'TDD BBVA', type: 'operational_cash' }]}
+        initialInterpretation={batch}
+      />
+    );
+
+    expect(html).toContain('Detecté 2 movimientos');
+    expect(html.match(/Categoría/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(html).toContain('<option value="comida" selected="">Comida</option>');
+    expect(html).toContain('<option value="ingreso_extra" selected="">Ingreso extra</option>');
+    expect(html).toContain('Nueva categoría...');
   });
 });

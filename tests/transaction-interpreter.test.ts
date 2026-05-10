@@ -1315,3 +1315,62 @@ it('semantic categories A-I: classifies representative phrases correctly', async
     const openAIFailure = await interpretTransaction('Gaste 180 en un imprevisto con efectivo', accounts as any);
     expect(openAIFailure.category).toBe('otros_gastos');
   });
+
+describe('batch conversational interpreter', () => {
+  it('interprets a single movement in compatibility mode', async () => {
+    const { interpretTransactions } = await import('@/lib/ai/transactionInterpreter');
+    const result = await interpretTransactions('Gasté 600 en gasolina con efectivo', accounts as any);
+    expect(result.mode).toBe('single');
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].rawText).toBe('Gasté 600 en gasolina con efectivo');
+    expect(result.items[0].missingFieldKinds).toEqual([]);
+  });
+
+  it('interprets multiple newline-separated movements preserving raw text', async () => {
+    const { interpretTransactions } = await import('@/lib/ai/transactionInterpreter');
+    const result = await interpretTransactions('Gasté 600 en gasolina con efectivo\nGasté 300 en Oxxo con TDC BBVA\nRecibí 200 de Juan en PrimeIPTV', accounts as any);
+    expect(result.mode).toBe('batch');
+    expect(result.items).toHaveLength(3);
+    expect(result.items.map((item) => item.rawText)).toEqual([
+      'Gasté 600 en gasolina con efectivo',
+      'Gasté 300 en Oxxo con TDC BBVA',
+      'Recibí 200 de Juan en PrimeIPTV'
+    ]);
+    expect(result.items[0].intent).toBe('expense_cash_like');
+    expect(result.items[1].intent).toBe('expense_debt_account');
+    expect(result.items[2].intent).toBe('income');
+  });
+
+  it('interprets dashed lists and connected phrases with income and expenses', async () => {
+    const { interpretTransactions } = await import('@/lib/ai/transactionInterpreter');
+    const dashed = await interpretTransactions('- gasolina 600 efectivo\n- Oxxo 300 TDC BBVA\n- transferencia recibida 200 Juan PrimeIPTV', accounts as any);
+    expect(dashed.mode).toBe('batch');
+    expect(dashed.items).toHaveLength(3);
+
+    const connected = await interpretTransactions('Hoy gasté 600 en gasolina con efectivo, 300 en Oxxo con TDC BBVA, y recibí 200 de Juan en PrimeIPTV.', accounts as any);
+    expect(connected.items).toHaveLength(3);
+    expect(connected.items[0].intent).toBe('expense_cash_like');
+    expect(connected.items[1].intent).toBe('expense_debt_account');
+    expect(connected.items[2].intent).toBe('income');
+  });
+
+  it('ignores contextual headers and applies them to descriptions', async () => {
+    const { interpretTransactions } = await import('@/lib/ai/transactionInterpreter');
+    const result = await interpretTransactions('Gasto semanal esposa:\n1500 despensa desde efectivo\n300 escuela desde efectivo', accounts as any);
+    expect(result.mode).toBe('batch');
+    expect(result.items).toHaveLength(2);
+    expect(result.items.map((item) => item.rawText)).toEqual([
+      '1500 despensa desde efectivo',
+      '300 escuela desde efectivo'
+    ]);
+    expect(result.items[0].description).toContain('Gasto semanal esposa');
+    expect(result.items[1].description).toContain('Gasto semanal esposa');
+  });
+
+  it('reports missing fields across the batch', async () => {
+    const { interpretTransactions } = await import('@/lib/ai/transactionInterpreter');
+    const result = await interpretTransactions('Gasté 600 en gasolina con efectivo\nGasté 300 en Oxxo', accounts as any);
+    expect(result.mode).toBe('batch');
+    expect(result.missingFields.some((field) => field.includes('missingSourceAccount'))).toBe(true);
+  });
+});
