@@ -1,7 +1,6 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import DashboardPage from '@/app/dashboard/page';
+import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/components/app-shell', () => ({
   AppShell: ({ children }: { children: React.ReactNode }) => <div>{children}</div>
@@ -13,11 +12,6 @@ vi.mock('@/components/metric-card', () => ({
 
 vi.mock('@/components/dashboard/analytics-advisor-cards', () => ({
   AnalyticsAdvisorCards: () => <div>analytics</div>
-}));
-
-
-vi.mock('@/app/dashboard/actions', () => ({
-  analyzeFinancialAdvisorAction: vi.fn()
 }));
 
 vi.mock('@/lib/db/queries', () => ({
@@ -34,12 +28,17 @@ vi.mock('@/lib/db/queries', () => ({
   }))
 }));
 
-describe('Dashboard money formatting consistency', () => {
-  it('renders dashboard money cards with $ and 2 fixed decimals', async () => {
+vi.mock('@/app/dashboard/actions', () => ({
+  analyzeFinancialAdvisorAction: vi.fn()
+}));
+
+describe('Dashboard Financial Advisor card', () => {
+  it('renderiza la tarjeta del asesor y el botón de análisis', async () => {
+    const { default: DashboardPage } = await import('@/app/dashboard/page');
     const html = renderToStaticMarkup(await DashboardPage());
 
-    expect(html).toContain('OFH mensual: $35,173.00');
-    expect(html).toContain('Objetivo semanal: $8,117.00');
-    expect(html).toContain('Dinero disponible hoy: $23,233.91');
+    expect(html).toContain('Asesor financiero');
+    expect(html).toContain('Analiza tu situación actual con base en tus cuentas, movimientos, cierres y extras.');
+    expect(html).toContain('Analizar mis finanzas');
   });
 });
