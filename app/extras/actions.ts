@@ -7,10 +7,12 @@ import {
   extraWorkCreateSchema,
   extraWorkDeleteSchema,
   extraWorkPaidSchema,
+  extraWorkRestoreSchema,
   extraWorkUpdateSchema,
   getExtraWorkHistory,
   getPendingExtraWorkEntries,
   markExtraWorkEntryAsPaid,
+  restoreExtraWorkEntryToPending as restoreExtraWorkEntryToPendingQuery,
   updateExtraWorkEntry
 } from '@/lib/db/queries';
 
@@ -60,6 +62,18 @@ export async function markExtraWorkAsPaidAction(payload: unknown) {
   revalidatePath('/extras');
 
   return { success: true, message: 'Extra marcado como pagado.' };
+}
+
+export async function restoreExtraWorkEntryToPending(payload: unknown) {
+  const parsed = extraWorkRestoreSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(parsed.error.errors[0]?.message ?? 'No se pudo validar el extra a regresar a pendientes.');
+  }
+
+  await restoreExtraWorkEntryToPendingQuery(parsed.data);
+  revalidatePath('/extras');
+
+  return { success: true, message: 'Extra regresado a pendientes.' };
 }
 
 export async function loadPendingExtraWorkAction() {

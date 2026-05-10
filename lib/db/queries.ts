@@ -95,6 +95,7 @@ export const extraWorkEntrySchema = z.object({
 });
 
 export const extraWorkPaidSchema = extraWorkEntrySchema;
+export const extraWorkRestoreSchema = extraWorkEntrySchema;
 export const extraWorkDeleteSchema = extraWorkEntrySchema;
 
 const accountTypeValues = ['operativa', 'fondo', 'inversion', 'deuda', 'por_cobrar', 'operational_cash', 'savings_fund', 'investment', 'credit_card', 'loan', 'receivable'] as const;
@@ -237,6 +238,7 @@ export type ExtrasData = {
   hasHousehold: boolean;
   householdId: string | null;
   pendingEntries: ExtraWorkEntry[];
+  paidEntries: ExtraWorkEntry[];
   summary: ExtrasSummary;
 };
 
@@ -871,6 +873,17 @@ function sortExtraWorkEntries(entries: ExtraWorkEntry[]) {
   });
 }
 
+function sortPaidExtraWorkEntries(entries: ExtraWorkEntry[]) {
+  return [...entries].sort((a, b) => {
+    const aPaidAt = a.paidAt ?? '';
+    const bPaidAt = b.paidAt ?? '';
+    if (aPaidAt !== bPaidAt) return aPaidAt < bPaidAt ? 1 : -1;
+    if (a.workDate !== b.workDate) return a.workDate < b.workDate ? 1 : -1;
+    if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
+    return 0;
+  });
+}
+
 export async function createExtraWorkEntry(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
   const input = extraWorkCreateSchema.parse(rawInput);
   const householdId = input.householdId ?? (await getDefaultHouseholdId(client));
@@ -947,6 +960,7 @@ export async function getPendingExtraWorkEntries(client: SupabaseClientLike = su
       hasHousehold: false,
       householdId: null,
       pendingEntries: [],
+      paidEntries: [],
       summary: calculateExtrasSummary([])
     };
   }
@@ -963,11 +977,25 @@ export async function getPendingExtraWorkEntries(client: SupabaseClientLike = su
     throw new Error(`No fue posible leer extras pendientes: ${error.message}`);
   }
 
+  const { data: paidData, error: paidError } = await client
+    .from('extra_work_entries')
+    .select('id,household_id,work_date,type,quantity,status,paid_at,notes,created_at,updated_at')
+    .eq('household_id', householdId)
+    .eq('status', 'paid')
+    .order('paid_at', { ascending: false })
+    .order('work_date', { ascending: false });
+
+  if (paidError) {
+    throw new Error(`No fue posible leer extras pagados: ${paidError.message}`);
+  }
+
   const pendingEntries = sortExtraWorkEntries(((data ?? []) as Parameters<typeof mapExtraWorkEntry>[0][]).map(mapExtraWorkEntry));
+  const paidEntries = sortPaidExtraWorkEntries(((paidData ?? []) as Parameters<typeof mapExtraWorkEntry>[0][]).map(mapExtraWorkEntry));
   return {
     hasHousehold: true,
     householdId,
     pendingEntries,
+    paidEntries,
     summary: calculateExtrasSummary(pendingEntries)
   };
 }
@@ -996,6 +1024,35 @@ export async function markExtraWorkEntryAsPaid(rawInput: unknown, client: Supaba
 
   if (!data) {
     throw new Error('No se encontró el extra pendiente en este hogar.');
+  }
+
+  return mapExtraWorkEntry(data as Parameters<typeof mapExtraWorkEntry>[0]);
+}
+
+export async function restoreExtraWorkEntryToPending(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = extraWorkRestoreSchema.parse(rawInput);
+  const householdId = input.householdId ?? (await getDefaultHouseholdId(client));
+
+  if (!householdId) {
+    throw new Error('El hogar es obligatorio para regresar extras a pendientes.');
+  }
+
+  const updatedAt = new Date().toISOString();
+  const { data, error } = await client
+    .from('extra_work_entries')
+    .update({ status: 'pending', paid_at: null, updated_at: updatedAt })
+    .eq('id', input.entryId)
+    .eq('household_id', householdId)
+    .eq('status', 'paid')
+    .select('id,household_id,work_date,type,quantity,status,paid_at,notes,created_at,updated_at')
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`No fue posible regresar el extra a pendientes: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error('No se encontró el extra pagado en este hogar.');
   }
 
   return mapExtraWorkEntry(data as Parameters<typeof mapExtraWorkEntry>[0]);
@@ -1037,14 +1094,15 @@ export async function getExtraWorkHistory(client: SupabaseClientLike = supabaseA
     .from('extra_work_entries')
     .select('id,household_id,work_date,type,quantity,status,paid_at,notes,created_at,updated_at')
     .eq('household_id', householdId)
-    .order('work_date', { ascending: false })
-    .order('created_at', { ascending: false });
+    .eq('status', 'paid')
+    .order('paid_at', { ascending: false })
+    .order('work_date', { ascending: false });
 
   if (error) {
     throw new Error(`No fue posible leer el historial de extras: ${error.message}`);
   }
 
-  return sortExtraWorkEntries(((data ?? []) as Parameters<typeof mapExtraWorkEntry>[0][]).map(mapExtraWorkEntry));
+  return sortPaidExtraWorkEntries(((data ?? []) as Parameters<typeof mapExtraWorkEntry>[0][]).map(mapExtraWorkEntry));
 }
 
 export async function getAccountsForRegistration(client: SupabaseClientLike = supabaseAdmin): Promise<AccountOption[]> {
