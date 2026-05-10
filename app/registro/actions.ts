@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { isApprovedCategory } from '@/lib/ai/semanticCategory';
+import { resolveCategoryInput } from '@/lib/ai/semanticCategory';
 import {
   applyFollowUpAnswer,
   batchTransactionInterpretationSchema,
@@ -52,7 +52,10 @@ export async function saveInterpretedTransactionBatchAction(payload: unknown) {
     throw new Error(`Hay ${parsedBatch.items.length - incompleteItems.length} movimientos listos y ${incompleteItems.length} necesita aclaración. Corrige el texto y vuelve a interpretarlo.`);
   }
 
-  const intents = parsedBatch.items.map((item) => enforceFinancialConsistency(item));
+  const intents = parsedBatch.items.map((item, index) => enforceFinancialConsistency({
+    ...item,
+    category: resolvePayloadCategory(item.category, `movimiento ${index + 1}`)
+  }));
   await saveConversationalTransactionBatch(intents, {
     happenedAt: resolveMovementDate(payload)
   });
@@ -94,6 +97,17 @@ function extractMovementDate(payload: unknown) {
 function extractCategoryOverride(payload: unknown) {
   if (!payload || typeof payload !== 'object') return null;
   const override = (payload as Record<string, unknown>).categoryOverride;
-  if (typeof override !== 'string' || !isApprovedCategory(override)) return null;
-  return override;
+  if (typeof override !== 'string') return null;
+  return resolvePayloadCategory(override, 'movimiento');
+}
+
+function resolvePayloadCategory(category: unknown, label: string) {
+  if (typeof category !== 'string') {
+    throw new Error(`La categoría del ${label} no puede estar vacía.`);
+  }
+  const resolved = resolveCategoryInput(category);
+  if (resolved.error || !resolved.value) {
+    throw new Error(`${resolved.error ?? 'Categoría inválida'} (${label}).`);
+  }
+  return resolved.value;
 }

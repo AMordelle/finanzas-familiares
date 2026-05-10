@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { APPROVED_CATEGORY_CATALOG } from '@/lib/ai/semanticCategory';
+import { APPROVED_CATEGORY_CATALOG, formatCategoryLabel, resolveCategoryInput } from '@/lib/ai/semanticCategory';
 import { type BatchTransactionInterpretation, type TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import type { AccountOption } from '@/lib/db/queries';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
@@ -16,6 +16,7 @@ type Props = {
   accounts: AccountOption[];
   hasHousehold: boolean;
   initialIntent?: TransactionIntent | null;
+  initialInterpretation?: BatchTransactionInterpretation | null;
 };
 
 const missingFieldQuestions: Record<string, string> = {
@@ -32,13 +33,31 @@ function isCreditCardLikeSource(intent: TransactionIntent | null) {
   return /\b(tdc|tarjeta|credit)\b/i.test(intent.sourceAccountName);
 }
 
-export function ConversationalRegistration({ accounts, hasHousehold, initialIntent = null }: Props) {
+
+function buildInitialCategoryInputs(interpretation: BatchTransactionInterpretation | null) {
+  return (interpretation?.items ?? []).reduce<Record<number, string>>((acc, item, index) => {
+    acc[index] = item.category ?? 'otros_gastos';
+    return acc;
+  }, {});
+}
+
+function buildInitialCategoryModes(interpretation: BatchTransactionInterpretation | null) {
+  return (interpretation?.items ?? []).reduce<Record<number, 'existing' | 'custom'>>((acc, item, index) => {
+    acc[index] = item.category && !APPROVED_CATEGORY_CATALOG.includes(item.category as never) ? 'custom' : 'existing';
+    return acc;
+  }, {});
+}
+
+export function ConversationalRegistration({ accounts, hasHousehold, initialIntent = null, initialInterpretation = null }: Props) {
+  const initialRegistrationInterpretation = initialInterpretation ?? (initialIntent ? { mode: 'single' as const, items: [initialIntent], missingFields: [], needsConfirmation: true } : null);
   const [input, setInput] = useState('');
-  const [interpretation, setInterpretation] = useState<BatchTransactionInterpretation | null>(initialIntent ? { mode: 'single', items: [initialIntent], missingFields: [], needsConfirmation: true } : null);
+  const [interpretation, setInterpretation] = useState<BatchTransactionInterpretation | null>(initialRegistrationInterpretation);
   const [movementDate, setMovementDate] = useState(() => toDateInputValue(new Date()));
   const [isCustomDatePickerOpen, setIsCustomDatePickerOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>(APPROVED_CATEGORY_CATALOG[0]);
   const [isManualCategoryOverride, setIsManualCategoryOverride] = useState(false);
+  const [categoryInputs, setCategoryInputs] = useState<Record<number, string>>(() => buildInitialCategoryInputs(initialRegistrationInterpretation));
+  const [categoryModes, setCategoryModes] = useState<Record<number, 'existing' | 'custom'>>(() => buildInitialCategoryModes(initialRegistrationInterpretation));
   const [followUpValue, setFollowUpValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -47,8 +66,17 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
   const isSavingRef = useRef(false);
 
   useEffect(() => {
-    const firstItem = interpretation?.items[0];
-    if (!firstItem?.category || interpretation?.mode === 'batch') return;
+    if (!interpretation) {
+      setCategoryInputs({});
+      setCategoryModes({});
+      return;
+    }
+
+    setCategoryInputs(buildInitialCategoryInputs(interpretation));
+    setCategoryModes(buildInitialCategoryModes(interpretation));
+
+    const firstItem = interpretation.items[0];
+    if (!firstItem?.category || interpretation.mode === 'batch') return;
     setSelectedCategory(firstItem.category);
     setIsManualCategoryOverride(false);
   }, [interpretation]);
@@ -108,6 +136,39 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
     return filtered;
   }, [accounts, activeIntent]);
 
+  const updateCategoryMode = (index: number, mode: 'existing' | 'custom') => {
+    setCategoryModes((current) => ({ ...current, [index]: mode }));
+    setCategoryInputs((current) => ({
+      ...current,
+      [index]: mode === 'custom' ? '' : (interpretation?.items[index]?.category ?? 'otros_gastos')
+    }));
+  };
+
+  const updateCategoryInput = (index: number, value: string) => {
+    setCategoryInputs((current) => ({ ...current, [index]: value }));
+    if (!isBatch && activeIntent) {
+      setSelectedCategory(value);
+      setIsManualCategoryOverride(value !== (activeIntent.category ?? ''));
+    }
+  };
+
+  const getFinalCategory = (index: number) => {
+    const rawCategory = categoryInputs[index] ?? interpretation?.items[index]?.category ?? 'otros_gastos';
+    return resolveCategoryInput(rawCategory);
+  };
+
+  const buildInterpretationWithFinalCategories = () => {
+    if (!interpretation) return null;
+    const finalItems = interpretation.items.map((item, index) => {
+      const resolved = getFinalCategory(index);
+      if (resolved.error || !resolved.value) {
+        throw new Error(`${resolved.error ?? 'Categoría inválida'} Movimiento ${index + 1}.`);
+      }
+      return { ...item, category: resolved.value };
+    });
+    return { ...interpretation, items: finalItems };
+  };
+
   if (!hasHousehold) {
     return (
       <Card>
@@ -127,21 +188,25 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
     isSavingRef.current = true;
     startTransition(async () => {
       try {
+        const finalInterpretation = buildInterpretationWithFinalCategories();
+        if (!finalInterpretation) return;
         const result = isBatch
           ? await saveInterpretedTransactionBatchAction({
-            ...interpretation,
+            ...finalInterpretation,
             movementDate
           })
           : await saveInterpretedTransactionAction({
-            ...interpretation.items[0],
+            ...finalInterpretation.items[0],
             movementDate,
-            categoryOverride: isManualCategoryOverride ? selectedCategory : undefined
+            categoryOverride: getFinalCategory(0).value ?? undefined
           });
         setInput('');
         setInterpretation(null);
         setMovementDate(toDateInputValue(new Date()));
         setSelectedCategory(APPROVED_CATEGORY_CATALOG[0]);
         setIsManualCategoryOverride(false);
+        setCategoryInputs({});
+        setCategoryModes({});
         setIsCustomDatePickerOpen(false);
         setSuccessMessage(result.message);
         router.refresh();
@@ -153,7 +218,7 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
     });
   };
 
-  const displayedCategory = selectedCategory || activeIntent?.category || 'otros_gastos';
+  const displayedCategory = categoryInputs[0] !== undefined ? categoryInputs[0] : (selectedCategory || activeIntent?.category || 'otros_gastos');
 
   return (
     <Card>
@@ -206,11 +271,18 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
         <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
           <h3 className="font-semibold">Detecté {batchItems.length} movimientos:</h3>
           <ol className="mt-3 list-decimal space-y-3 pl-5 text-sm text-slate-700">
-            {batchItems.map((item) => (
+            {batchItems.map((item, index) => (
               <li key={`${item.rawText}-${item.amount}`}>
-                <p className="font-medium text-slate-900">{item.visibleType} · {formatCurrencyMXN(item.amount)} · {item.category ?? 'Sin categoría'}{item.sourceAccountName ? ` · desde ${item.sourceAccountName}` : ''}{item.destinationAccountName ? ` · hacia ${item.destinationAccountName}` : ''}</p>
+                <p className="font-medium text-slate-900">{item.visibleType} · {formatCurrencyMXN(item.amount)}{item.sourceAccountName ? ` · desde ${item.sourceAccountName}` : ''}{item.destinationAccountName ? ` · hacia ${item.destinationAccountName}` : ''}</p>
                 <p>Texto original: “{item.rawText}”</p>
                 <p>Descripción: {item.description}</p>
+                <CategoryEditor
+                  index={index}
+                  mode={categoryModes[index] ?? 'existing'}
+                  value={categoryInputs[index] ?? item.category ?? 'otros_gastos'}
+                  onModeChange={updateCategoryMode}
+                  onValueChange={updateCategoryInput}
+                />
               </li>
             ))}
           </ol>
@@ -223,7 +295,7 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
           {isCustomDatePickerOpen && <input className="mt-2 w-full rounded-md border border-slate-300 bg-white p-2 text-sm" type="date" value={movementDate} max={toDateInputValue(new Date())} onChange={(event) => setMovementDate(event.target.value)} />}
           <div className="mt-4 flex gap-2">
             <Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Guardar movimientos'}</Button>
-            <Button variant="outline" onClick={() => { setInterpretation(null); setMovementDate(toDateInputValue(new Date())); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
+            <Button variant="outline" onClick={() => { setInterpretation(null); setMovementDate(toDateInputValue(new Date())); setCategoryInputs({}); setCategoryModes({}); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
           </div>
         </div>
       )}
@@ -244,18 +316,13 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
             </li>
           </ul>
 
-          <select
-            className="mt-2 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+          <CategoryEditor
+            index={0}
+            mode={categoryModes[0] ?? 'existing'}
             value={displayedCategory}
-            onChange={(event) => {
-              setSelectedCategory(event.target.value);
-              setIsManualCategoryOverride(event.target.value !== (activeIntent.category ?? ''));
-            }}
-          >
-            {APPROVED_CATEGORY_CATALOG.map((category) => (
-              <option key={category} value={category}>{category}</option>
-            ))}
-          </select>
+            onModeChange={updateCategoryMode}
+            onValueChange={updateCategoryInput}
+          />
 
           <li className="mt-3 list-none pt-2 text-sm text-slate-900">Fecha del movimiento: <span className="font-medium">{formatMovementDateLabel(movementDate)}</span></li>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -267,13 +334,64 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
           <p className="mt-3 text-sm font-medium text-slate-900">{activeIntent.humanConfirmation}</p>
           <div className="mt-4 flex gap-2">
             <Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Confirmar'}</Button>
-            <Button variant="outline" onClick={() => { setInterpretation(null); setMovementDate(toDateInputValue(new Date())); setSelectedCategory(APPROVED_CATEGORY_CATALOG[0]); setIsManualCategoryOverride(false); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
+            <Button variant="outline" onClick={() => { setInterpretation(null); setMovementDate(toDateInputValue(new Date())); setSelectedCategory(APPROVED_CATEGORY_CATALOG[0]); setIsManualCategoryOverride(false); setCategoryInputs({}); setCategoryModes({}); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
           </div>
         </div>
       )}
       {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
       {successMessage && <p className="mt-4 text-sm text-emerald-700">{successMessage}</p>}
     </Card>
+  );
+}
+
+
+type CategoryEditorProps = {
+  index: number;
+  mode: 'existing' | 'custom';
+  value: string;
+  onModeChange: (index: number, mode: 'existing' | 'custom') => void;
+  onValueChange: (index: number, value: string) => void;
+};
+
+function CategoryEditor({ index, mode, value, onModeChange, onValueChange }: CategoryEditorProps) {
+  const resolved = resolveCategoryInput(value);
+  const showNewCategory = mode === 'custom' && !resolved.error && resolved.value && resolved.isNew;
+
+  return (
+    <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+      <label className="text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor={`category-mode-${index}`}>Categoría</label>
+      <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <select
+          id={`category-mode-${index}`}
+          className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+          value={mode === 'custom' ? '__custom__' : value}
+          onChange={(event) => {
+            if (event.target.value === '__custom__') {
+              onModeChange(index, 'custom');
+              return;
+            }
+            onModeChange(index, 'existing');
+            onValueChange(index, event.target.value);
+          }}
+        >
+          {APPROVED_CATEGORY_CATALOG.map((category) => (
+            <option key={category} value={category}>{formatCategoryLabel(category)}</option>
+          ))}
+          <option value="__custom__">Nueva categoría...</option>
+        </select>
+        {mode === 'custom' && (
+          <input
+            className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+            placeholder="Ej. Gasto escolar"
+            value={value}
+            maxLength={64}
+            onChange={(event) => onValueChange(index, event.target.value)}
+          />
+        )}
+      </div>
+      {showNewCategory && <p className="mt-2 text-xs font-medium text-emerald-700">Nueva categoría: {formatCategoryLabel(resolved.value)}</p>}
+      {resolved.error && <p className="mt-2 text-xs font-medium text-red-600">{resolved.error}</p>}
+    </div>
   );
 }
 

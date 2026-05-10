@@ -21,7 +21,11 @@ describe('registro actions revalidation', () => {
     }));
 
     vi.doMock('@/lib/ai/semanticCategory', () => ({
-      isApprovedCategory: (category: string) => ['comida', 'transporte', 'servicios', 'otros_gastos'].includes(category)
+      isApprovedCategory: (category: string) => ['comida', 'transporte', 'servicios', 'otros_gastos', 'ingreso_extra'].includes(category),
+      resolveCategoryInput: (category: string) => {
+        const value = category.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        return value ? { value, error: null, isNew: !['comida', 'transporte', 'servicios', 'otros_gastos', 'ingreso_extra'].includes(value), label: value } : { value: null, error: 'La categoría no puede estar vacía.', isNew: false, label: '' };
+      }
     }));
 
     vi.doMock('@/lib/ai/transactionInterpreter', () => ({
@@ -215,6 +219,69 @@ describe('registro actions revalidation', () => {
     expect(revalidatePathMock).toHaveBeenCalledWith('/cuentas');
     expect(revalidatePathMock).toHaveBeenCalledWith('/registro');
     expect(response).toEqual({ success: true, message: '2 movimientos registrados correctamente.' });
+  });
+
+
+  it('guarda lote con categoría modificada por item', async () => {
+    const { saveInterpretedTransactionBatchAction } = await import('@/app/registro/actions');
+
+    await saveInterpretedTransactionBatchAction({
+      mode: 'batch',
+      items: [
+        { action: 'gasto', amount: 100, category: 'transporte', description: 'Cena', sourceAccount: 'efectivo', missingFieldKinds: [] },
+        { action: 'ingreso', amount: 200, category: 'ingreso_extra', description: 'Pago', destinationAccount: 'banco', missingFieldKinds: [] }
+      ],
+      missingFields: [],
+      needsConfirmation: true
+    });
+
+    expect(saveBatchMock).toHaveBeenCalledWith([
+      expect.objectContaining({ category: 'transporte' }),
+      expect.objectContaining({ category: 'ingreso_extra' })
+    ], expect.any(Object));
+  });
+
+  it('normaliza una categoría nueva antes de guardar movimiento único y lote', async () => {
+    const { saveInterpretedTransactionAction, saveInterpretedTransactionBatchAction } = await import('@/app/registro/actions');
+
+    await saveInterpretedTransactionAction({
+      action: 'gasto',
+      amount: 455,
+      category: 'servicios',
+      categoryOverride: 'Gasto escolar',
+      sourceAccount: 'cuenta banco',
+      destinationAccount: null
+    });
+
+    expect(saveMock).toHaveBeenCalledWith(expect.objectContaining({ category: 'gasto_escolar' }), expect.any(Object));
+
+    await saveInterpretedTransactionBatchAction({
+      mode: 'batch',
+      items: [
+        { action: 'gasto', amount: 100, category: 'Gasto escolar', description: 'Escuela', sourceAccount: 'efectivo', missingFieldKinds: [] }
+      ],
+      missingFields: [],
+      needsConfirmation: true
+    });
+
+    expect(saveBatchMock).toHaveBeenLastCalledWith([
+      expect.objectContaining({ category: 'gasto_escolar' })
+    ], expect.any(Object));
+  });
+
+  it('rechaza categoría vacía antes de guardar', async () => {
+    const { saveInterpretedTransactionBatchAction } = await import('@/app/registro/actions');
+
+    await expect(saveInterpretedTransactionBatchAction({
+      mode: 'batch',
+      items: [
+        { action: 'gasto', amount: 100, category: '   ', description: 'Cena', sourceAccount: 'efectivo', missingFieldKinds: [] }
+      ],
+      missingFields: [],
+      needsConfirmation: true
+    })).rejects.toThrow('categoría');
+
+    expect(saveBatchMock).not.toHaveBeenCalled();
   });
 
 });

@@ -47,6 +47,50 @@ export function isApprovedCategory(category: string | null | undefined): categor
   return Boolean(category && APPROVED_CATEGORY_SET.has(category));
 }
 
+
+export function formatCategoryLabel(category: string | null | undefined) {
+  if (!category) return 'Sin categoría';
+  const normalizedForDisplay = category.replace(/_/g, ' ').trim();
+  if (!normalizedForDisplay) return 'Sin categoría';
+  return normalizedForDisplay.charAt(0).toUpperCase() + normalizedForDisplay.slice(1);
+}
+
+export function normalizeCategoryInput(input: string) {
+  return input
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+}
+
+export function resolveCategoryInput(input: string | null | undefined): { value: string | null; error: string | null; isNew: boolean; label: string } {
+  const raw = input?.trim() ?? '';
+  if (!raw) {
+    return { value: null, error: 'La categoría no puede estar vacía.', isNew: false, label: '' };
+  }
+
+  const value = isApprovedCategory(raw) ? raw : normalizeCategoryInput(raw);
+  if (!value) {
+    return { value: null, error: 'La categoría debe incluir letras o números.', isNew: false, label: raw };
+  }
+  if (value.length > 48) {
+    return { value: null, error: 'La categoría debe tener 48 caracteres o menos.', isNew: false, label: raw };
+  }
+  if (!/^[a-z0-9_]+$/.test(value) && !isApprovedCategory(value)) {
+    return { value: null, error: 'La categoría solo puede usar letras, números y espacios.', isNew: false, label: raw };
+  }
+
+  return {
+    value,
+    error: null,
+    isNew: !isApprovedCategory(value),
+    label: formatCategoryLabel(value)
+  };
+}
+
 export function localCategoryInference(intent: FinancialIntent, normalizedText: string) {
   if (intent === 'income') {
     if (/(reembolso|devolucion)/.test(normalizedText)) return 'reembolso';
