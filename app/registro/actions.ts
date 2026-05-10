@@ -72,6 +72,7 @@ function revalidateRegistrationPaths() {
   revalidatePath('/movimientos');
   revalidatePath('/cuentas');
   revalidatePath('/registro');
+  revalidatePath('/msi');
 }
 
 function resolveMovementDate(payload: unknown) {

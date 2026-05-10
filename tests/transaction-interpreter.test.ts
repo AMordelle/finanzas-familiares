@@ -88,6 +88,21 @@ describe('transaction interpreter semantic pipeline', () => {
     expect(transfer.intent).toBe('debt_transfer');
   });
 
+  it('detecta compras MSI, extrae monto y meses, y calcula mensualidad', async () => {
+    const phrase = await interpretTransaction('Gasté 1200 en ropa a 3 meses sin intereses con TDC BBVA', accounts as any);
+    expect(phrase.action).toBe('msi_purchase');
+    expect(phrase.totalAmount).toBe(1200);
+    expect(phrase.months).toBe(3);
+    expect(phrase.amount).toBe(400);
+    expect(phrase.monthlyAmount).toBe(400);
+    expect(phrase.sourceAccountName).toBe('TDC BBVA');
+
+    const acronym = await interpretTransaction('Gasté 1200 en ropa a 4 MSI con TDC BBVA', accounts as any);
+    expect(acronym.action).toBe('msi_purchase');
+    expect(acronym.months).toBe(4);
+    expect(acronym.monthlyAmount).toBe(300);
+  });
+
   it('B: generic tarjeta with multiple cards asks which one', async () => {
     const result = await interpretTransaction('Gasté 1000 con tarjeta de credito', accounts as any);
     expect(result.missingFieldKinds[0]).toBe('missingSourceAccount');

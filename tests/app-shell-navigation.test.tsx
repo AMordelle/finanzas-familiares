@@ -15,6 +15,8 @@ describe('AppShell navigation', () => {
     expect(html).toContain('Cuentas');
     expect(html).toContain('href="/movimientos"');
     expect(html).toContain('Movimientos');
+    expect(html).toContain('href="/msi"');
+    expect(html).toContain('MSI');
     expect(html).toContain('href="/extras"');
     expect(html).toContain('Extras');
     expect(html).toContain('href="/cierre"');

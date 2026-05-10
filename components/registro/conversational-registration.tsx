@@ -26,7 +26,7 @@ const missingFieldQuestions: Record<string, string> = {
 };
 
 function isCreditCardLikeSource(intent: TransactionIntent | null) {
-  if (!intent || intent.intent !== 'expense_debt_account') return true;
+  if (!intent || (intent.intent !== 'expense_debt_account' && intent.action !== 'msi_purchase')) return true;
   if (!intent.sourceAccountName) return false;
   if (intent.sourceAccountType === 'credit_card') return true;
   if (intent.sourceAccountType !== 'loan') return false;
@@ -305,7 +305,10 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
           <h3 className="font-semibold">Confirmación</h3>
           <ul className="mt-3 space-y-1 text-sm text-slate-700">
             <li>Tipo de movimiento: {activeIntent.visibleType}</li>
-            <li>Monto: {formatCurrencyMXN(activeIntent.amount)}</li>
+            <li>Monto: {formatCurrencyMXN(activeIntent.action === 'msi_purchase' ? activeIntent.totalAmount ?? activeIntent.amount : activeIntent.amount)}</li>
+            {activeIntent.action === 'msi_purchase' && (
+              <li>Mensualidad MSI: {formatCurrencyMXN(activeIntent.monthlyAmount ?? activeIntent.amount)} · {activeIntent.months} pagos</li>
+            )}
             <li>Descripción: {activeIntent.description}</li>
             <li>Cuenta origen: {activeIntent.sourceAccountName ?? 'N/A'}</li>
             <li>Cuenta destino: {activeIntent.destinationAccountName ?? 'N/A'}</li>

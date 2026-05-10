@@ -44,8 +44,11 @@ export const transactionIntentSchema = z.object({
   normalizedText: z.string().min(1).default('movimiento'),
   intent: financialIntentSchema.default('expense_cash_like'),
   visibleType: z.string().min(1).default('Gasto con efectivo/banco'),
-  action: z.enum(['gasto', 'ingreso', 'transferencia', 'pago_deuda', 'prestamo_otorgado', 'pago_recibido', 'objetivo_aporte']),
+  action: z.enum(['gasto', 'ingreso', 'transferencia', 'pago_deuda', 'prestamo_otorgado', 'pago_recibido', 'objetivo_aporte', 'msi_purchase']),
   amount: z.number().positive(),
+  totalAmount: z.number().positive().nullable().optional().default(null),
+  months: z.number().int().positive().nullable().optional().default(null),
+  monthlyAmount: z.number().positive().nullable().optional().default(null),
   description: z.string().min(1).nullable().optional().default(null),
   category: z.string().min(1).nullable().optional().default('otros_gastos'),
   sourceAccountId: z.string().nullable().optional().default(null),
@@ -271,6 +274,31 @@ function isCreditCardCompatibleDebtInstrument(account: Pick<EnrichedAccount, 'ty
 function parseAmount(input: string) {
   const match = input.replace(/,/g, '').match(/(\d+(?:\.\d+)?)/);
   return Number(match?.[1] ?? 0) || 1;
+}
+
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function extractMsiMonths(normalizedText: string) {
+  const patterns = [
+    /\ba\s+(\d{2}|[2-9])\s+msi\b/,
+    /\ba\s+(\d{2}|[2-9])\s+mes(?:es)?(?:\s+sin\s+intereses)?\b/,
+    /\b(\d{2}|[2-9])\s+mes(?:es)?\s+sin\s+intereses\b/,
+    /\b(\d{2}|[2-9])\s+msi\b/,
+    /\bdiferido\s+a\s+(\d{2}|[2-9])\s+mes(?:es)?\b/,
+    /\bcompra\s+a\s+(\d{2}|[2-9])\s+mes(?:es)?\b/
+  ];
+  for (const pattern of patterns) {
+    const value = Number(normalizedText.match(pattern)?.[1] ?? 0);
+    if (Number.isInteger(value) && value > 1) return value;
+  }
+  return null;
+}
+
+function isMsiPurchaseText(normalizedText: string) {
+  return /\b(msi|meses\s+sin\s+intereses|diferido\s+a\s+meses|compra\s+a\s+meses)\b/.test(normalizedText)
+    || /\ba\s+(?:\d{2}|[2-9])\s+mes(?:es)?(?:\s+sin\s+intereses)?\b/.test(normalizedText);
 }
 
 function toCanonicalType(type: string, subtype?: string | null, name?: string): z.infer<typeof accountTypeSchema> {
@@ -1132,6 +1160,8 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const modelAccounts = enrichAccounts(accounts);
   const normalizedText = normalize(text);
   const fallbackAmount = parseAmount(text);
+  const msiMonths = extractMsiMonths(normalizedText);
+  const isMsiPurchase = Boolean(msiMonths && isMsiPurchaseText(normalizedText));
   const matched = matchAccounts(text, modelAccounts);
 
   let aiProposal: Awaited<ReturnType<typeof semanticInstructionUnderstanding>> = null;
@@ -1147,9 +1177,12 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   let intent = shouldFallbackToDeterministic
     ? inferIntent(normalizedText, matched)
     : aiProposal!.intent;
-  const amount = (!shouldFallbackToDeterministic && aiProposal?.amount && Number.isFinite(aiProposal.amount))
+  if (isMsiPurchase) intent = 'expense_debt_account';
+  const totalAmount = (!shouldFallbackToDeterministic && aiProposal?.amount && Number.isFinite(aiProposal.amount))
     ? aiProposal.amount
     : fallbackAmount;
+  const monthlyAmount = isMsiPurchase && msiMonths ? roundMoney(totalAmount / msiMonths) : null;
+  const amount = monthlyAmount ?? totalAmount;
 
   const aiMetadata: AiInterpretationMetadata = {
     interpretationSource: shouldFallbackToDeterministic ? 'fallback' : 'ai',
@@ -1309,8 +1342,11 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     normalizedText,
     intent: finalIntent,
     visibleType: visibleTypeMap[finalIntent],
-    action: intentToLegacyAction(finalIntent),
+    action: isMsiPurchase ? 'msi_purchase' : intentToLegacyAction(finalIntent),
     amount,
+    totalAmount: isMsiPurchase ? totalAmount : null,
+    months: isMsiPurchase ? msiMonths : null,
+    monthlyAmount: isMsiPurchase ? amount : null,
     description: text.trim() || null,
     category,
     sourceAccountId: source?.id ?? null,
@@ -1348,7 +1384,9 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const visibleType = visibleTypeMap[finalIntent];
   const humanConfirmation = missingKinds.length
     ? null
-    : finalIntent === 'income'
+    : isMsiPurchase
+      ? `Registrar compra MSI de ${formatCurrencyMXN(totalAmount)} en ${msiMonths} pagos de ${formatCurrencyMXN(amount)} con ${draftForConstraints.sourceAccountName ?? 'N/A'}.`
+      : finalIntent === 'income'
       ? `Registrar ingreso de ${formatCurrencyMXN(amount)} hacia ${draftForConstraints.destinationAccountName ?? 'N/A'}.`
       : `Registrar ${visibleType.toLowerCase()} de ${formatCurrencyMXN(amount)}${draftForConstraints.sourceAccountName ? ` desde ${draftForConstraints.sourceAccountName}` : ''}${draftForConstraints.destinationAccountName ? ` hacia ${draftForConstraints.destinationAccountName}` : ''}.`;
 
@@ -1357,8 +1395,11 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     normalizedText,
     intent: finalIntent,
     visibleType,
-    action: intentToLegacyAction(finalIntent),
+    action: isMsiPurchase ? 'msi_purchase' : intentToLegacyAction(finalIntent),
     amount,
+    totalAmount: isMsiPurchase ? totalAmount : null,
+    months: isMsiPurchase ? msiMonths : null,
+    monthlyAmount: isMsiPurchase ? amount : null,
     description: draftForConstraints.description,
     category: draftForConstraints.category,
     sourceAccountId: draftForConstraints.sourceAccountId,
