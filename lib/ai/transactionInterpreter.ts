@@ -72,6 +72,15 @@ export const transactionIntentSchema = z.object({
 
 export type TransactionIntent = z.infer<typeof transactionIntentSchema>;
 
+export const batchTransactionInterpretationSchema = z.object({
+  mode: z.enum(['single', 'batch']),
+  items: z.array(transactionIntentSchema).min(1),
+  missingFields: z.array(z.string()).default([]),
+  needsConfirmation: z.boolean().default(true)
+});
+
+export type BatchTransactionInterpretation = z.infer<typeof batchTransactionInterpretationSchema>;
+
 export type InterpreterAccountContext = {
   id?: string;
   name: string;
@@ -773,7 +782,7 @@ function inferIntent(normalizedText: string, matched: EnrichedAccount[]): z.infe
   if (/(me pago|pago recibido|me deposito)/.test(normalizedText)) return 'receivable_payment';
   if (/(preste|prestamo a|le di prestado)/.test(normalizedText)) return 'receivable_created';
   if (/(transferi|traspase|transferencia|movi .* entre cuentas)/.test(normalizedText)) return 'transfer_between_own_accounts';
-  if (/(ingreso|recibi|nomina|sueldo|depositaron|bono|tiempo extra)/.test(normalizedText)) return 'income';
+  if (/(ingreso|recibi|recibida|nomina|sueldo|depositaron|bono|tiempo extra)/.test(normalizedText)) return 'income';
   if (/(ahorro|fondo emergencia|meta)/.test(normalizedText) && /(meti|aporte|abone|deposite|movi)/.test(normalizedText)) return 'savings_contribution';
   if (/(retire|saque).*(ahorro|fondo|meta)/.test(normalizedText)) return 'savings_withdrawal';
   if (/(pague|abone|abono)/.test(normalizedText)) {
@@ -995,6 +1004,130 @@ export function enforceFinancialConsistency(result: TransactionIntent): Transact
   return result;
 }
 
+
+type BatchCandidate = {
+  rawText: string;
+  textForInterpretation: string;
+  context: string | null;
+};
+
+function stripListMarker(input: string) {
+  return input
+    .replace(/^\s*(?:[-*•]+|\d+[.)-])\s*/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function hasAmount(input: string) {
+  return /\d+(?:[,.]\d+)?/.test(input);
+}
+
+function looksLikeContextHeader(input: string) {
+  const trimmed = input.trim();
+  return trimmed.endsWith(':') && !hasAmount(trimmed);
+}
+
+function prependPreviousActionWhenNeeded(segment: string, previousAction: string | null) {
+  if (!previousAction) return segment;
+  const normalizedSegment = normalize(segment);
+  if (/\b(gaste|compre|pague|recibi|ingreso|transferi|traspase|preste|le di)\b/.test(normalizedSegment)) return segment;
+  return `${previousAction} ${segment}`;
+}
+
+function detectLeadingAction(input: string) {
+  const normalizedInput = normalize(input);
+  if (/\b(recibi|recibida|ingreso|depositaron)\b/.test(normalizedInput)) return 'Recibí';
+  if (/\b(transferi|traspase|movi)\b/.test(normalizedInput)) return 'Transferí';
+  if (/\b(preste|le di prestado)\b/.test(normalizedInput)) return 'Presté';
+  if (/\b(pague)\b/.test(normalizedInput)) return 'Pagué';
+  if (/\b(gaste|compre|consumi)\b/.test(normalizedInput)) return 'Gasté';
+  return null;
+}
+
+function splitInlineMovements(input: string) {
+  const normalizedInput = input.trim();
+  if (!normalizedInput) return [] as string[];
+  const sentenceParts = normalizedInput
+    .split(/(?<=[.!?])\s+(?=(?:[-*•]+|\d+[.)-]\s*)?(?:hoy\s+|ayer\s+)?(?:gaste|gasté|compre|compré|pague|pagué|recibi|recibí|transferi|transferí|preste|presté|le\s+di|\d))/i)
+    .map(stripListMarker)
+    .filter(Boolean);
+
+  const parts = sentenceParts.flatMap((part) => {
+    const commaParts = part
+      .split(/\s*(?:,|;|\sy\s+)\s*(?=(?:hoy\s+|ayer\s+)?(?:gaste|gasté|compre|compré|pague|pagué|recibi|recibí|transferi|transferí|preste|presté|le\s+di|\d))/i)
+      .map(stripListMarker)
+      .filter(Boolean);
+    if (commaParts.length <= 1) return [part];
+
+    let previousAction = detectLeadingAction(commaParts[0]);
+    return commaParts.map((segment, index) => {
+      if (index > 0) {
+        const action = detectLeadingAction(segment);
+        if (action) previousAction = action;
+        return prependPreviousActionWhenNeeded(segment, previousAction);
+      }
+      return segment;
+    });
+  });
+
+  return parts.filter((part) => hasAmount(part));
+}
+
+export function splitBatchTransactionText(text: string): BatchCandidate[] {
+  const normalizedText = text.replace(/\r\n/g, '\n').trim();
+  if (!normalizedText) return [];
+
+  const candidates: BatchCandidate[] = [];
+  let context: string | null = null;
+  const lines = normalizedText.split('\n').map((line) => line.trim()).filter(Boolean);
+  const sourceLines = lines.length > 1 ? lines : [normalizedText];
+
+  for (const sourceLine of sourceLines) {
+    const cleanLine = stripListMarker(sourceLine);
+    if (!cleanLine) continue;
+    if (looksLikeContextHeader(cleanLine)) {
+      context = cleanLine.replace(/:$/, '').trim();
+      continue;
+    }
+
+    for (const rawPart of splitInlineMovements(cleanLine)) {
+      const rawText = stripListMarker(rawPart);
+      if (!rawText) continue;
+      candidates.push({
+        rawText,
+        textForInterpretation: context ? `${context}: ${rawText}` : rawText,
+        context
+      });
+    }
+  }
+
+  return candidates;
+}
+
+export async function interpretTransactions(text: string, accounts: InterpreterAccountContext[] = []): Promise<BatchTransactionInterpretation> {
+  const candidates = splitBatchTransactionText(text);
+  const fallbackCandidates = candidates.length ? candidates : [{ rawText: text.trim(), textForInterpretation: text.trim(), context: null }];
+  const items = await Promise.all(fallbackCandidates.map(async (candidate) => {
+    const interpreted = await interpretTransaction(candidate.textForInterpretation, accounts);
+    return transactionIntentSchema.parse({
+      ...interpreted,
+      rawText: candidate.rawText,
+      normalizedText: normalize(candidate.rawText),
+      description: candidate.context && interpreted.description
+        ? `${candidate.context} - ${candidate.rawText}`
+        : interpreted.description
+    });
+  }));
+  const missingFields = items.flatMap((item, index) => item.missingFieldKinds.map((field) => `${index + 1}:${field}`));
+
+  return batchTransactionInterpretationSchema.parse({
+    mode: items.length > 1 ? 'batch' : 'single',
+    items,
+    missingFields,
+    needsConfirmation: true
+  });
+}
+
 export async function interpretTransaction(text: string, accounts: InterpreterAccountContext[] = []): Promise<TransactionIntent> {
   const modelAccounts = enrichAccounts(accounts);
   const normalizedText = normalize(text);
@@ -1013,7 +1146,7 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const shouldFallbackToDeterministic = !aiProposal || aiProposal.confidence === 'low';
   let intent = shouldFallbackToDeterministic
     ? inferIntent(normalizedText, matched)
-    : aiProposal.intent;
+    : aiProposal!.intent;
   const amount = (!shouldFallbackToDeterministic && aiProposal?.amount && Number.isFinite(aiProposal.amount))
     ? aiProposal.amount
     : fallbackAmount;
@@ -1049,8 +1182,8 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const aiSourceResolution = shouldFallbackToDeterministic ? null : resolveAccountFromAiHint(aiProposal?.sourceAccountHint, 'source', intent, modelAccounts);
   const aiDestinationResolution = shouldFallbackToDeterministic ? null : resolveAccountFromAiHint(aiProposal?.destinationAccountHint, 'destination', intent, modelAccounts);
 
-  let source = aiSourceResolution?.account ?? matched[0] ?? null;
-  let destination = aiDestinationResolution?.account ?? matched[1] ?? (intent === 'income' ? matched[0] ?? null : null);
+  let source: EnrichedAccount | null = aiSourceResolution?.account ?? matched[0] ?? null;
+  let destination: EnrichedAccount | null = aiDestinationResolution?.account ?? matched[1] ?? (intent === 'income' ? matched[0] ?? null : null);
 
   if (intent === 'expense_debt_account' && !source) source = debtFromHint;
   if (intent === 'debt_payment') {
@@ -1265,7 +1398,7 @@ export async function applyFollowUpAnswer(
   current: TransactionIntent,
   answer: string,
   accounts: InterpreterAccountContext[] = []
-): TransactionIntent {
+): Promise<TransactionIntent> {
   const updated = { ...current };
   const modelAccounts = enrichAccounts(accounts);
   const matchedAccount = findAccountByName(modelAccounts, answer);
@@ -1419,7 +1552,7 @@ export async function applyFollowUpAnswer(
   const prompt = choosePrompt(final.missingFieldKinds, final.intent, final.normalizedText);
   final.nextPrompt = prompt.nextPrompt;
   final.nextPromptInputType = prompt.nextPromptInputType;
-  final.nextPromptAllowedAccountTypes = prompt.nextPromptAllowedAccountTypes;
+  final.nextPromptAllowedAccountTypes = prompt.nextPromptAllowedAccountTypes ? [...prompt.nextPromptAllowedAccountTypes] : null;
   final.humanConfirmation = final.missingFieldKinds.length
     ? null
     : final.intent === 'income'

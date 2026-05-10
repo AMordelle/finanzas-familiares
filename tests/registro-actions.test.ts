@@ -4,6 +4,8 @@ const parseMock = vi.fn();
 const enforceFinancialConsistencyMock = vi.fn();
 const applyFollowUpAnswerMock = vi.fn();
 const saveMock = vi.fn();
+const saveBatchMock = vi.fn();
+const interpretTransactionsMock = vi.fn();
 const revalidatePathMock = vi.fn();
 
 describe('registro actions revalidation', () => {
@@ -23,17 +25,22 @@ describe('registro actions revalidation', () => {
     }));
 
     vi.doMock('@/lib/ai/transactionInterpreter', () => ({
+      interpretTransactions: interpretTransactionsMock,
       interpretTransaction: vi.fn(),
       applyFollowUpAnswer: applyFollowUpAnswerMock,
       enforceFinancialConsistency: enforceFinancialConsistencyMock,
       transactionIntentSchema: {
         parse: parseMock
+      },
+      batchTransactionInterpretationSchema: {
+        parse: (payload: unknown) => payload
       }
     }));
 
     vi.doMock('@/lib/db/queries', () => ({
       getAccountsForRegistration: vi.fn(),
-      saveConversationalTransaction: saveMock
+      saveConversationalTransaction: saveMock,
+      saveConversationalTransactionBatch: saveBatchMock
     }));
   });
 
@@ -67,7 +74,8 @@ describe('registro actions revalidation', () => {
     const getAccountsForRegistrationMock = vi.fn().mockResolvedValue([{ name: 'TDC BBVA', type: 'credit_card' }]);
     vi.doMock('@/lib/db/queries', () => ({
       getAccountsForRegistration: getAccountsForRegistrationMock,
-      saveConversationalTransaction: saveMock
+      saveConversationalTransaction: saveMock,
+      saveConversationalTransactionBatch: saveBatchMock
     }));
 
     applyFollowUpAnswerMock.mockResolvedValue({ ok: true });
@@ -152,4 +160,61 @@ describe('registro actions revalidation', () => {
       category: 'transporte'
     }), expect.objectContaining({ happenedAt: '2026-04-09T12:00:00.000Z' }));
   });
+
+  it('interpreta movimientos como lote usando cuentas del hogar', async () => {
+    const getAccountsForRegistrationMock = vi.fn().mockResolvedValue([{ name: 'Efectivo', type: 'operational_cash' }]);
+    vi.doMock('@/lib/db/queries', () => ({
+      getAccountsForRegistration: getAccountsForRegistrationMock,
+      saveConversationalTransaction: saveMock,
+      saveConversationalTransactionBatch: saveBatchMock
+    }));
+    interpretTransactionsMock.mockResolvedValue({ mode: 'batch', items: [] });
+
+    const { interpretTransactionAction } = await import('@/app/registro/actions');
+    const response = await interpretTransactionAction('Gasté 100 en café con efectivo');
+
+    expect(getAccountsForRegistrationMock).toHaveBeenCalled();
+    expect(interpretTransactionsMock).toHaveBeenCalledWith('Gasté 100 en café con efectivo', [{ name: 'Efectivo', type: 'operational_cash' }]);
+    expect(response).toEqual({ mode: 'batch', items: [] });
+  });
+
+  it('bloquea guardado de lote si algún movimiento está incompleto', async () => {
+    const { saveInterpretedTransactionBatchAction } = await import('@/app/registro/actions');
+
+    await expect(saveInterpretedTransactionBatchAction({
+      mode: 'batch',
+      items: [
+        { action: 'gasto', amount: 100, category: 'comida', description: 'ok', sourceAccount: 'efectivo', missingFieldKinds: [] },
+        { action: 'gasto', amount: 50, category: 'comida', description: 'falta', sourceAccount: null, missingFieldKinds: ['missingSourceAccount'] }
+      ],
+      missingFields: ['2:missingSourceAccount'],
+      needsConfirmation: true
+    })).rejects.toThrow('necesita aclaración');
+    expect(saveBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('guarda lote completo y revalida rutas necesarias', async () => {
+    const { saveInterpretedTransactionBatchAction } = await import('@/app/registro/actions');
+    const batch = {
+      mode: 'batch',
+      movementDate: '2026-04-11',
+      items: [
+        { action: 'gasto', amount: 100, category: 'comida', description: 'Cena', sourceAccount: 'efectivo', missingFieldKinds: [] },
+        { action: 'ingreso', amount: 200, category: 'ingreso_extra', description: 'Pago', destinationAccount: 'banco', missingFieldKinds: [] }
+      ],
+      missingFields: [],
+      needsConfirmation: true
+    };
+
+    const response = await saveInterpretedTransactionBatchAction(batch);
+
+    expect(enforceFinancialConsistencyMock).toHaveBeenCalledTimes(2);
+    expect(saveBatchMock).toHaveBeenCalledWith(batch.items, expect.objectContaining({ happenedAt: '2026-04-11T12:00:00.000Z' }));
+    expect(revalidatePathMock).toHaveBeenCalledWith('/dashboard');
+    expect(revalidatePathMock).toHaveBeenCalledWith('/movimientos');
+    expect(revalidatePathMock).toHaveBeenCalledWith('/cuentas');
+    expect(revalidatePathMock).toHaveBeenCalledWith('/registro');
+    expect(response).toEqual({ success: true, message: '2 movimientos registrados correctamente.' });
+  });
+
 });

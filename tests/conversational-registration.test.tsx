@@ -11,7 +11,8 @@ vi.mock('next/navigation', () => ({
 vi.mock('@/app/registro/actions', () => ({
   interpretTransactionAction: vi.fn(),
   applyFollowUpAnswerAction: vi.fn(),
-  saveInterpretedTransactionAction: vi.fn()
+  saveInterpretedTransactionAction: vi.fn(),
+  saveInterpretedTransactionBatchAction: vi.fn()
 }));
 
 function buildIntent(partial: Partial<TransactionIntent>): TransactionIntent {

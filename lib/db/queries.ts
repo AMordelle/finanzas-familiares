@@ -2156,18 +2156,18 @@ function buildJournalEntries(intent: TransactionIntent, accounts: AccountOption[
   switch (intent.action) {
     case 'gasto':
       return [
-        { accountId: null, type: 'debit', category: intent.category, amount: intent.amount },
+        { accountId: null, type: 'debit', category: intent.category ?? 'otros_gastos', amount: intent.amount },
         { accountId: sourceId, type: 'credit', category: 'salida_cuenta', amount: intent.amount }
       ];
     case 'ingreso':
       return [
         { accountId: destinationId, type: 'debit', category: 'entrada_cuenta', amount: intent.amount },
-        { accountId: null, type: 'credit', category: intent.category, amount: intent.amount }
+        { accountId: null, type: 'credit', category: intent.category ?? 'otros_gastos', amount: intent.amount }
       ];
     case 'transferencia':
       return [
-        { accountId: destinationId, type: 'debit', category: intent.category, amount: intent.amount },
-        { accountId: sourceId, type: 'credit', category: intent.category, amount: intent.amount }
+        { accountId: destinationId, type: 'debit', category: intent.category ?? 'otros_gastos', amount: intent.amount },
+        { accountId: sourceId, type: 'credit', category: intent.category ?? 'otros_gastos', amount: intent.amount }
       ];
     case 'pago_deuda':
       if (!sourceId || !destinationId) {
@@ -2243,6 +2243,123 @@ export async function saveConversationalTransaction(
 
   await applyAccountBalanceUpdates(householdId, intent);
   await recalculateIndicators(householdId);
+}
+
+
+function mergeDeltas(target: Map<string, number>, source: Map<string, number>) {
+  for (const [accountId, delta] of source.entries()) {
+    target.set(accountId, (target.get(accountId) ?? 0) + delta);
+  }
+}
+
+async function deleteTransactionGroups(groupIds: string[]) {
+  if (!groupIds.length) return;
+  await supabaseAdmin.from('transactions').delete().in('group_id', groupIds);
+  await supabaseAdmin.from('transaction_groups').delete().in('id', groupIds);
+}
+
+async function applyBatchAccountBalanceUpdates(householdId: string, intents: TransactionIntent[], registrationAccounts: AccountOption[]) {
+  const accounts = await getHouseholdAccounts(householdId);
+  const aggregateDeltas = new Map<string, number>();
+
+  for (const intent of intents) {
+    const sourceId = findAccountIdByName(registrationAccounts, intent.sourceAccount);
+    const destinationId = findAccountIdByName(registrationAccounts, intent.destinationAccount);
+    const source = accounts.find((account) => account.id === sourceId);
+    const destination = accounts.find((account) => account.id === destinationId);
+    mergeDeltas(aggregateDeltas, buildAccountBalanceDeltas(intent, source, destination));
+  }
+
+  const appliedAccountIds: string[] = [];
+  try {
+    for (const [accountId, delta] of aggregateDeltas.entries()) {
+      const account = accounts.find((item) => item.id === accountId);
+      if (!account || delta === 0) continue;
+
+      const { error } = await supabaseAdmin
+        .from('accounts')
+        .update({ balance: (account.balance + delta).toFixed(2) })
+        .eq('id', account.id)
+        .eq('household_id', householdId);
+
+      if (error) {
+        throw new Error(`No fue posible actualizar saldo de la cuenta ${account.name}: ${error.message}`);
+      }
+      appliedAccountIds.push(account.id);
+    }
+  } catch (error) {
+    for (const accountId of appliedAccountIds) {
+      const originalAccount = accounts.find((account) => account.id === accountId);
+      if (!originalAccount) continue;
+      const { error: rollbackError } = await supabaseAdmin
+        .from('accounts')
+        .update({ balance: originalAccount.balance.toFixed(2) })
+        .eq('id', originalAccount.id)
+        .eq('household_id', householdId);
+      if (rollbackError && process.env.NODE_ENV === 'development') {
+        console.warn('[batch-save-rollback] No fue posible revertir saldo', { accountId, error: rollbackError.message });
+      }
+    }
+    throw error;
+  }
+}
+
+export async function saveConversationalTransactionBatch(
+  intents: TransactionIntent[],
+  options?: {
+    happenedAt?: string;
+  }
+) {
+  if (!intents.length) {
+    throw new Error('No hay movimientos para guardar.');
+  }
+
+  const householdId = await getDefaultHouseholdId();
+  if (!householdId) {
+    throw new Error('No existe un hogar configurado para registrar movimientos.');
+  }
+
+  const accounts = await getAccountsForRegistration();
+  const happenedAt = options?.happenedAt ?? new Date().toISOString();
+  const insertedGroupIds: string[] = [];
+
+  try {
+    for (const intent of intents) {
+      const lines = buildJournalEntries(intent, accounts);
+      const { data: group, error: groupError } = await supabaseAdmin
+        .from('transaction_groups')
+        .insert({
+          household_id: householdId,
+          source: 'conversacional_lote',
+          note: intent.description
+        })
+        .select('id')
+        .single();
+
+      if (groupError || !group?.id) {
+        throw new Error(groupError?.message ?? 'No fue posible crear un grupo de transacción del lote.');
+      }
+      insertedGroupIds.push(group.id);
+
+      const transactionsPayload = lines.map((line) => ({
+        group_id: group.id,
+        account_id: line.accountId,
+        type: line.type,
+        category: line.category,
+        amount: line.amount.toFixed(2),
+        happened_at: happenedAt
+      }));
+
+      const { error: txError } = await supabaseAdmin.from('transactions').insert(transactionsPayload);
+      if (txError) throw new Error(txError.message);
+    }
+
+    await applyBatchAccountBalanceUpdates(householdId, intents, accounts);
+    await recalculateIndicators(householdId);
+  } catch (error) {
+    await deleteTransactionGroups(insertedGroupIds);
+    throw error;
+  }
 }
 
 async function getStoredMovementForEdition(householdId: string, movementId: string) {

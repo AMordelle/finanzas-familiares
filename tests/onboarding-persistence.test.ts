@@ -109,7 +109,8 @@ class FakeQueryBuilder {
     }
 
     if (this.action === 'delete') {
-      const matches = (row: Record<string, unknown>) => this.filters.every((filter) => row[filter.field] === filter.value);
+      const matches = (row: Record<string, unknown>) => this.filters.every((filter) => row[filter.field] === filter.value)
+        && this.inFilters.every((filter) => filter.values.includes(row[filter.field]));
       const deletedRows = rows.filter((row) => matches(row));
       this.db[this.table] = rows.filter((row) => !matches(row));
       return { data: this.pickColumns(deletedRows), error: null };
@@ -675,7 +676,7 @@ describe('onboarding persistence', () => {
     const fakeClient = createFakeSupabase();
     fakeClient.db.profiles.push({ id: 'profile-category', created_at: new Date().toISOString() });
     fakeClient.db.household_members.push({ id: 'hm-category', profile_id: 'profile-category', household_id: 'house-category' });
-    fakeClient.db.accounts.push({ id: 'acc-banco-cat', household_id: 'house-category', name: 'Banco', type: 'operativa', balance: '2000' });
+    fakeClient.db.accounts.push({ id: 'acc-banco-cat', household_id: 'house-category', name: 'Banco', type: 'operativa', balance: '2000', is_active: true });
     fakeClient.db.transaction_groups.push({ id: 'g-category', household_id: 'house-category', note: 'Ingreso adicional', created_at: '2024-03-01T10:00:00.000Z' });
     fakeClient.db.transactions.push({ id: 't-cat', group_id: 'g-category', account_id: 'acc-banco-cat', type: 'debit', category: 'ingreso_extra', amount: '440.00', happened_at: '2024-03-01T10:00:00.000Z' });
 
@@ -693,7 +694,7 @@ describe('onboarding persistence', () => {
     const fakeClient = createFakeSupabase();
     fakeClient.db.profiles.push({ id: 'profile-system-category', created_at: new Date().toISOString() });
     fakeClient.db.household_members.push({ id: 'hm-system-category', profile_id: 'profile-system-category', household_id: 'house-system-category' });
-    fakeClient.db.accounts.push({ id: 'acc-bank-system-category', household_id: 'house-system-category', name: 'Banco', type: 'operativa', balance: '2000' });
+    fakeClient.db.accounts.push({ id: 'acc-bank-system-category', household_id: 'house-system-category', name: 'Banco', type: 'operativa', balance: '2000', is_active: true });
     fakeClient.db.transaction_groups.push({ id: 'g-system-category', household_id: 'house-system-category', note: 'Ingreso extra', created_at: '2024-03-02T10:00:00.000Z' });
     fakeClient.db.transactions.push(
       { id: 't-system-internal', group_id: 'g-system-category', account_id: 'acc-bank-system-category', type: 'debit', category: 'entrada_cuenta', amount: '440.00', happened_at: '2024-03-02T10:00:00.000Z' },
@@ -1164,6 +1165,54 @@ describe('onboarding persistence', () => {
     expect(history.movements[0]?.cuentaOrigen).toBe('Banco');
     expect(history.movements[0]?.cuentaDestino).toBe('TDC BBVA');
     expect(dashboard.availableMoney).toBe(3500);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+
+  it('saveConversationalTransactionBatch guarda lote completo y actualiza saldos igual que movimientos individuales', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-batch', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-batch', profile_id: 'profile-batch', household_id: 'house-batch' });
+    fakeClient.db.accounts.push({ id: 'acc-cash', household_id: 'house-batch', name: 'Efectivo', type: 'operativa', balance: '2000', is_active: true });
+    fakeClient.db.accounts.push({ id: 'acc-prime', household_id: 'house-batch', name: 'PrimeIPTV', type: 'operativa', balance: '100', is_active: true });
+
+    process.env.DEV_PROFILE_ID = 'profile-batch';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { saveConversationalTransactionBatch } = await import('@/lib/db/queries');
+
+    await saveConversationalTransactionBatch([
+      { action: 'gasto', amount: 600, category: 'transporte', description: 'Gasolina', sourceAccount: 'efectivo', destinationAccount: undefined, missingFields: [], humanConfirmation: 'ok' } as any,
+      { action: 'ingreso', amount: 200, category: 'ingreso_extra', description: 'Prime IPTV', sourceAccount: undefined, destinationAccount: 'primeiptv', missingFields: [], humanConfirmation: 'ok' } as any
+    ], { happenedAt: '2026-04-11T12:00:00.000Z' });
+
+    expect(fakeClient.db.transaction_groups).toHaveLength(2);
+    expect(fakeClient.db.transactions).toHaveLength(4);
+    expect(fakeClient.db.transactions.every((tx) => tx.happened_at === '2026-04-11T12:00:00.000Z')).toBe(true);
+    expect(fakeClient.db.accounts.find((account) => account.id === 'acc-cash')?.balance).toBe('1400.00');
+    expect(fakeClient.db.accounts.find((account) => account.id === 'acc-prime')?.balance).toBe('300.00');
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('saveConversationalTransactionBatch revierte grupos y transacciones si falla un movimiento del lote', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-batch-fail', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-batch-fail', profile_id: 'profile-batch-fail', household_id: 'house-batch-fail' });
+    fakeClient.db.accounts.push({ id: 'acc-cash-fail', household_id: 'house-batch-fail', name: 'Efectivo', type: 'operativa', balance: '2000', is_active: true });
+
+    process.env.DEV_PROFILE_ID = 'profile-batch-fail';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { saveConversationalTransactionBatch } = await import('@/lib/db/queries');
+
+    await expect(saveConversationalTransactionBatch([
+      { action: 'gasto', amount: 600, category: 'transporte', description: 'Gasolina', sourceAccount: 'efectivo', destinationAccount: undefined, missingFields: [], humanConfirmation: 'ok' } as any,
+      { action: 'pago_deuda', amount: 200, category: 'deuda', description: 'Pago sin destino', sourceAccount: 'efectivo', destinationAccount: undefined, missingFields: [], humanConfirmation: 'ok' } as any
+    ])).rejects.toThrow('requiere cuenta origen y cuenta destino');
+
+    expect(fakeClient.db.transaction_groups).toHaveLength(0);
+    expect(fakeClient.db.transactions).toHaveLength(0);
+    expect(fakeClient.db.accounts.find((account) => account.id === 'acc-cash-fail')?.balance).toBe('2000');
 
     delete process.env.DEV_PROFILE_ID;
   });
