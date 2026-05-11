@@ -91,7 +91,9 @@ describe('transaction interpreter semantic pipeline', () => {
   it('detecta compras MSI, extrae monto y meses, y calcula mensualidad', async () => {
     const phrase = await interpretTransaction('Gasté 1200 en ropa a 3 meses sin intereses con TDC BBVA', accounts as any);
     expect(phrase.action).toBe('msi_purchase');
+    expect(phrase.financingType).toBe('interest_free');
     expect(phrase.totalAmount).toBe(1200);
+    expect(phrase.originalAmount).toBe(1200);
     expect(phrase.months).toBe(3);
     expect(phrase.amount).toBe(400);
     expect(phrase.monthlyAmount).toBe(400);
@@ -99,9 +101,32 @@ describe('transaction interpreter semantic pipeline', () => {
 
     const acronym = await interpretTransaction('Gasté 1200 en ropa a 4 MSI con TDC BBVA', accounts as any);
     expect(acronym.action).toBe('msi_purchase');
+    expect(acronym.financingType).toBe('interest_free');
     expect(acronym.months).toBe(4);
     expect(acronym.monthlyAmount).toBe(300);
   });
+
+  it('detecta compras a meses con intereses, mensualidades y pago al mes', async () => {
+    const withInterest = await interpretTransaction('Compré una bocina de 2000 a 6 meses con intereses de 350 al mes con TDC BBVA', accounts as any);
+    expect(withInterest.action).toBe('msi_purchase');
+    expect(withInterest.financingType).toBe('interest_bearing');
+    expect(withInterest.originalAmount).toBe(2000);
+    expect(withInterest.months).toBe(6);
+    expect(withInterest.monthlyAmount).toBe(350);
+    expect(withInterest.totalFinancedAmount).toBe(2100);
+    expect(withInterest.interestCost).toBe(100);
+    expect(withInterest.amount).toBe(350);
+
+    const installments = await interpretTransaction('Compré una bocina de 2000 a 6 mensualidades de 350 con TDC BBVA', accounts as any);
+    expect(installments.financingType).toBe('interest_bearing');
+    expect(installments.monthlyAmount).toBe(350);
+
+    const paying = await interpretTransaction('Gasté 2000 en una bocina a 6 meses pagando 350 al mes con TDC BBVA', accounts as any);
+    expect(paying.financingType).toBe('interest_bearing');
+    expect(paying.monthlyAmount).toBe(350);
+    expect(paying.totalFinancedAmount).toBe(2100);
+  });
+
 
   it('B: generic tarjeta with multiple cards asks which one', async () => {
     const result = await interpretTransaction('Gasté 1000 con tarjeta de credito', accounts as any);

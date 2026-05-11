@@ -306,8 +306,11 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
           <ul className="mt-3 space-y-1 text-sm text-slate-700">
             <li>Tipo de movimiento: {activeIntent.visibleType}</li>
             <li>Monto: {formatCurrencyMXN(activeIntent.action === 'msi_purchase' ? activeIntent.totalAmount ?? activeIntent.amount : activeIntent.amount)}</li>
-            {activeIntent.action === 'msi_purchase' && (
-              <li>Mensualidad MSI: {formatCurrencyMXN(activeIntent.monthlyAmount ?? activeIntent.amount)} · {activeIntent.months} pagos</li>
+            {activeIntent.action === 'msi_purchase' && activeIntent.financingType === 'interest_bearing' && (
+              <li>Con intereses: mensualidad {formatCurrencyMXN(activeIntent.monthlyAmount ?? activeIntent.amount)} · total a pagar {formatCurrencyMXN(activeIntent.totalFinancedAmount ?? activeIntent.amount)} · intereses estimados {formatCurrencyMXN(activeIntent.interestCost ?? 0)}</li>
+            )}
+            {activeIntent.action === 'msi_purchase' && activeIntent.financingType !== 'interest_bearing' && (
+              <li>MSI: mensualidad {formatCurrencyMXN(activeIntent.monthlyAmount ?? activeIntent.amount)} · {activeIntent.months} pagos</li>
             )}
             <li>Descripción: {activeIntent.description}</li>
             <li>Cuenta origen: {activeIntent.sourceAccountName ?? 'N/A'}</li>

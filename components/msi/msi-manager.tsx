@@ -1,20 +1,147 @@
 'use client';
 
-import React, { useState, useTransition } from 'react';
+import React, { useMemo, useState, useTransition } from 'react';
 import { markMsiInstallmentAsPaidAction, restoreMsiInstallmentToPendingAction } from '@/app/msi/actions';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
-import type { MsiData, MsiInstallment } from '@/lib/db/queries';
+import type { MsiData, MsiFinancingType, MsiInstallment, MsiPurchase, MsiSectionSummary } from '@/lib/db/queries';
 
 function formatDate(value: string | null) {
   if (!value) return 'Sin fecha';
   return new Intl.DateTimeFormat('es-MX', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }).format(new Date(value));
 }
 
+function purchasePendingTotal(purchase: MsiPurchase) {
+  return purchase.installments
+    .filter((installment) => installment.status === 'pending')
+    .reduce((sum, installment) => sum + installment.amount, 0);
+}
+
+function paidInstallmentsCount(purchase: MsiPurchase) {
+  return purchase.installments.filter((installment) => installment.status === 'paid').length;
+}
+
+function SectionSummary({ type, summary }: { type: MsiFinancingType; summary: MsiSectionSummary }) {
+  if (type === 'interest_bearing') {
+    return (
+      <div className="grid gap-2 text-sm sm:grid-cols-5">
+        <span>Activas: <strong>{summary.activePurchases}</strong></span>
+        <span>Original pendiente: <strong>{formatCurrencyMXN(summary.pendingOriginalTotal)}</strong></span>
+        <span>Financiado pendiente: <strong>{formatCurrencyMXN(summary.pendingFinancedTotal)}</strong></span>
+        <span>Intereses estimados: <strong>{formatCurrencyMXN(summary.pendingInterestCost)}</strong></span>
+        <span>Pagos pendientes: <strong>{summary.pendingInstallments}</strong></span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-2 text-sm sm:grid-cols-3">
+      <span>Activas: <strong>{summary.activePurchases}</strong></span>
+      <span>Total original pendiente: <strong>{formatCurrencyMXN(summary.pendingOriginalTotal)}</strong></span>
+      <span>Pagos pendientes: <strong>{summary.pendingInstallments}</strong></span>
+    </div>
+  );
+}
+
+function PurchaseCard({ purchase, isPending, onAction }: {
+  purchase: MsiPurchase;
+  isPending: boolean;
+  onAction: (installment: MsiInstallment, nextStatus: 'paid' | 'pending') => void;
+}) {
+  const paidCount = paidInstallmentsCount(purchase);
+  const pendingTotal = purchasePendingTotal(purchase);
+
+  return (
+    <details className="rounded-xl border bg-white p-3">
+      <summary className="cursor-pointer list-none">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="font-semibold">{purchase.description}</p>
+            <p className="text-xs text-muted-foreground">{purchase.accountName} · mensualidad {formatCurrencyMXN(purchase.monthlyAmount)}</p>
+          </div>
+          <div className="text-sm text-slate-700 md:text-right">
+            <p>{paidCount}/{purchase.months} pagados</p>
+            <p className="font-medium">Pendiente {formatCurrencyMXN(pendingTotal)}</p>
+          </div>
+        </div>
+      </summary>
+
+      <div className="mt-4 space-y-4 border-t pt-4">
+        <div className="grid gap-3 text-sm md:grid-cols-4">
+          <div><p className="text-muted-foreground">Monto original</p><p className="font-semibold">{formatCurrencyMXN(purchase.originalAmount)}</p></div>
+          <div><p className="text-muted-foreground">Total financiado</p><p className="font-semibold">{formatCurrencyMXN(purchase.totalFinancedAmount)}</p></div>
+          <div><p className="text-muted-foreground">Costo por intereses</p><p className="font-semibold">{purchase.interestCost > 0 ? formatCurrencyMXN(purchase.interestCost) : 'Sin intereses'}</p></div>
+          <div><p className="text-muted-foreground">Meses</p><p className="font-semibold">{purchase.months}</p></div>
+          <div><p className="text-muted-foreground">Mensualidad</p><p className="font-semibold">{formatCurrencyMXN(purchase.monthlyAmount)}</p></div>
+          <div><p className="text-muted-foreground">Categoría</p><p className="font-semibold">{purchase.category}</p></div>
+          <div><p className="text-muted-foreground">Fecha</p><p className="font-semibold">{formatDate(purchase.purchaseDate)}</p></div>
+          <div><p className="text-muted-foreground">Estado</p><p className="font-semibold">{purchase.status}</p></div>
+        </div>
+
+        <div className="divide-y rounded-xl border">
+          {purchase.installments.map((installment) => (
+            <div key={installment.id} className="flex flex-col gap-3 p-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="font-medium">Pago {installment.installmentNumber}/{purchase.months} · {formatCurrencyMXN(installment.amount)}</p>
+                <p className="text-xs text-muted-foreground">{installment.status === 'paid' ? `Pagado ${formatDate(installment.paidAt)}` : 'Pendiente'}</p>
+              </div>
+              {installment.status === 'pending' ? (
+                <Button disabled={isPending} onClick={() => onAction(installment, 'paid')}>Marcar como pagado</Button>
+              ) : (
+                <Button disabled={isPending} variant="outline" onClick={() => onAction(installment, 'pending')}>Regresar a pendiente</Button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function PurchaseSection({ title, buttonLabel, type, purchases, summary, isPending, onAction }: {
+  title: string;
+  buttonLabel: string;
+  type: MsiFinancingType;
+  purchases: MsiPurchase[];
+  summary: MsiSectionSummary;
+  isPending: boolean;
+  onAction: (installment: MsiInstallment, nextStatus: 'paid' | 'pending') => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <Card>
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="space-y-2">
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <SectionSummary type={type} summary={summary} />
+        </div>
+        <Button variant="outline" onClick={() => setIsOpen((current) => !current)} aria-expanded={isOpen}>
+          {isOpen ? 'Ocultar compras' : buttonLabel}
+        </Button>
+      </div>
+
+      {isOpen ? (
+        <div className="mt-4 space-y-3">
+          {purchases.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No hay compras en este apartado.</p>
+          ) : purchases.map((purchase) => (
+            <PurchaseCard key={purchase.id} purchase={purchase} isPending={isPending} onAction={onAction} />
+          ))}
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
 export function MsiManager({ initialData }: { initialData: MsiData }) {
   const [message, setMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const groupedPurchases = useMemo(() => ({
+    interestFree: initialData.purchases.filter((purchase) => purchase.financingType !== 'interest_bearing'),
+    interestBearing: initialData.purchases.filter((purchase) => purchase.financingType === 'interest_bearing')
+  }), [initialData.purchases]);
 
   const runAction = (installment: MsiInstallment, nextStatus: 'paid' | 'pending') => {
     startTransition(async () => {
@@ -34,7 +161,7 @@ export function MsiManager({ initialData }: { initialData: MsiData }) {
       <Card>
         <div className="space-y-1">
           <h3 className="text-lg font-semibold">Configura tu hogar</h3>
-          <p className="text-sm text-muted-foreground">Necesitas completar onboarding antes de controlar compras MSI.</p>
+          <p className="text-sm text-muted-foreground">Necesitas completar onboarding antes de controlar compras a meses.</p>
         </div>
       </Card>
     );
@@ -42,64 +169,31 @@ export function MsiManager({ initialData }: { initialData: MsiData }) {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-4">
-        <Card><div className="space-y-1"><p className="text-sm text-muted-foreground">Compras activas</p><h3 className="text-lg font-semibold">{initialData.summary.activePurchases}</h3></div></Card>
-        <Card><div className="space-y-1"><p className="text-sm text-muted-foreground">Total pendiente MSI</p><h3 className="text-lg font-semibold">{formatCurrencyMXN(initialData.summary.pendingTotal)}</h3></div></Card>
-        <Card><div className="space-y-1"><p className="text-sm text-muted-foreground">Pagos pendientes</p><h3 className="text-lg font-semibold">{initialData.summary.pendingInstallments}</h3></div></Card>
-        <Card><div className="space-y-1"><p className="text-sm text-muted-foreground">Pagos completados</p><h3 className="text-lg font-semibold">{initialData.summary.paidInstallments}</h3></div></Card>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card><div className="space-y-1"><p className="text-sm text-muted-foreground">MSI · Activas</p><h3 className="text-lg font-semibold">{initialData.summary.interestFree.activePurchases}</h3><p className="text-sm">Pendiente: {formatCurrencyMXN(initialData.summary.interestFree.pendingFinancedTotal)}</p></div></Card>
+        <Card><div className="space-y-1"><p className="text-sm text-muted-foreground">Con intereses · Activas</p><h3 className="text-lg font-semibold">{initialData.summary.interestBearing.activePurchases}</h3><p className="text-sm">Pendiente financiado: {formatCurrencyMXN(initialData.summary.interestBearing.pendingFinancedTotal)} · Intereses: {formatCurrencyMXN(initialData.summary.interestBearing.pendingInterestCost)}</p></div></Card>
       </div>
 
       {message ? <p className="rounded-xl bg-blue-50 p-3 text-sm text-blue-800">{message}</p> : null}
 
-      <div className="space-y-4">
-        {initialData.purchases.length === 0 ? (
-          <Card><div className="pt-6 text-sm text-muted-foreground">Aún no hay compras MSI registradas desde Registro Conversacional.</div></Card>
-        ) : initialData.purchases.map((purchase) => {
-          const paidCount = purchase.installments.filter((installment) => installment.status === 'paid').length;
-          const pendingTotal = purchase.installments
-            .filter((installment) => installment.status === 'pending')
-            .reduce((sum, installment) => sum + installment.amount, 0);
-
-          return (
-            <Card key={purchase.id}>
-              <div className="space-y-1">
-                <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                  <div>
-                    <h3 className="text-lg font-semibold">{purchase.description}</h3>
-                    <p className="text-sm text-muted-foreground">{purchase.accountName} · {purchase.category} · {formatDate(purchase.purchaseDate)}</p>
-                  </div>
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium uppercase text-slate-600">{purchase.status}</span>
-                </div>
-              </div>
-              <div className="space-y-4">
-                <div className="grid gap-3 text-sm md:grid-cols-5">
-                  <div><p className="text-muted-foreground">Monto total</p><p className="font-semibold">{formatCurrencyMXN(purchase.totalAmount)}</p></div>
-                  <div><p className="text-muted-foreground">Mensualidad</p><p className="font-semibold">{formatCurrencyMXN(purchase.monthlyAmount)}</p></div>
-                  <div><p className="text-muted-foreground">Meses</p><p className="font-semibold">{purchase.months}</p></div>
-                  <div><p className="text-muted-foreground">Pagos realizados</p><p className="font-semibold">{paidCount} / {purchase.months}</p></div>
-                  <div><p className="text-muted-foreground">Total pendiente</p><p className="font-semibold">{formatCurrencyMXN(pendingTotal)}</p></div>
-                </div>
-
-                <div className="divide-y rounded-xl border">
-                  {purchase.installments.map((installment) => (
-                    <div key={installment.id} className="flex flex-col gap-3 p-3 md:flex-row md:items-center md:justify-between">
-                      <div>
-                        <p className="font-medium">Pago {installment.installmentNumber}/{purchase.months} · {formatCurrencyMXN(installment.amount)}</p>
-                        <p className="text-xs text-muted-foreground">{installment.status === 'paid' ? `Pagado ${formatDate(installment.paidAt)}` : 'Pendiente'}</p>
-                      </div>
-                      {installment.status === 'pending' ? (
-                        <Button disabled={isPending} onClick={() => runAction(installment, 'paid')}>Marcar como pagado</Button>
-                      ) : (
-                        <Button disabled={isPending} variant="outline" onClick={() => runAction(installment, 'pending')}>Regresar a pendiente</Button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
+      <PurchaseSection
+        title="Meses sin intereses"
+        buttonLabel="Ver compras sin intereses"
+        type="interest_free"
+        purchases={groupedPurchases.interestFree}
+        summary={initialData.summary.interestFree}
+        isPending={isPending}
+        onAction={runAction}
+      />
+      <PurchaseSection
+        title="Meses con intereses"
+        buttonLabel="Ver compras con intereses"
+        type="interest_bearing"
+        purchases={groupedPurchases.interestBearing}
+        summary={initialData.summary.interestBearing}
+        isPending={isPending}
+        onAction={runAction}
+      />
     </div>
   );
 }

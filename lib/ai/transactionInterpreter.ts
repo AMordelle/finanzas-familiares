@@ -39,6 +39,8 @@ export const missingFieldKindSchema = z.enum([
 
 export const nextPromptInputTypeSchema = z.enum(['account_selector', 'text_input', 'guided_choice']);
 
+export const financingTypeSchema = z.enum(['interest_free', 'interest_bearing']);
+
 export const transactionIntentSchema = z.object({
   rawText: z.string().min(1).default('movimiento'),
   normalizedText: z.string().min(1).default('movimiento'),
@@ -47,8 +49,12 @@ export const transactionIntentSchema = z.object({
   action: z.enum(['gasto', 'ingreso', 'transferencia', 'pago_deuda', 'prestamo_otorgado', 'pago_recibido', 'objetivo_aporte', 'msi_purchase']),
   amount: z.number().positive(),
   totalAmount: z.number().positive().nullable().optional().default(null),
+  financingType: financingTypeSchema.nullable().optional().default(null),
+  originalAmount: z.number().positive().nullable().optional().default(null),
   months: z.number().int().positive().nullable().optional().default(null),
   monthlyAmount: z.number().positive().nullable().optional().default(null),
+  totalFinancedAmount: z.number().positive().nullable().optional().default(null),
+  interestCost: z.number().min(0).nullable().optional().default(null),
   description: z.string().min(1).nullable().optional().default(null),
   category: z.string().min(1).nullable().optional().default('otros_gastos'),
   sourceAccountId: z.string().nullable().optional().default(null),
@@ -283,11 +289,13 @@ function roundMoney(value: number) {
 function extractMsiMonths(normalizedText: string) {
   const patterns = [
     /\ba\s+(\d{2}|[2-9])\s+msi\b/,
-    /\ba\s+(\d{2}|[2-9])\s+mes(?:es)?(?:\s+sin\s+intereses)?\b/,
-    /\b(\d{2}|[2-9])\s+mes(?:es)?\s+sin\s+intereses\b/,
+    /\ba\s+(\d{2}|[2-9])\s+mes(?:es)?(?:\s+(?:sin|con)\s+intereses)?\b/,
+    /\b(\d{2}|[2-9])\s+mes(?:es)?\s+(?:sin|con)\s+intereses\b/,
     /\b(\d{2}|[2-9])\s+msi\b/,
     /\bdiferido\s+a\s+(\d{2}|[2-9])\s+mes(?:es)?\b/,
-    /\bcompra\s+a\s+(\d{2}|[2-9])\s+mes(?:es)?\b/
+    /\bcompra\s+a\s+(\d{2}|[2-9])\s+mes(?:es)?\b/,
+    /\ba\s+(\d{2}|[2-9])\s+mensualidades\b/,
+    /\ba\s+(\d{2}|[2-9])\s+pagos\b/
   ];
   for (const pattern of patterns) {
     const value = Number(normalizedText.match(pattern)?.[1] ?? 0);
@@ -296,8 +304,34 @@ function extractMsiMonths(normalizedText: string) {
   return null;
 }
 
-function isMsiPurchaseText(normalizedText: string) {
-  return /\b(msi|meses\s+sin\s+intereses|diferido\s+a\s+meses|compra\s+a\s+meses)\b/.test(normalizedText)
+function extractInterestBearingMonthlyAmount(normalizedText: string) {
+  const patterns = [
+    /\b(?:pagando|pagar|pago\s+mensual\s+de|mensualidad\s+de)\s+(\d+(?:\.\d+)?)\s+(?:al\s+mes|mensuales?)\b/,
+    /\b(?:con\s+intereses\s+de|intereses\s+de)\s+(\d+(?:\.\d+)?)\s+(?:al\s+mes|mensuales?)\b/,
+    /\ba\s+(?:\d{2}|[2-9])\s+mensualidades\s+de\s+(\d+(?:\.\d+)?)\b/,
+    /\ba\s+(?:\d{2}|[2-9])\s+pagos\s+de\s+(\d+(?:\.\d+)?)\b/,
+    /\ba\s+(?:\d{2}|[2-9])\s+mes(?:es)?\s+pagando\s+(\d+(?:\.\d+)?)\s+al\s+mes\b/,
+    /\ba\s+(?:\d{2}|[2-9])\s+mes(?:es)?\s+con\s+intereses\s+de\s+(\d+(?:\.\d+)?)\s+al\s+mes\b/
+  ];
+  for (const pattern of patterns) {
+    const value = Number(normalizedText.match(pattern)?.[1] ?? 0);
+    if (value > 0) return value;
+  }
+  return null;
+}
+
+function isInterestBearingPurchaseText(normalizedText: string) {
+  return /\b(meses\s+con\s+intereses|con\s+intereses|financiado|mensualidades\s+de|pagos\s+de|pagando\s+\d+(?:\.\d+)?\s+al\s+mes)\b/.test(normalizedText);
+}
+
+function isInterestFreePurchaseText(normalizedText: string) {
+  return /\b(msi|meses\s+sin\s+intereses)\b/.test(normalizedText)
+    || /\ba\s+(?:\d{2}|[2-9])\s+mes(?:es)?\s+sin\s+intereses\b/.test(normalizedText);
+}
+
+function isMonthsPurchaseText(normalizedText: string) {
+  return isInterestFreePurchaseText(normalizedText)
+    || isInterestBearingPurchaseText(normalizedText)
     || /\ba\s+(?:\d{2}|[2-9])\s+mes(?:es)?(?:\s+sin\s+intereses)?\b/.test(normalizedText);
 }
 
@@ -1161,7 +1195,11 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const normalizedText = normalize(text);
   const fallbackAmount = parseAmount(text);
   const msiMonths = extractMsiMonths(normalizedText);
-  const isMsiPurchase = Boolean(msiMonths && isMsiPurchaseText(normalizedText));
+  const financingType = msiMonths && isInterestBearingPurchaseText(normalizedText) ? 'interest_bearing'
+    : msiMonths && isInterestFreePurchaseText(normalizedText) ? 'interest_free'
+      : null;
+  const isMsiPurchase = Boolean(msiMonths && financingType && isMonthsPurchaseText(normalizedText));
+  const capturedMonthlyAmount = extractInterestBearingMonthlyAmount(normalizedText);
   const matched = matchAccounts(text, modelAccounts);
 
   let aiProposal: Awaited<ReturnType<typeof semanticInstructionUnderstanding>> = null;
@@ -1178,11 +1216,21 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     ? inferIntent(normalizedText, matched)
     : aiProposal!.intent;
   if (isMsiPurchase) intent = 'expense_debt_account';
-  const totalAmount = (!shouldFallbackToDeterministic && aiProposal?.amount && Number.isFinite(aiProposal.amount))
+  const originalAmount = (!shouldFallbackToDeterministic && aiProposal?.amount && Number.isFinite(aiProposal.amount))
     ? aiProposal.amount
     : fallbackAmount;
-  const monthlyAmount = isMsiPurchase && msiMonths ? roundMoney(totalAmount / msiMonths) : null;
-  const amount = monthlyAmount ?? totalAmount;
+  const monthlyAmount = isMsiPurchase && msiMonths
+    ? financingType === 'interest_bearing'
+      ? capturedMonthlyAmount
+      : roundMoney(originalAmount / msiMonths)
+    : null;
+  const totalFinancedAmount = isMsiPurchase && msiMonths && monthlyAmount
+    ? roundMoney(monthlyAmount * msiMonths)
+    : null;
+  const interestCost = isMsiPurchase && totalFinancedAmount !== null
+    ? roundMoney(Math.max(0, totalFinancedAmount - originalAmount))
+    : null;
+  const amount = monthlyAmount ?? originalAmount;
 
   const aiMetadata: AiInterpretationMetadata = {
     interpretationSource: shouldFallbackToDeterministic ? 'fallback' : 'ai',
@@ -1344,9 +1392,13 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     visibleType: visibleTypeMap[finalIntent],
     action: isMsiPurchase ? 'msi_purchase' : intentToLegacyAction(finalIntent),
     amount,
-    totalAmount: isMsiPurchase ? totalAmount : null,
+    totalAmount: isMsiPurchase ? originalAmount : null,
+    financingType: isMsiPurchase ? financingType : null,
+    originalAmount: isMsiPurchase ? originalAmount : null,
     months: isMsiPurchase ? msiMonths : null,
     monthlyAmount: isMsiPurchase ? amount : null,
+    totalFinancedAmount: isMsiPurchase ? totalFinancedAmount : null,
+    interestCost: isMsiPurchase ? interestCost : null,
     description: text.trim() || null,
     category,
     sourceAccountId: source?.id ?? null,
@@ -1384,8 +1436,10 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
   const visibleType = visibleTypeMap[finalIntent];
   const humanConfirmation = missingKinds.length
     ? null
-    : isMsiPurchase
-      ? `Registrar compra MSI de ${formatCurrencyMXN(totalAmount)} en ${msiMonths} pagos de ${formatCurrencyMXN(amount)} con ${draftForConstraints.sourceAccountName ?? 'N/A'}.`
+    : isMsiPurchase && financingType === 'interest_bearing'
+      ? `Compra a ${msiMonths} meses con intereses · Precio ${formatCurrencyMXN(originalAmount)} · mensualidad ${formatCurrencyMXN(amount)} · total a pagar ${formatCurrencyMXN(totalFinancedAmount ?? amount)} · intereses estimados ${formatCurrencyMXN(interestCost ?? 0)}`
+      : isMsiPurchase
+        ? `Compra a ${msiMonths} MSI · Total ${formatCurrencyMXN(originalAmount)} · mensualidad ${formatCurrencyMXN(amount)}`
       : finalIntent === 'income'
       ? `Registrar ingreso de ${formatCurrencyMXN(amount)} hacia ${draftForConstraints.destinationAccountName ?? 'N/A'}.`
       : `Registrar ${visibleType.toLowerCase()} de ${formatCurrencyMXN(amount)}${draftForConstraints.sourceAccountName ? ` desde ${draftForConstraints.sourceAccountName}` : ''}${draftForConstraints.destinationAccountName ? ` hacia ${draftForConstraints.destinationAccountName}` : ''}.`;
@@ -1397,9 +1451,13 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     visibleType,
     action: isMsiPurchase ? 'msi_purchase' : intentToLegacyAction(finalIntent),
     amount,
-    totalAmount: isMsiPurchase ? totalAmount : null,
+    totalAmount: isMsiPurchase ? originalAmount : null,
+    financingType: isMsiPurchase ? financingType : null,
+    originalAmount: isMsiPurchase ? originalAmount : null,
     months: isMsiPurchase ? msiMonths : null,
     monthlyAmount: isMsiPurchase ? amount : null,
+    totalFinancedAmount: isMsiPurchase ? totalFinancedAmount : null,
+    interestCost: isMsiPurchase ? interestCost : null,
     description: draftForConstraints.description,
     category: draftForConstraints.category,
     sourceAccountId: draftForConstraints.sourceAccountId,

@@ -244,6 +244,7 @@ export type ExtrasData = {
 
 export type MsiInstallmentStatus = 'pending' | 'paid';
 export type MsiPurchaseStatus = 'active' | 'completed' | 'cancelled';
+export type MsiFinancingType = 'interest_free' | 'interest_bearing';
 
 export type MsiInstallment = {
   id: string;
@@ -265,7 +266,11 @@ export type MsiPurchase = {
   accountName: string;
   description: string;
   category: string;
+  financingType: MsiFinancingType;
+  originalAmount: number;
   totalAmount: number;
+  totalFinancedAmount: number;
+  interestCost: number;
   months: number;
   monthlyAmount: number;
   purchaseDate: string;
@@ -275,11 +280,22 @@ export type MsiPurchase = {
   installments: MsiInstallment[];
 };
 
+export type MsiSectionSummary = {
+  activePurchases: number;
+  pendingOriginalTotal: number;
+  pendingFinancedTotal: number;
+  pendingInterestCost: number;
+  pendingInstallments: number;
+  paidInstallments: number;
+};
+
 export type MsiSummary = {
   activePurchases: number;
   pendingTotal: number;
   pendingInstallments: number;
   paidInstallments: number;
+  interestFree: MsiSectionSummary;
+  interestBearing: MsiSectionSummary;
 };
 
 export type MsiData = {
@@ -1867,6 +1883,10 @@ function mapMsiPurchase(row: {
   description: string;
   category: string;
   total_amount: string | number;
+  financing_type?: string | null;
+  original_amount?: string | number | null;
+  total_financed_amount?: string | number | null;
+  interest_cost?: string | number | null;
   months: number;
   monthly_amount: string | number;
   purchase_date: string;
@@ -1885,7 +1905,11 @@ function mapMsiPurchase(row: {
     accountName: row.account_name ?? 'Tarjeta sin nombre',
     description: row.description,
     category: row.category,
+    financingType: (row.financing_type ?? 'interest_free') as MsiFinancingType,
+    originalAmount: Number(row.original_amount ?? row.total_amount),
     totalAmount: Number(row.total_amount),
+    totalFinancedAmount: Number(row.total_financed_amount ?? row.total_amount),
+    interestCost: Number(row.interest_cost ?? 0),
     months: row.months,
     monthlyAmount: Number(row.monthly_amount),
     purchaseDate: row.purchase_date,
@@ -1915,24 +1939,36 @@ async function createMsiPurchaseForIntent(
   options?: { happenedAt?: string },
   client: SupabaseClientLike = supabaseAdmin
 ) {
-  const totalAmount = Number(intent.totalAmount ?? 0);
+  const financingType = intent.financingType ?? 'interest_free';
+  const originalAmount = Number(intent.originalAmount ?? intent.totalAmount ?? 0);
   const months = Number(intent.months ?? 0);
   const monthlyAmount = Number(intent.monthlyAmount ?? intent.amount ?? 0);
+  const totalFinancedAmount = financingType === 'interest_bearing'
+    ? roundMoney(monthlyAmount * months)
+    : Number(intent.totalFinancedAmount ?? intent.totalAmount ?? originalAmount);
+  const interestCost = financingType === 'interest_bearing'
+    ? roundMoney(totalFinancedAmount - originalAmount)
+    : 0;
   const sourceId = intent.sourceAccountId ?? findAccountIdByName(accounts, intent.sourceAccount);
   const sourceAccount = sourceId ? accounts.find((account) => account.id === sourceId) : null;
 
-  if (totalAmount <= 0) throw new Error('El monto total MSI debe ser mayor a 0.');
-  if (!Number.isInteger(months) || months <= 1) throw new Error('Los MSI deben tener más de un pago.');
-  if (monthlyAmount <= 0) throw new Error('La mensualidad MSI debe ser mayor a 0.');
-  if (!intent.description?.trim()) throw new Error('La descripción MSI es obligatoria.');
-  if (!intent.category?.trim()) throw new Error('La categoría MSI es obligatoria.');
+  if (originalAmount <= 0) throw new Error('El monto original de la compra a meses debe ser mayor a 0.');
+  if (!Number.isInteger(months) || months <= 1) throw new Error('Las compras a meses deben tener más de un pago.');
+  if (monthlyAmount <= 0) throw new Error('La mensualidad de la compra a meses debe ser mayor a 0.');
+  if (!intent.description?.trim()) throw new Error('La descripción de la compra a meses es obligatoria.');
+  if (!intent.category?.trim()) throw new Error('La categoría de la compra a meses es obligatoria.');
   if (!sourceAccount || !isCreditAccountType(sourceAccount.type)) {
-    throw new Error('Las compras MSI solo pueden registrarse con tarjetas o cuentas de crédito.');
+    throw new Error('Las compras a meses solo pueden registrarse con tarjetas o cuentas de crédito.');
   }
 
-  const expectedMonthlyAmount = calculateMsiMonthlyAmount(totalAmount, months);
-  if (Math.abs(expectedMonthlyAmount - monthlyAmount) > 0.01) {
-    throw new Error('La mensualidad MSI no coincide con el monto total y los meses.');
+  if (financingType === 'interest_free') {
+    const expectedMonthlyAmount = calculateMsiMonthlyAmount(originalAmount, months);
+    if (Math.abs(expectedMonthlyAmount - monthlyAmount) > 0.01) {
+      throw new Error('La mensualidad MSI no coincide con el monto original y los meses.');
+    }
+  }
+  if (financingType === 'interest_bearing' && totalFinancedAmount < originalAmount) {
+    throw new Error('El total financiado no puede ser menor al monto original en una compra con intereses.');
   }
 
   const now = new Date().toISOString();
@@ -1943,7 +1979,11 @@ async function createMsiPurchaseForIntent(
       account_id: sourceAccount.id,
       description: intent.description.trim(),
       category: intent.category.trim(),
-      total_amount: formatMoneyForStorage(totalAmount),
+      total_amount: formatMoneyForStorage(totalFinancedAmount),
+      financing_type: financingType,
+      original_amount: formatMoneyForStorage(originalAmount),
+      total_financed_amount: formatMoneyForStorage(totalFinancedAmount),
+      interest_cost: formatMoneyForStorage(interestCost),
       months,
       monthly_amount: formatMoneyForStorage(monthlyAmount),
       purchase_date: options?.happenedAt ?? now,
@@ -2934,19 +2974,42 @@ export async function recalculateIndicators(householdId: string) {
   });
 }
 
+
+function buildEmptyMsiSectionSummary(): MsiSectionSummary {
+  return {
+    activePurchases: 0,
+    pendingOriginalTotal: 0,
+    pendingFinancedTotal: 0,
+    pendingInterestCost: 0,
+    pendingInstallments: 0,
+    paidInstallments: 0
+  };
+}
+
+function buildEmptyMsiSummary(): MsiSummary {
+  return {
+    activePurchases: 0,
+    pendingTotal: 0,
+    pendingInstallments: 0,
+    paidInstallments: 0,
+    interestFree: buildEmptyMsiSectionSummary(),
+    interestBearing: buildEmptyMsiSectionSummary()
+  };
+}
+
 export async function getMsiPurchases(client: SupabaseClientLike = supabaseAdmin): Promise<MsiData> {
   const householdId = await getDefaultHouseholdId(client);
   if (!householdId) {
     return {
       hasHousehold: false,
       purchases: [],
-      summary: { activePurchases: 0, pendingTotal: 0, pendingInstallments: 0, paidInstallments: 0 }
+      summary: buildEmptyMsiSummary()
     };
   }
 
   const { data: purchasesData, error: purchasesError } = await client
     .from('msi_purchases')
-    .select('id,household_id,account_id,description,category,total_amount,months,monthly_amount,purchase_date,status,created_at,updated_at')
+    .select('id,household_id,account_id,description,category,total_amount,financing_type,original_amount,total_financed_amount,interest_cost,months,monthly_amount,purchase_date,status,created_at,updated_at')
     .eq('household_id', householdId)
     .order('purchase_date', { ascending: false });
 
@@ -2961,6 +3024,10 @@ export async function getMsiPurchases(client: SupabaseClientLike = supabaseAdmin
     description: string;
     category: string;
     total_amount: string | number;
+    financing_type?: string | null;
+    original_amount?: string | number | null;
+    total_financed_amount?: string | number | null;
+    interest_cost?: string | number | null;
     months: number;
     monthly_amount: string | number;
     purchase_date: string;
@@ -3004,19 +3071,45 @@ export async function getMsiPurchases(client: SupabaseClientLike = supabaseAdmin
   }, installmentsByPurchase[purchase.id] ?? []));
 
   const summary = purchases.reduce<MsiSummary>((acc, purchase) => {
-    if (purchase.status === 'active') acc.activePurchases += 1;
+    const section = purchase.financingType === 'interest_bearing' ? acc.interestBearing : acc.interestFree;
+    if (purchase.status === 'active') {
+      acc.activePurchases += 1;
+      section.activePurchases += 1;
+    }
+    const paidCount = purchase.installments.filter((installment) => installment.status === 'paid').length;
+    const pendingCount = purchase.installments.filter((installment) => installment.status === 'pending').length;
+    const paidRatio = purchase.months > 0 ? paidCount / purchase.months : 0;
+    const pendingOriginalAmount = roundMoney(Math.max(0, purchase.originalAmount * (1 - paidRatio)));
+    const pendingFinancedAmount = purchase.installments
+      .filter((installment) => installment.status === 'pending')
+      .reduce((sum, installment) => sum + installment.amount, 0);
+    const pendingInterestCost = roundMoney(Math.max(0, purchase.interestCost * (pendingCount / Math.max(1, purchase.months))));
+
     for (const installment of purchase.installments) {
       if (installment.status === 'pending') {
         acc.pendingInstallments += 1;
+        section.pendingInstallments += 1;
         if (purchase.status !== 'cancelled') acc.pendingTotal += installment.amount;
       } else {
         acc.paidInstallments += 1;
+        section.paidInstallments += 1;
       }
     }
+    if (purchase.status !== 'cancelled') {
+      section.pendingOriginalTotal += pendingOriginalAmount;
+      section.pendingFinancedTotal += pendingFinancedAmount;
+      section.pendingInterestCost += pendingInterestCost;
+    }
     return acc;
-  }, { activePurchases: 0, pendingTotal: 0, pendingInstallments: 0, paidInstallments: 0 });
+  }, buildEmptyMsiSummary());
 
   summary.pendingTotal = roundMoney(summary.pendingTotal);
+  summary.interestFree.pendingOriginalTotal = roundMoney(summary.interestFree.pendingOriginalTotal);
+  summary.interestFree.pendingFinancedTotal = roundMoney(summary.interestFree.pendingFinancedTotal);
+  summary.interestFree.pendingInterestCost = roundMoney(summary.interestFree.pendingInterestCost);
+  summary.interestBearing.pendingOriginalTotal = roundMoney(summary.interestBearing.pendingOriginalTotal);
+  summary.interestBearing.pendingFinancedTotal = roundMoney(summary.interestBearing.pendingFinancedTotal);
+  summary.interestBearing.pendingInterestCost = roundMoney(summary.interestBearing.pendingInterestCost);
   return { hasHousehold: true, purchases, summary };
 }
 
