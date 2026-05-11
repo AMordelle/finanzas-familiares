@@ -97,6 +97,51 @@ export const receivables = pgTable('receivables', {
   status: text('status').notNull().default('activo')
 });
 
+export const msiPurchases = pgTable('msi_purchases', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').references(() => households.id).notNull(),
+  accountId: uuid('account_id').references(() => accounts.id).notNull(),
+  description: text('description').notNull(),
+  category: text('category').notNull(),
+  totalAmount: numeric('total_amount', { precision: 14, scale: 2 }).notNull(),
+  financingType: text('financing_type').notNull().default('interest_free'),
+  originalAmount: numeric('original_amount', { precision: 14, scale: 2 }).notNull(),
+  totalFinancedAmount: numeric('total_financed_amount', { precision: 14, scale: 2 }).notNull(),
+  interestCost: numeric('interest_cost', { precision: 14, scale: 2 }).notNull().default('0'),
+  months: integer('months').notNull(),
+  monthlyAmount: numeric('monthly_amount', { precision: 14, scale: 2 }).notNull(),
+  purchaseDate: timestamp('purchase_date').defaultNow().notNull(),
+  status: text('status').notNull().default('active'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull()
+}, (table) => ({
+  totalAmountPositiveCheck: check('msi_purchases_total_amount_check', sql`${table.totalAmount} > 0`),
+  financingTypeCheck: check('msi_purchases_financing_type_check', sql`${table.financingType} IN ('interest_free', 'interest_bearing')`),
+  originalAmountPositiveCheck: check('msi_purchases_original_amount_check', sql`${table.originalAmount} > 0`),
+  totalFinancedAmountPositiveCheck: check('msi_purchases_total_financed_amount_check', sql`${table.totalFinancedAmount} > 0`),
+  interestCostCheck: check('msi_purchases_interest_cost_check', sql`${table.interestCost} >= 0`),
+  monthsCheck: check('msi_purchases_months_check', sql`${table.months} > 1`),
+  monthlyAmountPositiveCheck: check('msi_purchases_monthly_amount_check', sql`${table.monthlyAmount} > 0`),
+  statusCheck: check('msi_purchases_status_check', sql`${table.status} IN ('active', 'completed', 'cancelled')`)
+}));
+
+export const msiInstallments = pgTable('msi_installments', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').references(() => households.id).notNull(),
+  msiPurchaseId: uuid('msi_purchase_id').references(() => msiPurchases.id).notNull(),
+  installmentNumber: integer('installment_number').notNull(),
+  amount: numeric('amount', { precision: 14, scale: 2 }).notNull(),
+  dueDate: date('due_date'),
+  status: text('status').notNull().default('pending'),
+  paidAt: timestamp('paid_at'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull()
+}, (table) => ({
+  installmentNumberPositiveCheck: check('msi_installments_installment_number_check', sql`${table.installmentNumber} > 0`),
+  amountPositiveCheck: check('msi_installments_amount_check', sql`${table.amount} > 0`),
+  statusCheck: check('msi_installments_status_check', sql`${table.status} IN ('pending', 'paid')`)
+}));
+
 
 export const extraWorkEntries = pgTable('extra_work_entries', {
   id: uuid('id').primaryKey().defaultRandom(),
