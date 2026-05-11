@@ -1,7 +1,9 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MsiManager } from '@/components/msi/msi-manager';
+import { MsiManager, PurchaseCard } from '@/components/msi/msi-manager';
+
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
 class FakeQueryBuilder {
   private action: 'select' | 'insert' | 'update' | 'delete' = 'select';
@@ -238,6 +240,55 @@ describe('módulo MSI', () => {
     expect(supabaseAdmin.db.msi_installments.find((item: any) => item.id === 'inst-1').status).toBe('pending');
     expect(supabaseAdmin.db.msi_purchases.find((item: any) => item.id === 'purchase-1').status).toBe('active');
     expect(supabaseAdmin.db.transactions).toHaveLength(txCount);
+  });
+
+  it('elimina compra MSI con installments sin tocar movimientos ni saldos y desaparece del módulo', async () => {
+    const { supabaseAdmin: rawSupabaseAdmin } = await import('@/lib/db/supabase');
+    const supabaseAdmin = rawSupabaseAdmin as any;
+    const { deleteMsiPurchase, getMsiPurchases } = await import('@/lib/db/queries');
+    supabaseAdmin.db.accounts.find((account: any) => account.id === 'acc-tdc').balance = '900.00';
+    supabaseAdmin.db.transaction_groups.push({ id: 'group-delete-control', household_id: 'house-1', note: 'Movimiento mensual', created_at: '2026-05-10T00:00:00.000Z' });
+    supabaseAdmin.db.transactions.push({ id: 'tx-delete-control', group_id: 'group-delete-control', account_id: 'acc-tdc', type: 'credit', category: 'salida_cuenta', amount: '400.00', happened_at: '2026-05-10T00:00:00.000Z' });
+    supabaseAdmin.db.msi_purchases.push({ id: 'purchase-delete', household_id: 'house-1', account_id: 'acc-tdc', description: 'Compra error', category: 'ropa', financing_type: 'interest_free', original_amount: '1200.00', total_amount: '1200.00', total_financed_amount: '1200.00', interest_cost: '0.00', months: 3, monthly_amount: '400.00', purchase_date: '2026-05-10T00:00:00.000Z', status: 'active', created_at: '2026-05-10T00:00:00.000Z', updated_at: '2026-05-10T00:00:00.000Z' });
+    supabaseAdmin.db.msi_installments.push(
+      { id: 'delete-inst-1', household_id: 'house-1', msi_purchase_id: 'purchase-delete', installment_number: 1, amount: '400.00', due_date: null, status: 'pending', paid_at: null, created_at: '2026-05-10T00:00:00.000Z', updated_at: '2026-05-10T00:00:00.000Z' },
+      { id: 'delete-inst-2', household_id: 'house-1', msi_purchase_id: 'purchase-delete', installment_number: 2, amount: '400.00', due_date: null, status: 'pending', paid_at: null, created_at: '2026-05-10T00:00:00.000Z', updated_at: '2026-05-10T00:00:00.000Z' }
+    );
+    const txCount = supabaseAdmin.db.transactions.length;
+    const balanceBefore = supabaseAdmin.db.accounts.find((account: any) => account.id === 'acc-tdc').balance;
+
+    await deleteMsiPurchase({ purchaseId: 'purchase-delete' });
+
+    expect(supabaseAdmin.db.msi_purchases.some((purchase: any) => purchase.id === 'purchase-delete')).toBe(false);
+    expect(supabaseAdmin.db.msi_installments.some((installment: any) => installment.msi_purchase_id === 'purchase-delete')).toBe(false);
+    expect(supabaseAdmin.db.transactions).toHaveLength(txCount);
+    expect(supabaseAdmin.db.accounts.find((account: any) => account.id === 'acc-tdc').balance).toBe(balanceBefore);
+    const data = await getMsiPurchases();
+    expect(data.purchases.some((purchase) => purchase.id === 'purchase-delete')).toBe(false);
+  });
+
+  it('rechaza eliminar compra MSI de otro household', async () => {
+    const { supabaseAdmin: rawSupabaseAdmin } = await import('@/lib/db/supabase');
+    const supabaseAdmin = rawSupabaseAdmin as any;
+    const { deleteMsiPurchase } = await import('@/lib/db/queries');
+    supabaseAdmin.db.msi_purchases.push({ id: 'purchase-other-house', household_id: 'house-2', account_id: 'acc-tdc', description: 'Ajena', category: 'ropa', financing_type: 'interest_free', original_amount: '1200.00', total_amount: '1200.00', total_financed_amount: '1200.00', interest_cost: '0.00', months: 3, monthly_amount: '400.00', purchase_date: '2026-05-10T00:00:00.000Z', status: 'active', created_at: '2026-05-10T00:00:00.000Z', updated_at: '2026-05-10T00:00:00.000Z' });
+
+    await expect(deleteMsiPurchase({ purchaseId: 'purchase-other-house' })).rejects.toThrow('No se encontró');
+    expect(supabaseAdmin.db.msi_purchases.some((purchase: any) => purchase.id === 'purchase-other-house')).toBe(true);
+  });
+
+  it('muestra botón eliminar solo dentro del detalle de la compra', () => {
+    const purchase = {
+      id: 'purchase-ui-delete', householdId: 'house-1', accountId: 'acc-tdc', accountName: 'TDC BBVA', description: 'Ropa', category: 'ropa', financingType: 'interest_free' as const, originalAmount: 1200, totalAmount: 1200, totalFinancedAmount: 1200, interestCost: 0, months: 3, monthlyAmount: 400, purchaseDate: '2026-05-10T00:00:00.000Z', status: 'active' as const, createdAt: '', updatedAt: '', installments: [
+        { id: 'i1', householdId: 'house-1', msiPurchaseId: 'purchase-ui-delete', installmentNumber: 1, amount: 400, dueDate: null, status: 'pending' as const, paidAt: null, createdAt: '', updatedAt: '' }
+      ]
+    };
+    const html = renderToStaticMarkup(<PurchaseCard purchase={purchase} isPending={false} onAction={() => undefined} onDelete={() => undefined} />);
+    const summaryHtml = html.slice(0, html.indexOf('Monto original'));
+
+    expect(html).toContain('Eliminar compra');
+    expect(summaryHtml).not.toContain('Eliminar compra');
+    expect(html.indexOf('Eliminar compra')).toBeGreaterThan(html.indexOf('Monto original'));
   });
 
   it('separa UI en apartados compactos con resúmenes y controles', () => {

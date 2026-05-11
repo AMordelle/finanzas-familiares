@@ -308,6 +308,10 @@ export const msiInstallmentActionSchema = z.object({
   installmentId: z.string().min(1, 'El pago MSI es obligatorio.')
 });
 
+export const msiPurchaseActionSchema = z.object({
+  purchaseId: z.string().min(1, 'La compra a meses es obligatoria.')
+});
+
 type JournalLine = {
   accountId: string | null;
   type: 'debit' | 'credit';
@@ -3171,6 +3175,42 @@ async function updateMsiInstallmentStatus(rawInput: unknown, status: MsiInstallm
 
   await refreshMsiPurchaseStatus(householdId, (existing as { msi_purchase_id: string }).msi_purchase_id, client);
   return mapMsiInstallment(data as Parameters<typeof mapMsiInstallment>[0]);
+}
+
+export async function deleteMsiPurchase(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) throw new Error('No existe un hogar configurado para eliminar compras a meses.');
+
+  const input = msiPurchaseActionSchema.parse(rawInput);
+  const { data: existing, error: readError } = await client
+    .from('msi_purchases')
+    .select('id,household_id')
+    .eq('id', input.purchaseId)
+    .eq('household_id', householdId)
+    .maybeSingle();
+
+  if (readError) throw new Error(`No fue posible leer la compra a meses: ${readError.message}`);
+  if (!existing) throw new Error('No se encontró la compra a meses en este hogar.');
+
+  const { error: installmentsError } = await client
+    .from('msi_installments')
+    .delete()
+    .eq('msi_purchase_id', input.purchaseId)
+    .eq('household_id', householdId);
+
+  if (installmentsError) {
+    throw new Error(`No fue posible eliminar los pagos programados: ${installmentsError.message}`);
+  }
+
+  const { error: purchaseError } = await client
+    .from('msi_purchases')
+    .delete()
+    .eq('id', input.purchaseId)
+    .eq('household_id', householdId);
+
+  if (purchaseError) {
+    throw new Error(`No fue posible eliminar la compra a meses: ${purchaseError.message}`);
+  }
 }
 
 export async function markMsiInstallmentAsPaid(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {

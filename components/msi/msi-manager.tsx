@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useMemo, useState, useTransition } from 'react';
-import { markMsiInstallmentAsPaidAction, restoreMsiInstallmentToPendingAction } from '@/app/msi/actions';
+import { useRouter } from 'next/navigation';
+import { deleteMsiPurchaseAction, markMsiInstallmentAsPaidAction, restoreMsiInstallmentToPendingAction } from '@/app/msi/actions';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
@@ -44,10 +45,11 @@ function SectionSummary({ type, summary }: { type: MsiFinancingType; summary: Ms
   );
 }
 
-function PurchaseCard({ purchase, isPending, onAction }: {
+export function PurchaseCard({ purchase, isPending, onAction, onDelete }: {
   purchase: MsiPurchase;
   isPending: boolean;
   onAction: (installment: MsiInstallment, nextStatus: 'paid' | 'pending') => void;
+  onDelete: (purchase: MsiPurchase) => void;
 }) {
   const paidCount = paidInstallmentsCount(purchase);
   const pendingTotal = purchasePendingTotal(purchase);
@@ -94,12 +96,24 @@ function PurchaseCard({ purchase, isPending, onAction }: {
             </div>
           ))}
         </div>
+
+        <div className="border-t pt-4">
+          <Button
+            className="border-red-200 text-red-700 hover:bg-red-50"
+            disabled={isPending}
+            variant="outline"
+            onClick={() => onDelete(purchase)}
+          >
+            Eliminar compra
+          </Button>
+          <p className="mt-2 text-xs text-muted-foreground">Solo elimina el control MSI y sus pagos programados; no modifica movimientos ya registrados.</p>
+        </div>
       </div>
     </details>
   );
 }
 
-function PurchaseSection({ title, buttonLabel, type, purchases, summary, isPending, onAction }: {
+function PurchaseSection({ title, buttonLabel, type, purchases, summary, isPending, onAction, onDelete }: {
   title: string;
   buttonLabel: string;
   type: MsiFinancingType;
@@ -107,6 +121,7 @@ function PurchaseSection({ title, buttonLabel, type, purchases, summary, isPendi
   summary: MsiSectionSummary;
   isPending: boolean;
   onAction: (installment: MsiInstallment, nextStatus: 'paid' | 'pending') => void;
+  onDelete: (purchase: MsiPurchase) => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -127,7 +142,7 @@ function PurchaseSection({ title, buttonLabel, type, purchases, summary, isPendi
           {purchases.length === 0 ? (
             <p className="text-sm text-muted-foreground">No hay compras en este apartado.</p>
           ) : purchases.map((purchase) => (
-            <PurchaseCard key={purchase.id} purchase={purchase} isPending={isPending} onAction={onAction} />
+            <PurchaseCard key={purchase.id} purchase={purchase} isPending={isPending} onAction={onAction} onDelete={onDelete} />
           ))}
         </div>
       ) : null}
@@ -138,6 +153,7 @@ function PurchaseSection({ title, buttonLabel, type, purchases, summary, isPendi
 export function MsiManager({ initialData }: { initialData: MsiData }) {
   const [message, setMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  const router = useRouter();
   const groupedPurchases = useMemo(() => ({
     interestFree: initialData.purchases.filter((purchase) => purchase.financingType !== 'interest_bearing'),
     interestBearing: initialData.purchases.filter((purchase) => purchase.financingType === 'interest_bearing')
@@ -150,8 +166,24 @@ export function MsiManager({ initialData }: { initialData: MsiData }) {
           ? await markMsiInstallmentAsPaidAction({ installmentId: installment.id })
           : await restoreMsiInstallmentToPendingAction({ installmentId: installment.id });
         setMessage(response.message);
+        router.refresh();
       } catch (error) {
         setMessage(error instanceof Error ? error.message : 'No fue posible actualizar el pago MSI.');
+      }
+    });
+  };
+
+  const runDelete = (purchase: MsiPurchase) => {
+    const confirmed = window.confirm('¿Eliminar esta compra a meses? Se eliminarán también sus pagos programados. Esta acción no modifica movimientos ya registrados.');
+    if (!confirmed) return;
+
+    startTransition(async () => {
+      try {
+        const response = await deleteMsiPurchaseAction({ purchaseId: purchase.id });
+        setMessage(response.message);
+        router.refresh();
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : 'No fue posible eliminar la compra a meses.');
       }
     });
   };
@@ -184,6 +216,7 @@ export function MsiManager({ initialData }: { initialData: MsiData }) {
         summary={initialData.summary.interestFree}
         isPending={isPending}
         onAction={runAction}
+        onDelete={runDelete}
       />
       <PurchaseSection
         title="Meses con intereses"
@@ -193,6 +226,7 @@ export function MsiManager({ initialData }: { initialData: MsiData }) {
         summary={initialData.summary.interestBearing}
         isPending={isPending}
         onAction={runAction}
+        onDelete={runDelete}
       />
     </div>
   );
