@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { deleteMovement, movementDeleteSchema, movementEditSchema, updateMovement } from '@/lib/db/queries';
+import { deleteMovement, movementDeleteSchema, movementEditSchema, movementProjectionTypeUpdateSchema, updateMovement, updateMovementProjectionType } from '@/lib/db/queries';
 
 export async function updateMovementAction(payload: unknown) {
   const parsed = movementEditSchema.safeParse(payload);
@@ -34,5 +34,22 @@ export async function deleteMovementAction(payload: unknown) {
   return {
     success: true,
     message: 'Movimiento eliminado correctamente.'
+  };
+}
+
+
+export async function updateMovementProjectionTypeAction(payload: unknown) {
+  const parsed = movementProjectionTypeUpdateSchema.safeParse(payload);
+  if (!parsed.success) {
+    throw new Error(parsed.error.errors[0]?.message ?? 'No se pudo validar la clasificación de proyección.');
+  }
+
+  await updateMovementProjectionType(parsed.data);
+  revalidatePath('/movimientos');
+  revalidatePath('/proyeccion');
+
+  return {
+    success: true,
+    message: 'Clasificación de proyección actualizada.'
   };
 }

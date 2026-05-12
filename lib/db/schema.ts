@@ -85,7 +85,8 @@ export const transactions = pgTable('transactions', {
   type: text('type').notNull(),
   category: text('category').notNull(),
   amount: numeric('amount', { precision: 14, scale: 2 }).notNull(),
-  happenedAt: timestamp('happened_at').defaultNow().notNull()
+  happenedAt: timestamp('happened_at').defaultNow().notNull(),
+  projectionType: text('projection_type')
 });
 
 export const receivables = pgTable('receivables', {

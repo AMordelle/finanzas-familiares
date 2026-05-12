@@ -1,17 +1,29 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import React, { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import type { AccountOption, MovementHistoryItem } from '@/lib/db/queries';
+import type { AccountOption, MovementHistoryItem, MovementProjectionType } from '@/lib/db/queries';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
-import { deleteMovementAction, updateMovementAction } from '@/app/movimientos/actions';
+import { deleteMovementAction, updateMovementAction, updateMovementProjectionTypeAction } from '@/app/movimientos/actions';
 import { applyQuickFilter, buildDynamicSummary, filterMovements, inferCategories, type MovementFilters } from '@/lib/movements/filters';
+
+type QuickFilterKind = Parameters<typeof applyQuickFilter>[0];
+const quickFilterKinds: QuickFilterKind[] = ['gastos_hormiga', 'gastos_fuertes', 'deuda', 'sin_clasificar', 'negocio_operacion'];
 
 type Props = {
   movements: MovementHistoryItem[];
   accounts: AccountOption[];
+};
+
+
+const projectionTypeLabels: Record<MovementProjectionType, string> = {
+  recurrent: 'Recurrente',
+  extraordinary: 'Extraordinario',
+  internal: 'Interno',
+  ignore: 'Ignorar',
+  debt_payment: 'Pago de deuda'
 };
 
 type MovementVisual = {
@@ -165,7 +177,7 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
             )}
           </div>
         )}
-        <div className="mt-2 flex flex-wrap gap-2">{['gastos_hormiga','gastos_fuertes','deuda','sin_clasificar','negocio_operacion'].map((q)=><Button key={q} variant="outline" onClick={()=>setFilters((p)=>applyQuickFilter(q as any,p))}>{q}</Button>)}<Button variant="outline" onClick={()=>setFilters(defaultFilters)}>Limpiar filtros</Button></div>
+        <div className="mt-2 flex flex-wrap gap-2">{quickFilterKinds.map((q) => <Button key={q} variant="outline" onClick={() => setFilters((p) => applyQuickFilter(q, p))}>{q}</Button>)}<Button variant="outline" onClick={()=>setFilters(defaultFilters)}>Limpiar filtros</Button></div>
         <div className="mt-2 space-y-1 text-xs text-slate-700">
           <p className="font-medium">{hasActiveFilters ? 'Resumen del filtro aplicado' : 'Resumen del historial visible'}</p>
           <p>Total de movimientos: {summary.count}</p>
@@ -226,6 +238,40 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
                         <span className="font-semibold">Categoría:</span>{' '}
                         <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{movement.categoria}</span>
                       </p>
+                      <p><span className="font-semibold">Proyección:</span> {movement.projectionType ? projectionTypeLabels[movement.projectionType] : 'Automática'}</p>
+                    </div>
+
+                    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        Clasificar para proyección
+                        <select
+                          className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                          value={movement.projectionType ?? ''}
+                          disabled={isPending}
+                          onChange={(event) => {
+                            const nextValue = (event.target.value || null) as MovementProjectionType | null;
+                            setErrorMessage(null);
+                            setSuccessMessage(null);
+                            startTransition(async () => {
+                              try {
+                                const result = await updateMovementProjectionTypeAction({ movementId: movement.id, projectionType: nextValue });
+                                setSuccessMessage(result.message);
+                                router.refresh();
+                              } catch (error) {
+                                setErrorMessage(error instanceof Error ? error.message : 'No se pudo clasificar el movimiento.');
+                              }
+                            });
+                          }}
+                        >
+                          <option value="">Automática</option>
+                          <option value="recurrent">Recurrente</option>
+                          <option value="extraordinary">Extraordinario</option>
+                          <option value="internal">Interno</option>
+                          <option value="ignore">Ignorar</option>
+                          <option value="debt_payment">Pago de deuda</option>
+                        </select>
+                      </label>
+                      <p className="mt-1 text-xs text-slate-500">Esta clasificación solo afecta la proyección; no cambia saldos ni movimientos reales.</p>
                     </div>
 
                     <div className="mt-3 flex flex-wrap gap-2">

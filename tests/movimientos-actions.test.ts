@@ -4,6 +4,8 @@ const updateSchemaParse = vi.fn();
 const deleteSchemaParse = vi.fn();
 const updateMovementMock = vi.fn();
 const deleteMovementMock = vi.fn();
+const updateMovementProjectionTypeMock = vi.fn();
+const projectionSchemaParse = vi.fn();
 const revalidatePathMock = vi.fn();
 
 describe('movimientos actions revalidation', () => {
@@ -13,6 +15,7 @@ describe('movimientos actions revalidation', () => {
 
     updateSchemaParse.mockImplementation((payload) => payload);
     deleteSchemaParse.mockImplementation((payload) => payload);
+    projectionSchemaParse.mockImplementation((payload) => payload);
 
     vi.doMock('next/cache', () => ({
       revalidatePath: revalidatePathMock
@@ -21,8 +24,10 @@ describe('movimientos actions revalidation', () => {
     vi.doMock('@/lib/db/queries', () => ({
       movementEditSchema: { safeParse: (payload: unknown) => ({ success: true, data: updateSchemaParse(payload) }) },
       movementDeleteSchema: { safeParse: (payload: unknown) => ({ success: true, data: deleteSchemaParse(payload) }) },
+      movementProjectionTypeUpdateSchema: { safeParse: (payload: unknown) => ({ success: true, data: projectionSchemaParse(payload) }) },
       updateMovement: updateMovementMock,
-      deleteMovement: deleteMovementMock
+      deleteMovement: deleteMovementMock,
+      updateMovementProjectionType: updateMovementProjectionTypeMock
     }));
   });
 
@@ -59,5 +64,18 @@ describe('movimientos actions revalidation', () => {
     expect(revalidatePathMock).toHaveBeenCalledWith('/movimientos');
     expect(revalidatePathMock).toHaveBeenCalledWith('/cuentas');
     expect(result).toEqual({ success: true, message: 'Movimiento eliminado correctamente.' });
+  });
+
+  it('revalida movimientos y proyección tras clasificar para proyección', async () => {
+    const { updateMovementProjectionTypeAction } = await import('@/app/movimientos/actions');
+
+    const payload = { movementId: '00000000-0000-4000-8000-000000000030', projectionType: 'recurrent' };
+    const result = await updateMovementProjectionTypeAction(payload);
+
+    expect(projectionSchemaParse).toHaveBeenCalledWith(payload);
+    expect(updateMovementProjectionTypeMock).toHaveBeenCalledWith(payload);
+    expect(revalidatePathMock).toHaveBeenCalledWith('/movimientos');
+    expect(revalidatePathMock).toHaveBeenCalledWith('/proyeccion');
+    expect(result).toEqual({ success: true, message: 'Clasificación de proyección actualizada.' });
   });
 });

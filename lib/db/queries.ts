@@ -46,6 +46,14 @@ export const movementDeleteSchema = z.object({
   movementId: z.string().min(1)
 });
 
+export const projectionTypeValues = ['recurrent', 'extraordinary', 'internal', 'ignore', 'debt_payment'] as const;
+export type MovementProjectionType = (typeof projectionTypeValues)[number];
+
+export const movementProjectionTypeUpdateSchema = z.object({
+  movementId: z.string().min(1),
+  projectionType: z.enum(projectionTypeValues).nullable()
+});
+
 
 const financialClosureTypeValues = ['weekly', 'monthly'] as const;
 
@@ -157,6 +165,7 @@ export type MovementHistoryItem = {
   cuentaDestino: string | null;
   puedeEditar: boolean;
   motivoNoEditable: string | null;
+  projectionType?: MovementProjectionType | null;
 };
 
 export type MovementsHistoryData = {
@@ -1582,7 +1591,7 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
   const groupIds = groups.map((group) => group.id);
   const { data: txData } = await client
     .from('transactions')
-    .select('id,group_id,account_id,type,category,amount,happened_at')
+    .select('id,group_id,account_id,type,category,amount,happened_at,projection_type')
     .in('group_id', groupIds);
 
   const transactions = (txData ?? []) as Array<{
@@ -1593,6 +1602,7 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
     category: string;
     amount: string;
     happened_at?: string;
+    projection_type?: MovementProjectionType | null;
   }>;
 
   const { data: accountsData } = await client
@@ -1629,7 +1639,8 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
       cuentaOrigen: reconstructedAccounts.sourceAccountName,
       cuentaDestino: reconstructedAccounts.destinationAccountName,
       puedeEditar: Boolean(action),
-      motivoNoEditable: action ? null : 'Este tipo de movimiento aún no se puede editar de forma segura.'
+      motivoNoEditable: action ? null : 'Este tipo de movimiento aún no se puede editar de forma segura.',
+      projectionType: lines.find((tx) => tx.projection_type)?.projection_type ?? null
     };
   });
 
@@ -2215,7 +2226,7 @@ async function buildFinancialClosurePayload(input: FinancialClosureCalculationIn
   const { data: transactionsData, error: transactionsError } = groupIds.length
     ? await client
       .from('transactions')
-      .select('id,group_id,account_id,type,category,amount,happened_at')
+      .select('id,group_id,account_id,type,category,amount,happened_at,projection_type')
       .in('group_id', groupIds)
       .gte('happened_at', start)
     : { data: [] as ClosureTransactionLine[], error: null };
@@ -2722,6 +2733,32 @@ async function getStoredMovementForEdition(householdId: string, movementId: stri
   }
 
   return { group, lines, descriptor };
+}
+
+
+export async function updateMovementProjectionType(rawInput: unknown) {
+  const householdId = await getDefaultHouseholdId();
+  if (!householdId) {
+    throw new Error('No existe un hogar configurado para clasificar movimientos.');
+  }
+
+  const input = movementProjectionTypeUpdateSchema.parse(rawInput);
+  const { data: group, error: groupError } = await supabaseAdmin
+    .from('transaction_groups')
+    .select('id')
+    .eq('id', input.movementId)
+    .eq('household_id', householdId)
+    .maybeSingle();
+
+  if (groupError) throw new Error(`No fue posible validar el movimiento: ${groupError.message}`);
+  if (!group?.id) throw new Error('No se encontró el movimiento solicitado para este hogar.');
+
+  const { error: updateError } = await supabaseAdmin
+    .from('transactions')
+    .update({ projection_type: input.projectionType })
+    .eq('group_id', group.id);
+
+  if (updateError) throw new Error(`No fue posible actualizar la clasificación de proyección: ${updateError.message}`);
 }
 
 export async function updateMovement(rawInput: unknown) {
