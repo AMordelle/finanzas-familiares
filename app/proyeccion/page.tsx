@@ -1,7 +1,7 @@
 import React from 'react';
 import { AppShell } from '@/components/app-shell';
 import { Card } from '@/components/ui/card';
-import { buildProjectionScenario, type ProjectionCalculationTransparency, type ProjectionTrend } from '@/lib/finance/projection';
+import { buildProjectionScenario, type ProjectionCalculationTransparency, type ProjectionDetectedMovement, type ProjectionTrend } from '@/lib/finance/projection';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 function formatSignedCurrency(value: number) {
@@ -64,7 +64,19 @@ function MovementList({ items, emptyLabel }: { items: ProjectionCalculationTrans
   );
 }
 
-function CalculationDetails({ calculation }: { calculation: ProjectionCalculationTransparency }) {
+function CalculationDetails({
+  calculation,
+  recurringWeeklyIncome,
+  recurringWeeklyExpenses,
+  extraordinaryDetected,
+  internalExcluded
+}: {
+  calculation: ProjectionCalculationTransparency;
+  recurringWeeklyIncome: number;
+  recurringWeeklyExpenses: number;
+  extraordinaryDetected: ProjectionDetectedMovement[];
+  internalExcluded: ProjectionDetectedMovement[];
+}) {
   const commitmentWeeks = calculation.commitments.byWeek.filter((week) => week.items.length > 0);
 
   return (
@@ -72,6 +84,38 @@ function CalculationDetails({ calculation }: { calculation: ProjectionCalculatio
       <details className="rounded-2xl bg-white p-4 shadow-sm">
         <summary className="cursor-pointer text-lg font-semibold text-slate-950">Ver cómo se calculó esta proyección</summary>
         <div className="mt-4 space-y-5">
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <h4 className="font-semibold text-slate-950">Flujo recurrente usado para la proyección</h4>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl bg-white p-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Ingresos recurrentes</p>
+                <p className="mt-1 text-lg font-semibold text-emerald-700">{formatCurrencyMXN(recurringWeeklyIncome)} semanales</p>
+              </div>
+              <div className="rounded-xl bg-white p-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Gastos recurrentes</p>
+                <p className="mt-1 text-lg font-semibold text-amber-700">{formatCurrencyMXN(recurringWeeklyExpenses)} semanales</p>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-4 lg:grid-cols-2">
+              <div>
+                <h5 className="text-sm font-semibold text-slate-900">Eventos extraordinarios detectados</h5>
+                {extraordinaryDetected.length ? (
+                  <ul className="mt-2 space-y-1 text-sm text-slate-700">
+                    {extraordinaryDetected.map((item) => <li key={`${item.description}-${item.date}-${item.amount}`}>• {item.description} · {formatCurrencyMXN(item.amount)} · {item.date} · no incluida en promedio recurrente</li>)}
+                  </ul>
+                ) : <EmptyState label="No se detectaron movimientos extraordinarios en el historial usado." />}
+              </div>
+              <div>
+                <h5 className="text-sm font-semibold text-slate-900">Movimientos internos excluidos</h5>
+                {internalExcluded.length ? (
+                  <ul className="mt-2 space-y-1 text-sm text-slate-700">
+                    {internalExcluded.map((item) => <li key={`${item.description}-${item.date}-${item.amount}`}>• {item.description} · {formatCurrencyMXN(item.amount)} · {item.date}</li>)}
+                  </ul>
+                ) : <EmptyState label="No se detectaron transferencias internas en el historial usado." />}
+              </div>
+            </div>
+          </div>
+
           {calculation.warnings.length ? (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
               <h4 className="font-semibold text-amber-900">Advertencias de cálculo</h4>
@@ -211,7 +255,13 @@ export default async function ProjectionPage() {
         </Card>
       </section>
 
-      <CalculationDetails calculation={calculation} />
+      <CalculationDetails
+        calculation={calculation}
+        recurringWeeklyIncome={scenario.recurringWeeklyIncome}
+        recurringWeeklyExpenses={scenario.recurringWeeklyExpenses}
+        extraordinaryDetected={scenario.extraordinaryDetected}
+        internalExcluded={scenario.internalExcluded}
+      />
 
       <section className="mt-6">
         <Card>

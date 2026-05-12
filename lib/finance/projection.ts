@@ -1,5 +1,13 @@
 export type ProjectionTrend = 'up' | 'down' | 'stable';
 export type ProjectionConfidence = 'low' | 'medium' | 'high';
+export type FinancialMovementClassification = 'recurrent' | 'extraordinary' | 'internal';
+
+export type ProjectionDetectedMovement = {
+  description: string;
+  amount: number;
+  date: string;
+  reason: string;
+};
 
 export type ProjectionMovementAuditItem = {
   groupId: string;
@@ -8,6 +16,7 @@ export type ProjectionMovementAuditItem = {
   accountName: string | null;
   amount: number;
   reason: string;
+  classification: FinancialMovementClassification;
 };
 
 export type ProjectionCategoryBreakdown = {
@@ -87,6 +96,10 @@ export type ProjectionWeek = {
 
 export type ProjectionScenario = {
   generatedAt: string;
+  recurringWeeklyIncome: number;
+  recurringWeeklyExpenses: number;
+  extraordinaryDetected: ProjectionDetectedMovement[];
+  internalExcluded: ProjectionDetectedMovement[];
   weeks: ProjectionWeek[];
   summary: {
     startingOperationalMoney: number;
@@ -129,6 +142,9 @@ type MovementAction = {
   accountName: string | null;
   accountType: string | null;
   reason: string;
+  description: string;
+  classification: FinancialMovementClassification;
+  classificationReason: string;
   isExtraordinary: boolean;
   isTransferLike: boolean;
   isFixedExpense: boolean;
@@ -183,6 +199,34 @@ function normalizeText(value: string) {
   return value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
+
+export function classifyFinancialMovement(input: {
+  category: string;
+  type?: string | null;
+  description?: string | null;
+  amount?: number;
+  accountType?: string | null;
+  hasMirrorMovement?: boolean;
+}): { classification: FinancialMovementClassification; reason: string } {
+  const haystack = normalizeText(`${input.category} ${input.type ?? ''} ${input.description ?? ''} ${input.accountType ?? ''}`);
+
+  // Heurísticas iniciales documentadas para Proyección v1:
+  // - internal: transferencias/rebalanceos/movimientos técnicos o espejo entre cuentas propias.
+  // - extraordinary: SAT, aguinaldo, bonos, préstamos, devoluciones, ventas aisladas o pagos extraordinarios.
+  // - recurrent: lo operativo no clasificado como interno/extraordinario; alimenta el promedio semanal.
+  const internalKeywords = ['transfer', 'traspaso', 'rebalanceo', 'payment_internal', 'interno', 'movimiento tecnico', 'ajuste tecnico'];
+  if (input.hasMirrorMovement || internalKeywords.some((word) => haystack.includes(word))) {
+    return { classification: 'internal', reason: 'Movimiento interno/técnico detectado; no afecta el flujo proyectable.' };
+  }
+
+  const extraordinaryKeywords = ['aguinaldo', 'sat', 'devolucion', 'devolución', 'bono', 'prestamo', 'préstamo', 'extraordinario', 'excepcional', 'venta aislada', 'premio', 'finiquito'];
+  if (extraordinaryKeywords.some((word) => haystack.includes(normalizeText(word)))) {
+    return { classification: 'extraordinary', reason: 'Movimiento extraordinario detectado; se separa del promedio recurrente.' };
+  }
+
+  return { classification: 'recurrent', reason: 'Movimiento operativo recurrente; alimenta el promedio semanal.' };
+}
+
 function inferMovementAction(lines: Array<{ type: string; category: string }>) {
   const has = (type: string, category: string) => lines.some((line) => line.type === type && line.category === category);
   if (has('debit', 'entrada_cuenta')) return 'income';
@@ -192,7 +236,7 @@ function inferMovementAction(lines: Array<{ type: string; category: string }>) {
 
 function isExtraordinaryIncomeCategory(category: string) {
   const normalized = normalizeText(category);
-  return ['extra', 'bono', 'aguinaldo', 'reembolso', 'devolucion', 'ajuste', 'premio', 'venta'].some((word) => normalized.includes(word));
+  return ['bono', 'aguinaldo', 'sat', 'devolucion', 'prestamo', 'extraordinario', 'excepcional', 'premio', 'venta aislada', 'finiquito'].some((word) => normalized.includes(word));
 }
 
 function isTransferLikeCategory(category: string) {
@@ -248,7 +292,8 @@ function actionToAuditItem(item: MovementAction): ProjectionMovementAuditItem {
     category: item.category,
     accountName: item.accountName,
     amount: roundMoney(item.amount),
-    reason: item.reason
+    reason: item.reason,
+    classification: item.classification
   };
 }
 
@@ -264,7 +309,7 @@ function buildAverageDetails(args: {
   const recentStart = `${recentPeriodStart}T00:00:00.000Z`;
   const fallbackStart = `${fallbackPeriodStart}T00:00:00.000Z`;
   const label = args.action === 'income' ? 'ingresos' : 'gastos';
-  const matchingRecent = args.actions.filter((item) => item.action === args.action && item.happenedAt >= recentStart && item.happenedAt <= nowIso);
+  const matchingRecent = args.actions.filter((item) => item.action === args.action && item.classification === 'recurrent' && item.happenedAt >= recentStart && item.happenedAt <= nowIso);
   const allRecentWindow = args.actions.filter((item) => item.happenedAt >= recentStart && item.happenedAt <= nowIso);
 
   if (matchingRecent.length > 0) {
@@ -273,13 +318,13 @@ function buildAverageDetails(args: {
       periodEnd: toDateOnly(args.generatedAt),
       divisorWeeks: RECENT_WEEKS,
       included: matchingRecent,
-      excluded: allRecentWindow.filter((item) => item.action !== args.action),
+      excluded: allRecentWindow.filter((item) => item.action !== args.action || item.classification !== 'recurrent'),
       weeklyAverage: roundMoney(matchingRecent.reduce((acc, item) => acc + item.amount, 0) / RECENT_WEEKS),
-      criterion: `Promedio semanal de las últimas ${RECENT_WEEKS} semanas con movimientos clasificados como ${label}.`
+      criterion: `Promedio semanal recurrente de las últimas ${RECENT_WEEKS} semanas; excluye movimientos extraordinary e internal en ${label}.`
     };
   }
 
-  const matchingFallback = args.actions.filter((item) => item.action === args.action && item.happenedAt >= fallbackStart && item.happenedAt <= nowIso);
+  const matchingFallback = args.actions.filter((item) => item.action === args.action && item.classification === 'recurrent' && item.happenedAt >= fallbackStart && item.happenedAt <= nowIso);
   const allFallbackWindow = args.actions.filter((item) => item.happenedAt >= fallbackStart && item.happenedAt <= nowIso);
   if (matchingFallback.length > 0) {
     args.dataLimitations.push(`No hubo ${label} en las últimas 4 semanas; se usó el promedio semanal de hasta 12 semanas disponibles.`);
@@ -288,9 +333,9 @@ function buildAverageDetails(args: {
       periodEnd: toDateOnly(args.generatedAt),
       divisorWeeks: FALLBACK_WEEKS,
       included: matchingFallback,
-      excluded: allFallbackWindow.filter((item) => item.action !== args.action),
+      excluded: allFallbackWindow.filter((item) => item.action !== args.action || item.classification !== 'recurrent'),
       weeklyAverage: roundMoney(matchingFallback.reduce((acc, item) => acc + item.amount, 0) / FALLBACK_WEEKS),
-      criterion: `Promedio semanal de las últimas ${FALLBACK_WEEKS} semanas disponibles porque no había datos suficientes en 4 semanas.`
+      criterion: `Promedio semanal recurrente de las últimas ${FALLBACK_WEEKS} semanas disponibles porque no había datos suficientes en 4 semanas; excluye extraordinary e internal.`
     };
   }
 
@@ -300,7 +345,7 @@ function buildAverageDetails(args: {
     periodEnd: toDateOnly(args.generatedAt),
     divisorWeeks: RECENT_WEEKS,
     included: [] as MovementAction[],
-    excluded: allRecentWindow.filter((item) => item.action !== args.action),
+    excluded: allRecentWindow.filter((item) => item.action !== args.action || item.classification !== 'recurrent'),
     weeklyAverage: 0,
     criterion: `No se encontraron movimientos recientes clasificados como ${label}.`
   };
@@ -320,12 +365,17 @@ function detectTrend(projectedChange: number): ProjectionTrend {
   return 'stable';
 }
 
-function confidenceFromData(actions: Array<{ action: 'income' | 'expense' | null }>, hasMsi: boolean): ProjectionConfidence {
-  const incomeCount = actions.filter((item) => item.action === 'income').length;
-  const expenseCount = actions.filter((item) => item.action === 'expense').length;
-  if (incomeCount >= 2 && expenseCount >= 2) return hasMsi ? 'high' : 'medium';
-  if (incomeCount > 0 || expenseCount > 0) return 'medium';
-  return 'low';
+function confidenceFromData(actions: MovementAction[]): ProjectionConfidence {
+  const recurringIncomeCount = actions.filter((item) => item.action === 'income' && item.classification === 'recurrent').length;
+  const recurringExpenseCount = actions.filter((item) => item.action === 'expense' && item.classification === 'recurrent').length;
+  const extraordinaryCount = actions.filter((item) => item.classification === 'extraordinary').length;
+  const internalCount = actions.filter((item) => item.classification === 'internal').length;
+  const recurrentCount = recurringIncomeCount + recurringExpenseCount;
+
+  if (recurringIncomeCount === 0 || recurringExpenseCount === 0) return 'low';
+  if (recurrentCount < 3 || extraordinaryCount > recurrentCount || internalCount > recurrentCount) return 'low';
+  if (recurringIncomeCount >= 2 && recurringExpenseCount >= 2 && extraordinaryCount <= 1 && internalCount <= 2) return 'high';
+  return 'medium';
 }
 
 function emptyCalculation(generatedAt: Date): ProjectionCalculationTransparency {
@@ -336,7 +386,7 @@ function emptyCalculation(generatedAt: Date): ProjectionCalculationTransparency 
       periodStart,
       periodEnd,
       criterion: 'No hay hogar configurado; no se analizaron movimientos.',
-      shortNote: 'Promedio semanal de las últimas 4 semanas; no incluye extras pendientes ni transferencias internas.',
+      shortNote: 'Promedio semanal recurrente; no incluye extraordinarios, extras pendientes ni transferencias internas.',
       weeklyAverage: 0,
       ordinaryIncome: 0,
       extraordinaryIncluded: 0,
@@ -350,7 +400,7 @@ function emptyCalculation(generatedAt: Date): ProjectionCalculationTransparency 
       periodStart,
       periodEnd,
       criterion: 'No hay hogar configurado; no se analizaron movimientos.',
-      shortNote: 'Promedio semanal de las últimas 4 semanas; no incluye transferencias internas.',
+      shortNote: 'Promedio semanal recurrente; no incluye extraordinarios ni transferencias internas.',
       weeklyAverage: 0,
       variableExpenses: 0,
       fixedExpenses: 0,
@@ -383,6 +433,10 @@ export async function buildProjectionScenario(
   if (!resolvedHouseholdId) {
     return {
       generatedAt: generatedAtIso,
+      recurringWeeklyIncome: 0,
+      recurringWeeklyExpenses: 0,
+      extraordinaryDetected: [],
+      internalExcluded: [],
       weeks: ranges.map((range, index) => ({
         weekNumber: index + 1,
         periodStart: range.periodStartIso,
@@ -461,14 +515,25 @@ export async function buildProjectionScenario(
     const happenedAt = lines.reduce((latest, line) => line.happened_at > latest ? line.happened_at : latest, lines[0]?.happened_at ?? '');
     const isTransferLike = lines.some((line) => isTransferLikeCategory(line.category)) && !action;
     const accountType = account?.type ?? null;
+    const description = category;
     const isDebtPayment = isDebtPaymentCategory(category) || accountType === 'credit_card' || accountType === 'loan' || accountType === 'deuda';
-    const reason = action === 'income'
-      ? 'Incluido: movimiento con entrada a cuenta operativa registrado como ingreso.'
-      : action === 'expense'
-        ? 'Incluido: movimiento con salida de cuenta registrado como gasto.'
-        : isTransferLike
-          ? 'Excluido: parece transferencia interna o ajuste, no ingreso/gasto proyectable.'
-          : 'Excluido: no tiene patrón claro de ingreso o gasto operativo.';
+    const classificationResult = classifyFinancialMovement({
+      category,
+      type: action,
+      description,
+      amount,
+      accountType,
+      hasMirrorMovement: isTransferLike
+    });
+    const reason = classificationResult.classification === 'internal'
+      ? 'Excluido: movimiento internal/transferencia entre cuentas, no entra a proyección.'
+      : classificationResult.classification === 'extraordinary'
+        ? 'Excluido: movimiento extraordinary/atípico, no entra al promedio recurrente.'
+        : action === 'income'
+          ? 'Incluido: ingreso recurrente usado para proyección.'
+          : action === 'expense'
+            ? 'Incluido: gasto recurrente usado para proyección.'
+            : 'Excluido: no tiene patrón claro de ingreso o gasto operativo.';
 
     return {
       action,
@@ -476,20 +541,42 @@ export async function buildProjectionScenario(
       happenedAt,
       groupId: lines[0]?.group_id ?? '',
       category,
+      description,
+      classification: classificationResult.classification,
+      classificationReason: classificationResult.reason,
       accountName: account?.name ?? null,
       accountType,
       reason,
-      isExtraordinary: action === 'income' && isExtraordinaryIncomeCategory(category),
-      isTransferLike,
+      isExtraordinary: classificationResult.classification === 'extraordinary' || (action === 'income' && isExtraordinaryIncomeCategory(category)),
+      isTransferLike: classificationResult.classification === 'internal' || isTransferLike,
       isFixedExpense: action === 'expense' && isFixedExpenseCategory(category),
       isDebtPayment: action === 'expense' && isDebtPayment
     } satisfies MovementAction;
+  });
+
+  movementActions.forEach((item) => {
+    if (item.classification !== 'recurrent' || item.action === null) return;
+    const peers = movementActions.filter((peer) => peer !== item && peer.action === item.action && peer.classification === 'recurrent');
+    if (peers.length < 2) return;
+    const peerAverage = peers.reduce((acc, peer) => acc + peer.amount, 0) / peers.length;
+    if (item.amount > Math.max(peerAverage * 3, 5000)) {
+      item.classification = 'extraordinary';
+      item.classificationReason = 'Monto atípicamente superior al historial recurrente; se separa del promedio.';
+      item.reason = 'Excluido: monto extraordinario detectado por comparación histórica.';
+      item.isExtraordinary = true;
+    }
   });
 
   const incomeAverage = buildAverageDetails({ actions: movementActions, action: 'income', generatedAt, dataLimitations });
   const expenseAverage = buildAverageDetails({ actions: movementActions, action: 'expense', generatedAt, dataLimitations });
   const estimatedIncome = incomeAverage.weeklyAverage;
   const estimatedVariableExpenses = expenseAverage.weeklyAverage;
+  const extraordinaryDetected = movementActions
+    .filter((item) => item.classification === 'extraordinary')
+    .map((item) => ({ description: item.description, amount: roundMoney(item.amount), date: item.happenedAt.slice(0, 10), reason: item.classificationReason }));
+  const internalExcluded = movementActions
+    .filter((item) => item.classification === 'internal')
+    .map((item) => ({ description: item.description, amount: roundMoney(item.amount), date: item.happenedAt.slice(0, 10), reason: item.classificationReason }));
 
   const incomeByCategory = new Map<string, number>();
   const incomeByAccount = new Map<string, number>();
@@ -568,11 +655,11 @@ export async function buildProjectionScenario(
 
   const warnings: string[] = [];
   if (incomeAverage.included.length < 2 || expenseAverage.included.length < 2) warnings.push('Hay pocos datos históricos; el promedio semanal puede ser poco representativo.');
-  const extraordinaryIncluded = roundMoney(incomeAverage.included.filter((item) => item.isExtraordinary).reduce((acc, item) => acc + item.amount, 0));
-  const ordinaryIncome = roundMoney(incomeAverage.included.filter((item) => !item.isExtraordinary).reduce((acc, item) => acc + item.amount, 0));
-  const extraordinaryExcluded = roundMoney(incomeAverage.excluded.filter((item) => item.isExtraordinary).reduce((acc, item) => acc + item.amount, 0));
-  if (extraordinaryIncluded > 0 && extraordinaryIncluded >= Math.max(ordinaryIncome * 0.25, 1)) warnings.push('Hay ingresos extraordinarios recientes incluidos que podrían inflar el promedio semanal.');
-  if (movementActions.some((item) => item.action === 'income' && item.isTransferLike)) warnings.push('Hay movimientos clasificados como ingreso que parecen transferencias o ajustes; revisa si deben proyectarse.');
+  const extraordinaryIncluded = 0;
+  const ordinaryIncome = roundMoney(incomeAverage.included.reduce((acc, item) => acc + item.amount, 0));
+  const extraordinaryExcluded = roundMoney(movementActions.filter((item) => item.action === 'income' && item.classification === 'extraordinary').reduce((acc, item) => acc + item.amount, 0));
+  if (extraordinaryDetected.length > 0) warnings.push('Se detectaron movimientos extraordinarios y no se incluyeron en el promedio recurrente.');
+  if (internalExcluded.length > 0) warnings.push('Se excluyeron movimientos internos o transferencias para no distorsionar la proyección.');
   if (expenseAverage.included.some((item) => item.isDebtPayment)) warnings.push('Hay pagos de tarjeta/deuda dentro de gastos; podrían duplicar gasto si el consumo original ya fue contado.');
 
   let opening = startingOperationalMoney;
@@ -609,6 +696,10 @@ export async function buildProjectionScenario(
 
   return {
     generatedAt: generatedAtIso,
+    recurringWeeklyIncome: estimatedIncome,
+    recurringWeeklyExpenses: estimatedVariableExpenses,
+    extraordinaryDetected,
+    internalExcluded,
     weeks,
     summary: {
       startingOperationalMoney,
@@ -617,7 +708,7 @@ export async function buildProjectionScenario(
       lowestProjectedMoney: lowestWeek.closingOperationalMoney,
       lowestProjectedWeek: lowestWeek.weekNumber,
       trend: detectTrend(projectedChange),
-      confidence: confidenceFromData(movementActions, ((installmentsData ?? []) as MsiInstallmentRow[]).length > 0),
+      confidence: confidenceFromData(movementActions),
       dataLimitations: [...new Set([...dataLimitations, ...warnings])]
     },
     calculation: {
@@ -625,7 +716,7 @@ export async function buildProjectionScenario(
         periodStart: incomeAverage.periodStart,
         periodEnd: incomeAverage.periodEnd,
         criterion: incomeAverage.criterion,
-        shortNote: 'Promedio semanal de las últimas 4 semanas; no incluye extras pendientes ni transferencias internas.',
+        shortNote: 'Promedio semanal recurrente; no incluye extraordinarios, extras pendientes ni transferencias internas.',
         weeklyAverage: estimatedIncome,
         ordinaryIncome,
         extraordinaryIncluded,
@@ -639,7 +730,7 @@ export async function buildProjectionScenario(
         periodStart: expenseAverage.periodStart,
         periodEnd: expenseAverage.periodEnd,
         criterion: expenseAverage.criterion,
-        shortNote: 'Promedio semanal de las últimas 4 semanas; no incluye transferencias internas.',
+        shortNote: 'Promedio semanal recurrente; no incluye extraordinarios ni transferencias internas.',
         weeklyAverage: estimatedVariableExpenses,
         variableExpenses: roundMoney(expenseAverage.included.filter((item) => !item.isFixedExpense).reduce((acc, item) => acc + item.amount, 0)),
         fixedExpenses: roundMoney(expenseAverage.included.filter((item) => item.isFixedExpense).reduce((acc, item) => acc + item.amount, 0)),

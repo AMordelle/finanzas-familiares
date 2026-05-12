@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildProjectionScenario } from '@/lib/finance/projection';
+import { buildProjectionScenario, classifyFinancialMovement } from '@/lib/finance/projection';
 
 type Row = Record<string, unknown>;
 type Db = Record<string, Row[]>;
@@ -66,7 +66,7 @@ function createFakeSupabase(dbOverrides: Partial<Db> = {}) {
       { group_id: 'income-1', type: 'debit', category: 'entrada_cuenta', amount: '1000.00', happened_at: '2026-05-05T12:00:00.000Z' },
       { group_id: 'income-1', type: 'credit', category: 'ingreso_sueldo', amount: '1000.00', happened_at: '2026-05-05T12:00:00.000Z' },
       { group_id: 'income-2', type: 'debit', category: 'entrada_cuenta', amount: '600.00', happened_at: '2026-04-28T12:00:00.000Z' },
-      { group_id: 'income-2', type: 'credit', category: 'ingreso_extra', amount: '600.00', happened_at: '2026-04-28T12:00:00.000Z' },
+      { group_id: 'income-2', type: 'credit', category: 'devolucion_sat', amount: '600.00', happened_at: '2026-04-28T12:00:00.000Z' },
       { group_id: 'expense-1', type: 'debit', category: 'super', amount: '1000.00', happened_at: '2026-05-06T12:00:00.000Z' },
       { group_id: 'expense-1', type: 'credit', category: 'salida_cuenta', amount: '1000.00', happened_at: '2026-05-06T12:00:00.000Z' },
       { group_id: 'expense-2', type: 'debit', category: 'comida', amount: '1000.00', happened_at: '2026-04-29T12:00:00.000Z' },
@@ -94,6 +94,16 @@ function createFakeSupabase(dbOverrides: Partial<Db> = {}) {
   return { db, from: (table: string) => new FakeQueryBuilder(table, db) };
 }
 
+describe('classifyFinancialMovement', () => {
+  it('clasifica movimientos recurrentes, extraordinarios e internos', () => {
+    expect(classifyFinancialMovement({ category: 'ingreso_nomina', amount: 1000 }).classification).toBe('recurrent');
+    expect(classifyFinancialMovement({ category: 'devolucion_sat', amount: 26000 }).classification).toBe('extraordinary');
+    expect(classifyFinancialMovement({ category: 'aguinaldo', amount: 12000 }).classification).toBe('extraordinary');
+    expect(classifyFinancialMovement({ category: 'bono_unico', amount: 5000 }).classification).toBe('extraordinary');
+    expect(classifyFinancialMovement({ category: 'transferencia', hasMirrorMovement: true }).classification).toBe('internal');
+  });
+});
+
 describe('buildProjectionScenario', () => {
   it('calcula una proyección base de 12 semanas sin modificar datos reales', async () => {
     const fakeClient = createFakeSupabase();
@@ -103,28 +113,33 @@ describe('buildProjectionScenario', () => {
     expect(scenario.summary.startingOperationalMoney).toBe(2000);
     expect(scenario.summary.startingOperationalMoney).not.toBe(2000 + 4500 + 5000 + 3000 + 900 + 999);
     expect(scenario.weeks).toHaveLength(12);
-    expect(scenario.weeks[0].estimatedIncome).toBe(400);
+    expect(scenario.weeks[0].estimatedIncome).toBe(250);
     expect(scenario.weeks[0].estimatedVariableExpenses).toBe(500);
     expect(scenario.weeks[0].estimatedCommitments).toBe(450);
     expect(scenario.weeks[0].extraordinaryEvents).toBe(0);
-    expect(scenario.weeks[0].closingOperationalMoney).toBe(1450);
+    expect(scenario.weeks[0].closingOperationalMoney).toBe(1300);
     expect(scenario.weeks[1].openingOperationalMoney).toBe(scenario.weeks[0].closingOperationalMoney);
     expect(scenario.weeks[1].extraordinaryEvents).toBe(100);
     expect(scenario.summary.endingOperationalMoney).toBe(scenario.weeks[11].closingOperationalMoney);
     expect(scenario.summary.projectedChange).toBe(scenario.summary.endingOperationalMoney - scenario.summary.startingOperationalMoney);
-    expect(scenario.summary.lowestProjectedMoney).toBe(450);
+    expect(scenario.summary.lowestProjectedMoney).toBe(-1350);
     expect(scenario.summary.lowestProjectedWeek).toBe(12);
     expect(scenario.summary.trend).toBe('down');
     expect(scenario.calculation.income.periodStart).toBe('2026-04-14');
-    expect(scenario.calculation.income.includedMovements).toHaveLength(2);
+    expect(scenario.calculation.income.includedMovements).toHaveLength(1);
     expect(scenario.calculation.income.excludedMovements.some((item) => item.reason.includes('transferencia'))).toBe(true);
     expect(scenario.calculation.income.ordinaryIncome).toBe(1000);
-    expect(scenario.calculation.income.extraordinaryIncluded).toBe(600);
+    expect(scenario.calculation.income.extraordinaryIncluded).toBe(0);
+    expect(scenario.calculation.income.extraordinaryExcluded).toBe(600);
+    expect(scenario.recurringWeeklyIncome).toBe(250);
+    expect(scenario.recurringWeeklyExpenses).toBe(500);
+    expect(scenario.extraordinaryDetected[0]).toMatchObject({ description: 'devolucion_sat', amount: 600 });
+    expect(scenario.internalExcluded[0]).toMatchObject({ description: 'transferencia', amount: 999 });
     expect(scenario.calculation.expenses.includedMovements).toHaveLength(2);
     expect(scenario.calculation.expenses.byCategory[0]).toEqual({ category: 'super', amount: 1000 });
     expect(scenario.calculation.commitments.byWeek[0].items.map((item) => item.description)).toEqual(expect.arrayContaining(['Lavadora', 'Celular']));
     expect(scenario.calculation.events.includedEvents[0]).toMatchObject({ label: 'Reembolso fechado', weekNumber: 2, amount: 100 });
-    expect(scenario.calculation.warnings).toContain('Hay ingresos extraordinarios recientes incluidos que podrían inflar el promedio semanal.');
+    expect(scenario.calculation.warnings).toContain('Se detectaron movimientos extraordinarios y no se incluyeron en el promedio recurrente.');
     expect(scenario.summary.dataLimitations).toContain('Hay extras pendientes por cobrar; se muestran como pendientes y no se suman a la proyección base.');
     expect(JSON.stringify(fakeClient.db)).toBe(before);
   });
@@ -147,7 +162,7 @@ describe('buildProjectionScenario', () => {
       transaction_groups: [{ id: 'income-1', household_id: 'house-1' }],
       transactions: [
         { group_id: 'income-1', type: 'debit', category: 'entrada_cuenta', amount: '400.00', happened_at: '2026-05-05T12:00:00.000Z' },
-        { group_id: 'income-1', type: 'credit', category: 'ingreso_extra', amount: '400.00', happened_at: '2026-05-05T12:00:00.000Z' }
+        { group_id: 'income-1', type: 'credit', category: 'ingreso_nomina', amount: '400.00', happened_at: '2026-05-05T12:00:00.000Z' }
       ],
       msi_installments: [],
       calendar_events: [],

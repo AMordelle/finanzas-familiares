@@ -10,6 +10,10 @@ vi.mock('@/components/app-shell', () => ({
 vi.mock('@/lib/finance/projection', () => ({
   buildProjectionScenario: vi.fn(async () => ({
       generatedAt: '2026-05-12T10:00:00.000Z',
+      recurringWeeklyIncome: 400,
+      recurringWeeklyExpenses: 200,
+      extraordinaryDetected: [{ description: 'devolucion_sat', amount: 26000, date: '2026-05-01', reason: 'Movimiento extraordinario detectado; se separa del promedio recurrente.' }],
+      internalExcluded: [{ description: 'transferencia', amount: 5000, date: '2026-05-02', reason: 'Movimiento interno/técnico detectado; no afecta el flujo proyectable.' }],
       weeks: Array.from({ length: 12 }, (_, index) => ({
         weekNumber: index + 1,
         periodStart: '2026-05-12',
@@ -95,6 +99,10 @@ describe('ProjectionPage', () => {
     expect(html).toContain('Movimientos excluidos de gastos');
     expect(html).toContain('Compromisos MSI');
     expect(html).toContain('Lavadora');
+    expect(html).toContain('Flujo recurrente usado para la proyección');
+    expect(html).toContain('Ingresos recurrentes');
+    expect(html).toContain('Eventos extraordinarios detectados');
+    expect(html).toContain('Movimientos internos excluidos');
     expect(html).toContain('Promedio semanal de las últimas 4 semanas');
   });
 });
