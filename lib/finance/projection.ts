@@ -1,6 +1,76 @@
 export type ProjectionTrend = 'up' | 'down' | 'stable';
 export type ProjectionConfidence = 'low' | 'medium' | 'high';
 
+export type ProjectionMovementAuditItem = {
+  groupId: string;
+  date: string;
+  category: string;
+  accountName: string | null;
+  amount: number;
+  reason: string;
+};
+
+export type ProjectionCategoryBreakdown = {
+  category: string;
+  amount: number;
+};
+
+export type ProjectionCommitmentAuditItem = {
+  weekNumber: number;
+  description: string;
+  amount: number;
+  dueDate: string | null;
+  installmentNumber: number;
+};
+
+export type ProjectionEventAuditItem = {
+  weekNumber: number;
+  label: string;
+  amount: number;
+  eventDate: string;
+};
+
+export type ProjectionCalculationTransparency = {
+  income: {
+    periodStart: string;
+    periodEnd: string;
+    criterion: string;
+    shortNote: string;
+    weeklyAverage: number;
+    ordinaryIncome: number;
+    extraordinaryIncluded: number;
+    extraordinaryExcluded: number;
+    byCategory: ProjectionCategoryBreakdown[];
+    byAccount: ProjectionCategoryBreakdown[];
+    includedMovements: ProjectionMovementAuditItem[];
+    excludedMovements: ProjectionMovementAuditItem[];
+  };
+  expenses: {
+    periodStart: string;
+    periodEnd: string;
+    criterion: string;
+    shortNote: string;
+    weeklyAverage: number;
+    variableExpenses: number;
+    fixedExpenses: number;
+    debtPaymentsIncluded: number;
+    byCategory: ProjectionCategoryBreakdown[];
+    includedMovements: ProjectionMovementAuditItem[];
+    excludedMovements: ProjectionMovementAuditItem[];
+  };
+  commitments: {
+    criterion: string;
+    shortNote: string;
+    byWeek: Array<{ weekNumber: number; total: number; items: ProjectionCommitmentAuditItem[] }>;
+  };
+  events: {
+    criterion: string;
+    shortNote: string;
+    includedEvents: ProjectionEventAuditItem[];
+  };
+  warnings: string[];
+};
+
 export type ProjectionWeek = {
   weekNumber: number;
   periodStart: string;
@@ -28,6 +98,7 @@ export type ProjectionScenario = {
     confidence: ProjectionConfidence;
     dataLimitations: string[];
   };
+  calculation: ProjectionCalculationTransparency;
 };
 
 type QueryResult<T> = { data: T | null; error: { message: string } | null };
@@ -48,15 +119,29 @@ type SupabaseClientLike = { from: (table: string) => QueryBuilder };
 
 type AccountRow = { id: string; household_id: string; name: string; type: string; balance: string | number; is_active?: boolean | null };
 type GroupRow = { id: string; household_id: string };
-type TransactionRow = { group_id: string; type: string; category: string; amount: string | number; happened_at: string };
-type MsiInstallmentRow = { id: string; household_id: string; installment_number: number; amount: string | number; due_date: string | null; status: string };
+type TransactionRow = { group_id: string; account_id?: string | null; type: string; category: string; amount: string | number; happened_at: string };
+type MovementAction = {
+  action: 'income' | 'expense' | null;
+  amount: number;
+  happenedAt: string;
+  groupId: string;
+  category: string;
+  accountName: string | null;
+  accountType: string | null;
+  reason: string;
+  isExtraordinary: boolean;
+  isTransferLike: boolean;
+  isFixedExpense: boolean;
+  isDebtPayment: boolean;
+};
+type MsiInstallmentRow = { id: string; household_id: string; msi_purchase_id?: string | null; installment_number: number; amount: string | number; due_date: string | null; status: string };
+type MsiPurchaseRow = { id: string; description: string };
 type CalendarEventRow = { id: string; household_id: string; label: string; amount: string | number; event_date: string };
 type ExtraWorkRow = { id: string; household_id: string; status: string };
 
 const PROJECTION_WEEKS = 12;
 const RECENT_WEEKS = 4;
 const FALLBACK_WEEKS = 12;
-
 
 function getProjectionAccountScope(accountType: string): 'operational' | 'complementary' {
   const normalized = accountType.toLowerCase().trim();
@@ -94,11 +179,45 @@ function addDays(value: Date, days: number) {
   return next;
 }
 
+function normalizeText(value: string) {
+  return value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
 function inferMovementAction(lines: Array<{ type: string; category: string }>) {
   const has = (type: string, category: string) => lines.some((line) => line.type === type && line.category === category);
   if (has('debit', 'entrada_cuenta')) return 'income';
   if (has('credit', 'salida_cuenta')) return 'expense';
   return null;
+}
+
+function isExtraordinaryIncomeCategory(category: string) {
+  const normalized = normalizeText(category);
+  return ['extra', 'bono', 'aguinaldo', 'reembolso', 'devolucion', 'ajuste', 'premio', 'venta'].some((word) => normalized.includes(word));
+}
+
+function isTransferLikeCategory(category: string) {
+  const normalized = normalizeText(category);
+  return ['transfer', 'traspaso', 'entrada_cuenta', 'salida_cuenta', 'ajuste'].some((word) => normalized.includes(word));
+}
+
+function isFixedExpenseCategory(category: string) {
+  const normalized = normalizeText(category);
+  return ['renta', 'hipoteca', 'servicio', 'colegiatura', 'suscripcion', 'obligacion', 'fijo'].some((word) => normalized.includes(word));
+}
+
+function isDebtPaymentCategory(category: string) {
+  const normalized = normalizeText(category);
+  return ['tarjeta', 'deuda', 'credito', 'prestamo', 'pago_deuda'].some((word) => normalized.includes(word));
+}
+
+function addBreakdown(map: Map<string, number>, key: string, amount: number) {
+  map.set(key, roundMoney((map.get(key) ?? 0) + amount));
+}
+
+function mapBreakdown(map: Map<string, number>) {
+  return [...map.entries()]
+    .map(([category, amount]) => ({ category, amount: roundMoney(amount) }))
+    .sort((a, b) => b.amount - a.amount);
 }
 
 async function getDefaultHouseholdId(client: SupabaseClientLike) {
@@ -122,30 +241,69 @@ function buildWeekRanges(generatedAt: Date) {
   });
 }
 
-function averageWeeklyAmount(args: {
-  actions: Array<{ action: 'income' | 'expense'; amount: number; happenedAt: string }>;
+function actionToAuditItem(item: MovementAction): ProjectionMovementAuditItem {
+  return {
+    groupId: item.groupId,
+    date: item.happenedAt.slice(0, 10),
+    category: item.category,
+    accountName: item.accountName,
+    amount: roundMoney(item.amount),
+    reason: item.reason
+  };
+}
+
+function buildAverageDetails(args: {
+  actions: MovementAction[];
   action: 'income' | 'expense';
   generatedAt: Date;
   dataLimitations: string[];
 }) {
   const nowIso = args.generatedAt.toISOString();
-  const recentStart = `${toDateOnly(addDays(args.generatedAt, -(RECENT_WEEKS * 7)))}T00:00:00.000Z`;
-  const fallbackStart = `${toDateOnly(addDays(args.generatedAt, -(FALLBACK_WEEKS * 7)))}T00:00:00.000Z`;
+  const recentPeriodStart = toDateOnly(addDays(args.generatedAt, -(RECENT_WEEKS * 7)));
+  const fallbackPeriodStart = toDateOnly(addDays(args.generatedAt, -(FALLBACK_WEEKS * 7)));
+  const recentStart = `${recentPeriodStart}T00:00:00.000Z`;
+  const fallbackStart = `${fallbackPeriodStart}T00:00:00.000Z`;
   const label = args.action === 'income' ? 'ingresos' : 'gastos';
-  const recent = args.actions.filter((item) => item.action === args.action && item.happenedAt >= recentStart && item.happenedAt <= nowIso);
+  const matchingRecent = args.actions.filter((item) => item.action === args.action && item.happenedAt >= recentStart && item.happenedAt <= nowIso);
+  const allRecentWindow = args.actions.filter((item) => item.happenedAt >= recentStart && item.happenedAt <= nowIso);
 
-  if (recent.length > 0) {
-    return roundMoney(recent.reduce((acc, item) => acc + item.amount, 0) / RECENT_WEEKS);
+  if (matchingRecent.length > 0) {
+    return {
+      periodStart: recentPeriodStart,
+      periodEnd: toDateOnly(args.generatedAt),
+      divisorWeeks: RECENT_WEEKS,
+      included: matchingRecent,
+      excluded: allRecentWindow.filter((item) => item.action !== args.action),
+      weeklyAverage: roundMoney(matchingRecent.reduce((acc, item) => acc + item.amount, 0) / RECENT_WEEKS),
+      criterion: `Promedio semanal de las últimas ${RECENT_WEEKS} semanas con movimientos clasificados como ${label}.`
+    };
   }
 
-  const fallback = args.actions.filter((item) => item.action === args.action && item.happenedAt >= fallbackStart && item.happenedAt <= nowIso);
-  if (fallback.length > 0) {
+  const matchingFallback = args.actions.filter((item) => item.action === args.action && item.happenedAt >= fallbackStart && item.happenedAt <= nowIso);
+  const allFallbackWindow = args.actions.filter((item) => item.happenedAt >= fallbackStart && item.happenedAt <= nowIso);
+  if (matchingFallback.length > 0) {
     args.dataLimitations.push(`No hubo ${label} en las últimas 4 semanas; se usó el promedio semanal de hasta 12 semanas disponibles.`);
-    return roundMoney(fallback.reduce((acc, item) => acc + item.amount, 0) / FALLBACK_WEEKS);
+    return {
+      periodStart: fallbackPeriodStart,
+      periodEnd: toDateOnly(args.generatedAt),
+      divisorWeeks: FALLBACK_WEEKS,
+      included: matchingFallback,
+      excluded: allFallbackWindow.filter((item) => item.action !== args.action),
+      weeklyAverage: roundMoney(matchingFallback.reduce((acc, item) => acc + item.amount, 0) / FALLBACK_WEEKS),
+      criterion: `Promedio semanal de las últimas ${FALLBACK_WEEKS} semanas disponibles porque no había datos suficientes en 4 semanas.`
+    };
   }
 
   args.dataLimitations.push(`No hay historial reciente de ${label}; se proyecta ese rubro en $0.`);
-  return 0;
+  return {
+    periodStart: recentPeriodStart,
+    periodEnd: toDateOnly(args.generatedAt),
+    divisorWeeks: RECENT_WEEKS,
+    included: [] as MovementAction[],
+    excluded: allRecentWindow.filter((item) => item.action !== args.action),
+    weeklyAverage: 0,
+    criterion: `No se encontraron movimientos recientes clasificados como ${label}.`
+  };
 }
 
 function commitmentWeekIndex(installment: MsiInstallmentRow, ranges: ReturnType<typeof buildWeekRanges>, fallbackIndex: number) {
@@ -162,12 +320,49 @@ function detectTrend(projectedChange: number): ProjectionTrend {
   return 'stable';
 }
 
-function confidenceFromData(actions: Array<{ action: 'income' | 'expense' }>, hasMsi: boolean): ProjectionConfidence {
+function confidenceFromData(actions: Array<{ action: 'income' | 'expense' | null }>, hasMsi: boolean): ProjectionConfidence {
   const incomeCount = actions.filter((item) => item.action === 'income').length;
   const expenseCount = actions.filter((item) => item.action === 'expense').length;
   if (incomeCount >= 2 && expenseCount >= 2) return hasMsi ? 'high' : 'medium';
   if (incomeCount > 0 || expenseCount > 0) return 'medium';
   return 'low';
+}
+
+function emptyCalculation(generatedAt: Date): ProjectionCalculationTransparency {
+  const periodStart = toDateOnly(addDays(generatedAt, -(RECENT_WEEKS * 7)));
+  const periodEnd = toDateOnly(generatedAt);
+  return {
+    income: {
+      periodStart,
+      periodEnd,
+      criterion: 'No hay hogar configurado; no se analizaron movimientos.',
+      shortNote: 'Promedio semanal de las últimas 4 semanas; no incluye extras pendientes ni transferencias internas.',
+      weeklyAverage: 0,
+      ordinaryIncome: 0,
+      extraordinaryIncluded: 0,
+      extraordinaryExcluded: 0,
+      byCategory: [],
+      byAccount: [],
+      includedMovements: [],
+      excludedMovements: []
+    },
+    expenses: {
+      periodStart,
+      periodEnd,
+      criterion: 'No hay hogar configurado; no se analizaron movimientos.',
+      shortNote: 'Promedio semanal de las últimas 4 semanas; no incluye transferencias internas.',
+      weeklyAverage: 0,
+      variableExpenses: 0,
+      fixedExpenses: 0,
+      debtPaymentsIncluded: 0,
+      byCategory: [],
+      includedMovements: [],
+      excludedMovements: []
+    },
+    commitments: { criterion: 'MSI pendientes distribuidos por fecha de vencimiento; sin hogar no hay compromisos.', shortNote: 'Incluye MSI pendientes.', byWeek: [] },
+    events: { criterion: 'Eventos extraordinarios solo si están registrados con fecha dentro del horizonte.', shortNote: 'Solo eventos registrados.', includedEvents: [] },
+    warnings: ['No hay un hogar configurado para proyectar.']
+  };
 }
 
 export async function buildProjectionScenario(
@@ -210,7 +405,8 @@ export async function buildProjectionScenario(
         trend: 'stable',
         confidence: 'low',
         dataLimitations: ['No hay un hogar configurado para proyectar.', ...dataLimitations]
-      }
+      },
+      calculation: emptyCalculation(generatedAt)
     };
   }
 
@@ -221,6 +417,7 @@ export async function buildProjectionScenario(
   if (accountsError) throw new Error(`No fue posible leer cuentas para la proyección: ${accountsError.message}`);
 
   const accounts = ((accountData ?? []) as AccountRow[]).filter((account) => account.is_active !== false);
+  const accountById = new Map(accounts.map((account) => [account.id, account]));
   const operationalAccounts = accounts.filter((account) => getProjectionAccountScope(account.type) === 'operational');
   const startingOperationalMoney = roundMoney(operationalAccounts.reduce((acc, account) => acc + Number(account.balance), 0));
   if (!operationalAccounts.length) dataLimitations.push('No se encontraron cuentas operativas activas; el saldo inicial puede estar incompleto.');
@@ -236,7 +433,7 @@ export async function buildProjectionScenario(
   const { data: transactionData, error: transactionsError } = groupIds.length
     ? await dbClient
       .from('transactions')
-      .select('group_id,type,category,amount,happened_at')
+      .select('group_id,account_id,type,category,amount,happened_at')
       .in('group_id', groupIds)
       .gte('happened_at', fallbackStart)
     : { data: [] as TransactionRow[], error: null };
@@ -252,28 +449,91 @@ export async function buildProjectionScenario(
 
   const movementActions = Object.values(linesByGroup).map((lines) => {
     const action = inferMovementAction(lines);
-    if (!action) return null;
-    const amount = Number(lines.find((line) => action === 'income' ? line.type === 'debit' : line.type === 'credit')?.amount ?? 0);
+    const amountLine = action === 'income'
+      ? lines.find((line) => line.type === 'debit' && line.category === 'entrada_cuenta')
+      : action === 'expense'
+        ? lines.find((line) => line.type === 'credit' && line.category === 'salida_cuenta')
+        : lines.find((line) => !isTransferLikeCategory(line.category)) ?? lines[0];
+    const categoryLine = lines.find((line) => line.category && !['entrada_cuenta', 'salida_cuenta'].includes(line.category)) ?? amountLine ?? lines[0];
+    const account = amountLine?.account_id ? accountById.get(amountLine.account_id) : undefined;
+    const category = categoryLine?.category ?? 'sin_categoria';
+    const amount = Number(amountLine?.amount ?? categoryLine?.amount ?? 0);
     const happenedAt = lines.reduce((latest, line) => line.happened_at > latest ? line.happened_at : latest, lines[0]?.happened_at ?? '');
-    return { action, amount, happenedAt } as { action: 'income' | 'expense'; amount: number; happenedAt: string };
-  }).filter((item): item is { action: 'income' | 'expense'; amount: number; happenedAt: string } => item !== null);
+    const isTransferLike = lines.some((line) => isTransferLikeCategory(line.category)) && !action;
+    const accountType = account?.type ?? null;
+    const isDebtPayment = isDebtPaymentCategory(category) || accountType === 'credit_card' || accountType === 'loan' || accountType === 'deuda';
+    const reason = action === 'income'
+      ? 'Incluido: movimiento con entrada a cuenta operativa registrado como ingreso.'
+      : action === 'expense'
+        ? 'Incluido: movimiento con salida de cuenta registrado como gasto.'
+        : isTransferLike
+          ? 'Excluido: parece transferencia interna o ajuste, no ingreso/gasto proyectable.'
+          : 'Excluido: no tiene patrón claro de ingreso o gasto operativo.';
 
-  const estimatedIncome = averageWeeklyAmount({ actions: movementActions, action: 'income', generatedAt, dataLimitations });
-  const estimatedVariableExpenses = averageWeeklyAmount({ actions: movementActions, action: 'expense', generatedAt, dataLimitations });
+    return {
+      action,
+      amount,
+      happenedAt,
+      groupId: lines[0]?.group_id ?? '',
+      category,
+      accountName: account?.name ?? null,
+      accountType,
+      reason,
+      isExtraordinary: action === 'income' && isExtraordinaryIncomeCategory(category),
+      isTransferLike,
+      isFixedExpense: action === 'expense' && isFixedExpenseCategory(category),
+      isDebtPayment: action === 'expense' && isDebtPayment
+    } satisfies MovementAction;
+  });
+
+  const incomeAverage = buildAverageDetails({ actions: movementActions, action: 'income', generatedAt, dataLimitations });
+  const expenseAverage = buildAverageDetails({ actions: movementActions, action: 'expense', generatedAt, dataLimitations });
+  const estimatedIncome = incomeAverage.weeklyAverage;
+  const estimatedVariableExpenses = expenseAverage.weeklyAverage;
+
+  const incomeByCategory = new Map<string, number>();
+  const incomeByAccount = new Map<string, number>();
+  incomeAverage.included.forEach((item) => {
+    addBreakdown(incomeByCategory, item.category, item.amount);
+    addBreakdown(incomeByAccount, item.accountName ?? 'Sin cuenta identificada', item.amount);
+  });
+  const expenseByCategory = new Map<string, number>();
+  expenseAverage.included.forEach((item) => addBreakdown(expenseByCategory, item.category, item.amount));
 
   const { data: installmentsData, error: installmentsError } = await dbClient
     .from('msi_installments')
-    .select('id,household_id,installment_number,amount,due_date,status')
+    .select('id,household_id,msi_purchase_id,installment_number,amount,due_date,status')
     .eq('household_id', resolvedHouseholdId)
     .eq('status', 'pending')
     .order('due_date', { ascending: true })
     .order('installment_number', { ascending: true });
   if (installmentsError) throw new Error(`No fue posible leer compromisos MSI para la proyección: ${installmentsError.message}`);
 
+  const purchaseIds = [...new Set(((installmentsData ?? []) as MsiInstallmentRow[]).map((item) => item.msi_purchase_id).filter((id): id is string => Boolean(id)))];
+  const { data: purchasesData, error: purchasesError } = purchaseIds.length
+    ? await dbClient
+      .from('msi_purchases')
+      .select('id,description')
+      .in('id', purchaseIds)
+    : { data: [] as MsiPurchaseRow[], error: null };
+  if (purchasesError) throw new Error(`No fue posible leer compras MSI para la proyección: ${purchasesError.message}`);
+  const purchaseById = new Map(((purchasesData ?? []) as MsiPurchaseRow[]).map((purchase) => [purchase.id, purchase.description]));
+
   const commitmentsByWeek = new Array(PROJECTION_WEEKS).fill(0) as number[];
+  const commitmentItemsByWeek = Array.from({ length: PROJECTION_WEEKS }, () => [] as ProjectionCommitmentAuditItem[]);
   ((installmentsData ?? []) as MsiInstallmentRow[]).forEach((installment, index) => {
     const weekIndex = commitmentWeekIndex(installment, ranges, index);
-    if (weekIndex >= 0) commitmentsByWeek[weekIndex] = roundMoney(commitmentsByWeek[weekIndex] + Number(installment.amount));
+    if (weekIndex >= 0) {
+      const amount = Number(installment.amount);
+      commitmentsByWeek[weekIndex] = roundMoney(commitmentsByWeek[weekIndex] + amount);
+      commitmentItemsByWeek[weekIndex].push({
+        weekNumber: weekIndex + 1,
+        description: installment.msi_purchase_id ? purchaseById.get(installment.msi_purchase_id) ?? `MSI ${installment.msi_purchase_id}` : `MSI sin compra vinculada ${installment.id}`,
+        amount: roundMoney(amount),
+        dueDate: installment.due_date,
+        installmentNumber: installment.installment_number
+      });
+    }
   });
 
   const horizonEnd = `${ranges[PROJECTION_WEEKS - 1].periodEndIso}T23:59:59.999Z`;
@@ -285,12 +545,17 @@ export async function buildProjectionScenario(
   if (eventsError) throw new Error(`No fue posible leer eventos extraordinarios para la proyección: ${eventsError.message}`);
 
   const eventsByWeek = new Array(PROJECTION_WEEKS).fill(0) as number[];
+  const includedEvents: ProjectionEventAuditItem[] = [];
   ((eventsData ?? []) as CalendarEventRow[])
     .filter((event) => event.event_date <= horizonEnd)
     .forEach((event) => {
       const eventDate = event.event_date.slice(0, 10);
       const index = ranges.findIndex((range) => eventDate >= range.periodStartIso && eventDate <= range.periodEndIso);
-      if (index >= 0) eventsByWeek[index] = roundMoney(eventsByWeek[index] + Number(event.amount));
+      if (index >= 0) {
+        const amount = Number(event.amount);
+        eventsByWeek[index] = roundMoney(eventsByWeek[index] + amount);
+        includedEvents.push({ weekNumber: index + 1, label: event.label, amount: roundMoney(amount), eventDate });
+      }
     });
 
   const { data: extrasData, error: extrasError } = await dbClient
@@ -300,6 +565,15 @@ export async function buildProjectionScenario(
     .eq('status', 'pending');
   if (extrasError) throw new Error(`No fue posible leer extras pendientes para la proyección: ${extrasError.message}`);
   if (((extrasData ?? []) as ExtraWorkRow[]).length > 0) dataLimitations.push('Hay extras pendientes por cobrar; se muestran como pendientes y no se suman a la proyección base.');
+
+  const warnings: string[] = [];
+  if (incomeAverage.included.length < 2 || expenseAverage.included.length < 2) warnings.push('Hay pocos datos históricos; el promedio semanal puede ser poco representativo.');
+  const extraordinaryIncluded = roundMoney(incomeAverage.included.filter((item) => item.isExtraordinary).reduce((acc, item) => acc + item.amount, 0));
+  const ordinaryIncome = roundMoney(incomeAverage.included.filter((item) => !item.isExtraordinary).reduce((acc, item) => acc + item.amount, 0));
+  const extraordinaryExcluded = roundMoney(incomeAverage.excluded.filter((item) => item.isExtraordinary).reduce((acc, item) => acc + item.amount, 0));
+  if (extraordinaryIncluded > 0 && extraordinaryIncluded >= Math.max(ordinaryIncome * 0.25, 1)) warnings.push('Hay ingresos extraordinarios recientes incluidos que podrían inflar el promedio semanal.');
+  if (movementActions.some((item) => item.action === 'income' && item.isTransferLike)) warnings.push('Hay movimientos clasificados como ingreso que parecen transferencias o ajustes; revisa si deben proyectarse.');
+  if (expenseAverage.included.some((item) => item.isDebtPayment)) warnings.push('Hay pagos de tarjeta/deuda dentro de gastos; podrían duplicar gasto si el consumo original ya fue contado.');
 
   let opening = startingOperationalMoney;
   const weeks = ranges.map((range, index) => {
@@ -344,7 +618,47 @@ export async function buildProjectionScenario(
       lowestProjectedWeek: lowestWeek.weekNumber,
       trend: detectTrend(projectedChange),
       confidence: confidenceFromData(movementActions, ((installmentsData ?? []) as MsiInstallmentRow[]).length > 0),
-      dataLimitations: [...new Set(dataLimitations)]
+      dataLimitations: [...new Set([...dataLimitations, ...warnings])]
+    },
+    calculation: {
+      income: {
+        periodStart: incomeAverage.periodStart,
+        periodEnd: incomeAverage.periodEnd,
+        criterion: incomeAverage.criterion,
+        shortNote: 'Promedio semanal de las últimas 4 semanas; no incluye extras pendientes ni transferencias internas.',
+        weeklyAverage: estimatedIncome,
+        ordinaryIncome,
+        extraordinaryIncluded,
+        extraordinaryExcluded,
+        byCategory: mapBreakdown(incomeByCategory),
+        byAccount: mapBreakdown(incomeByAccount),
+        includedMovements: incomeAverage.included.map(actionToAuditItem),
+        excludedMovements: incomeAverage.excluded.map(actionToAuditItem)
+      },
+      expenses: {
+        periodStart: expenseAverage.periodStart,
+        periodEnd: expenseAverage.periodEnd,
+        criterion: expenseAverage.criterion,
+        shortNote: 'Promedio semanal de las últimas 4 semanas; no incluye transferencias internas.',
+        weeklyAverage: estimatedVariableExpenses,
+        variableExpenses: roundMoney(expenseAverage.included.filter((item) => !item.isFixedExpense).reduce((acc, item) => acc + item.amount, 0)),
+        fixedExpenses: roundMoney(expenseAverage.included.filter((item) => item.isFixedExpense).reduce((acc, item) => acc + item.amount, 0)),
+        debtPaymentsIncluded: roundMoney(expenseAverage.included.filter((item) => item.isDebtPayment).reduce((acc, item) => acc + item.amount, 0)),
+        byCategory: mapBreakdown(expenseByCategory),
+        includedMovements: expenseAverage.included.map(actionToAuditItem),
+        excludedMovements: expenseAverage.excluded.map(actionToAuditItem)
+      },
+      commitments: {
+        criterion: 'Se incluyen installments MSI pendientes. Si tienen fecha, se colocan en la semana de vencimiento; si no tienen due_date, se distribuyen desde la semana actual en orden consecutivo.',
+        shortNote: 'Incluye MSI pendientes.',
+        byWeek: commitmentItemsByWeek.map((items, index) => ({ weekNumber: index + 1, total: roundMoney(commitmentsByWeek[index]), items }))
+      },
+      events: {
+        criterion: 'Solo se incluyen eventos extraordinarios registrados con fecha dentro de las próximas 12 semanas; no se inventan bonos, aguinaldos ni devoluciones.',
+        shortNote: 'Solo eventos registrados.',
+        includedEvents
+      },
+      warnings: [...new Set(warnings)]
     }
   };
 }

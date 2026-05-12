@@ -75,9 +75,13 @@ function createFakeSupabase(dbOverrides: Partial<Db> = {}) {
       { group_id: 'transfer-1', type: 'credit', category: 'transferencia', amount: '999.00', happened_at: '2026-05-03T12:00:00.000Z' }
     ],
     msi_installments: [
-      { id: 'msi-1', household_id: 'house-1', installment_number: 1, amount: '200.00', due_date: '2026-05-13', status: 'pending' },
-      { id: 'msi-2', household_id: 'house-1', installment_number: 2, amount: '250.00', due_date: null, status: 'pending' },
+      { id: 'msi-1', household_id: 'house-1', msi_purchase_id: 'purchase-1', installment_number: 1, amount: '200.00', due_date: '2026-05-13', status: 'pending' },
+      { id: 'msi-2', household_id: 'house-1', msi_purchase_id: 'purchase-2', installment_number: 2, amount: '250.00', due_date: null, status: 'pending' },
       { id: 'msi-paid', household_id: 'house-1', installment_number: 3, amount: '999.00', due_date: '2026-05-20', status: 'paid' }
+    ],
+    msi_purchases: [
+      { id: 'purchase-1', description: 'Lavadora' },
+      { id: 'purchase-2', description: 'Celular' }
     ],
     extra_work_entries: [
       { id: 'extra-1', household_id: 'house-1', status: 'pending', quantity: '4' }
@@ -111,6 +115,16 @@ describe('buildProjectionScenario', () => {
     expect(scenario.summary.lowestProjectedMoney).toBe(450);
     expect(scenario.summary.lowestProjectedWeek).toBe(12);
     expect(scenario.summary.trend).toBe('down');
+    expect(scenario.calculation.income.periodStart).toBe('2026-04-14');
+    expect(scenario.calculation.income.includedMovements).toHaveLength(2);
+    expect(scenario.calculation.income.excludedMovements.some((item) => item.reason.includes('transferencia'))).toBe(true);
+    expect(scenario.calculation.income.ordinaryIncome).toBe(1000);
+    expect(scenario.calculation.income.extraordinaryIncluded).toBe(600);
+    expect(scenario.calculation.expenses.includedMovements).toHaveLength(2);
+    expect(scenario.calculation.expenses.byCategory[0]).toEqual({ category: 'super', amount: 1000 });
+    expect(scenario.calculation.commitments.byWeek[0].items.map((item) => item.description)).toEqual(expect.arrayContaining(['Lavadora', 'Celular']));
+    expect(scenario.calculation.events.includedEvents[0]).toMatchObject({ label: 'Reembolso fechado', weekNumber: 2, amount: 100 });
+    expect(scenario.calculation.warnings).toContain('Hay ingresos extraordinarios recientes incluidos que podrían inflar el promedio semanal.');
     expect(scenario.summary.dataLimitations).toContain('Hay extras pendientes por cobrar; se muestran como pendientes y no se suman a la proyección base.');
     expect(JSON.stringify(fakeClient.db)).toBe(before);
   });
@@ -121,7 +135,11 @@ describe('buildProjectionScenario', () => {
       transactions: [],
       msi_installments: [],
       calendar_events: [],
-      extra_work_entries: []
+      msi_purchases: [
+      { id: 'purchase-1', description: 'Lavadora' },
+      { id: 'purchase-2', description: 'Celular' }
+    ],
+    extra_work_entries: []
     }) as NonNullable<Parameters<typeof buildProjectionScenario>[1]>, new Date('2026-05-12T10:00:00.000Z'));
     expect(stable.summary.trend).toBe('stable');
 
@@ -133,7 +151,11 @@ describe('buildProjectionScenario', () => {
       ],
       msi_installments: [],
       calendar_events: [],
-      extra_work_entries: []
+      msi_purchases: [
+      { id: 'purchase-1', description: 'Lavadora' },
+      { id: 'purchase-2', description: 'Celular' }
+    ],
+    extra_work_entries: []
     }) as NonNullable<Parameters<typeof buildProjectionScenario>[1]>, new Date('2026-05-12T10:00:00.000Z'));
     expect(up.summary.trend).toBe('up');
   });

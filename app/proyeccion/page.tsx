@@ -1,7 +1,7 @@
 import React from 'react';
 import { AppShell } from '@/components/app-shell';
 import { Card } from '@/components/ui/card';
-import { buildProjectionScenario, type ProjectionTrend } from '@/lib/finance/projection';
+import { buildProjectionScenario, type ProjectionCalculationTransparency, type ProjectionTrend } from '@/lib/finance/projection';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 function formatSignedCurrency(value: number) {
@@ -33,9 +33,130 @@ function scenarioSentence(ending: number, change: number) {
   return `Si todo sigue igual, terminarías en 12 semanas con ${formatCurrencyMXN(ending)}. Tu dinero ${direction}${amount}.`;
 }
 
+function EmptyState({ label }: { label: string }) {
+  return <p className="text-sm text-slate-500">{label}</p>;
+}
+
+function BreakdownList({ items }: { items: Array<{ category: string; amount: number }> }) {
+  if (!items.length) return <EmptyState label="Sin desglose disponible." />;
+  return (
+    <ul className="mt-2 space-y-1 text-sm text-slate-700">
+      {items.map((item) => <li key={item.category} className="flex justify-between gap-4"><span>{item.category}</span><span className="font-medium">{formatCurrencyMXN(item.amount)}</span></li>)}
+    </ul>
+  );
+}
+
+function MovementList({ items, emptyLabel }: { items: ProjectionCalculationTransparency['income']['includedMovements']; emptyLabel: string }) {
+  if (!items.length) return <EmptyState label={emptyLabel} />;
+  return (
+    <ul className="mt-2 space-y-2 text-sm text-slate-700">
+      {items.map((item) => (
+        <li key={`${item.groupId}-${item.date}-${item.category}-${item.amount}`} className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <span className="font-medium text-slate-900">{item.category}</span>
+            <span className="font-semibold">{formatCurrencyMXN(item.amount)}</span>
+          </div>
+          <p className="mt-1 text-xs text-slate-500">{item.date}{item.accountName ? ` · ${item.accountName}` : ''}</p>
+          <p className="mt-1 text-xs text-slate-600">{item.reason}</p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function CalculationDetails({ calculation }: { calculation: ProjectionCalculationTransparency }) {
+  const commitmentWeeks = calculation.commitments.byWeek.filter((week) => week.items.length > 0);
+
+  return (
+    <section className="mt-6">
+      <details className="rounded-2xl bg-white p-4 shadow-sm">
+        <summary className="cursor-pointer text-lg font-semibold text-slate-950">Ver cómo se calculó esta proyección</summary>
+        <div className="mt-4 space-y-5">
+          {calculation.warnings.length ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <h4 className="font-semibold text-amber-900">Advertencias de cálculo</h4>
+              <ul className="mt-2 space-y-1 text-sm text-amber-800">
+                {calculation.warnings.map((warning) => <li key={warning}>• {warning}</li>)}
+              </ul>
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <h4 className="font-semibold text-slate-950">Ingresos estimados</h4>
+              <p className="mt-1 text-sm text-slate-600">Periodo: {calculation.income.periodStart} a {calculation.income.periodEnd}</p>
+              <p className="mt-1 text-sm text-slate-600">{calculation.income.criterion}</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Promedio semanal</p><p className="font-semibold">{formatCurrencyMXN(calculation.income.weeklyAverage)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Ordinarios</p><p className="font-semibold">{formatCurrencyMXN(calculation.income.ordinaryIncome)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Extraordinarios incluidos</p><p className="font-semibold">{formatCurrencyMXN(calculation.income.extraordinaryIncluded)}</p></div>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">Extraordinarios excluidos: {formatCurrencyMXN(calculation.income.extraordinaryExcluded)}</p>
+              <h5 className="mt-4 text-sm font-semibold text-slate-900">Ingresos por categoría</h5>
+              <BreakdownList items={calculation.income.byCategory} />
+              <h5 className="mt-4 text-sm font-semibold text-slate-900">Ingresos por cuenta</h5>
+              <BreakdownList items={calculation.income.byAccount} />
+              <h5 className="mt-4 text-sm font-semibold text-slate-900">Movimientos incluidos en ingresos</h5>
+              <MovementList items={calculation.income.includedMovements} emptyLabel="No hubo ingresos incluidos en el periodo." />
+              <h5 className="mt-4 text-sm font-semibold text-slate-900">Movimientos excluidos de ingresos</h5>
+              <MovementList items={calculation.income.excludedMovements} emptyLabel="No hubo movimientos excluidos de ingresos." />
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <h4 className="font-semibold text-slate-950">Gastos estimados</h4>
+              <p className="mt-1 text-sm text-slate-600">Periodo: {calculation.expenses.periodStart} a {calculation.expenses.periodEnd}</p>
+              <p className="mt-1 text-sm text-slate-600">{calculation.expenses.criterion}</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Promedio semanal</p><p className="font-semibold">{formatCurrencyMXN(calculation.expenses.weeklyAverage)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Variables</p><p className="font-semibold">{formatCurrencyMXN(calculation.expenses.variableExpenses)}</p></div>
+                <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Fijos</p><p className="font-semibold">{formatCurrencyMXN(calculation.expenses.fixedExpenses)}</p></div>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">Pagos/deudas incluidos: {formatCurrencyMXN(calculation.expenses.debtPaymentsIncluded)}</p>
+              <h5 className="mt-4 text-sm font-semibold text-slate-900">Categorías principales</h5>
+              <BreakdownList items={calculation.expenses.byCategory} />
+              <h5 className="mt-4 text-sm font-semibold text-slate-900">Movimientos incluidos en gastos</h5>
+              <MovementList items={calculation.expenses.includedMovements} emptyLabel="No hubo gastos incluidos en el periodo." />
+              <h5 className="mt-4 text-sm font-semibold text-slate-900">Movimientos excluidos de gastos</h5>
+              <MovementList items={calculation.expenses.excludedMovements} emptyLabel="No hubo movimientos excluidos de gastos." />
+            </div>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <h4 className="font-semibold text-slate-950">Compromisos MSI</h4>
+              <p className="mt-1 text-sm text-slate-600">{calculation.commitments.criterion}</p>
+              {commitmentWeeks.length ? (
+                <ul className="mt-3 space-y-3 text-sm text-slate-700">
+                  {commitmentWeeks.map((week) => (
+                    <li key={week.weekNumber} className="rounded-xl bg-slate-50 p-3">
+                      <p className="font-semibold text-slate-900">Semana {week.weekNumber}: {formatCurrencyMXN(week.total)}</p>
+                      <ul className="mt-2 space-y-1">
+                        {week.items.map((item) => <li key={`${week.weekNumber}-${item.description}-${item.installmentNumber}`}>• {item.description} · pago {item.installmentNumber} · {item.dueDate ?? 'sin fecha'} · {formatCurrencyMXN(item.amount)}</li>)}
+                      </ul>
+                    </li>
+                  ))}
+                </ul>
+              ) : <EmptyState label="No hay MSI pendientes incluidos." />}
+            </div>
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <h4 className="font-semibold text-slate-950">Eventos extraordinarios</h4>
+              <p className="mt-1 text-sm text-slate-600">{calculation.events.criterion}</p>
+              {calculation.events.includedEvents.length ? (
+                <ul className="mt-3 space-y-2 text-sm text-slate-700">
+                  {calculation.events.includedEvents.map((event) => <li key={`${event.label}-${event.eventDate}`} className="flex justify-between gap-3 rounded-xl bg-slate-50 p-3"><span>Semana {event.weekNumber} · {event.label} · {event.eventDate}</span><span className="font-semibold">{formatCurrencyMXN(event.amount)}</span></li>)}
+                </ul>
+              ) : <EmptyState label="No hay eventos extraordinarios registrados dentro de las próximas 12 semanas." />}
+            </div>
+          </div>
+        </div>
+      </details>
+    </section>
+  );
+}
+
 export default async function ProjectionPage() {
   const scenario = await buildProjectionScenario();
-  const { summary } = scenario;
+  const { summary, calculation } = scenario;
 
   return (
     <AppShell title="Proyección">
@@ -59,31 +180,38 @@ export default async function ProjectionPage() {
             <div className="rounded-2xl border border-slate-200 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Dinero operativo actual</p>
               <p className={`mt-2 text-xl font-semibold ${moneyTone(summary.startingOperationalMoney)}`}>{formatCurrencyMXN(summary.startingOperationalMoney)}</p>
+              <p className="mt-1 text-xs text-slate-500">Solo cuentas líquidas/operativas.</p>
             </div>
             <div className="rounded-2xl border border-slate-200 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Proyección a 12 semanas</p>
               <p className={`mt-2 text-xl font-semibold ${moneyTone(summary.endingOperationalMoney)}`}>{formatCurrencyMXN(summary.endingOperationalMoney)}</p>
+              <p className="mt-1 text-xs text-slate-500">{calculation.income.shortNote}</p>
             </div>
             <div className="rounded-2xl border border-slate-200 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Cambio proyectado</p>
               <p className={`mt-2 text-xl font-semibold ${trendClass(summary.projectedChange)}`}>{formatSignedCurrency(summary.projectedChange)}</p>
+              <p className="mt-1 text-xs text-slate-500">{calculation.expenses.shortNote}</p>
             </div>
             <div className="rounded-2xl border border-slate-200 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Punto más bajo</p>
               <p className={`mt-2 text-xl font-semibold ${moneyTone(summary.lowestProjectedMoney)}`}>{formatCurrencyMXN(summary.lowestProjectedMoney)}</p>
-              <p className="mt-1 text-xs text-slate-500">Semana {summary.lowestProjectedWeek}</p>
+              <p className="mt-1 text-xs text-slate-500">Semana {summary.lowestProjectedWeek} · {calculation.commitments.shortNote}</p>
             </div>
             <div className="rounded-2xl border border-slate-200 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Tendencia</p>
               <p className={`mt-2 text-xl font-semibold ${trendClass(summary.projectedChange)}`}>{trendLabel(summary.trend)}</p>
+              <p className="mt-1 text-xs text-slate-500">{calculation.events.shortNote}</p>
             </div>
             <div className="rounded-2xl border border-slate-200 p-4">
               <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Confianza</p>
               <p className="mt-2 text-xl font-semibold text-slate-900">{summary.confidence === 'high' ? 'Alta' : summary.confidence === 'medium' ? 'Media' : 'Baja'}</p>
+              <p className="mt-1 text-xs text-slate-500">Revisa el cálculo antes de tomar decisiones.</p>
             </div>
           </div>
         </Card>
       </section>
+
+      <CalculationDetails calculation={calculation} />
 
       <section className="mt-6">
         <Card>
