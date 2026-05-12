@@ -1,6 +1,7 @@
 export type ProjectionTrend = 'up' | 'down' | 'stable';
 export type ProjectionConfidence = 'low' | 'medium' | 'high';
-export type FinancialMovementClassification = 'recurrent' | 'extraordinary' | 'internal';
+export type FinancialMovementClassification = 'recurrent' | 'extraordinary' | 'internal' | 'ignore' | 'debt_payment';
+export type ProjectionClassificationSource = 'manual' | 'automatic';
 
 export type ProjectionDetectedMovement = {
   description: string;
@@ -17,6 +18,7 @@ export type ProjectionMovementAuditItem = {
   amount: number;
   reason: string;
   classification: FinancialMovementClassification;
+  classificationSource: ProjectionClassificationSource;
 };
 
 export type ProjectionCategoryBreakdown = {
@@ -132,7 +134,7 @@ type SupabaseClientLike = { from: (table: string) => QueryBuilder };
 
 type AccountRow = { id: string; household_id: string; name: string; type: string; balance: string | number; is_active?: boolean | null };
 type GroupRow = { id: string; household_id: string };
-type TransactionRow = { group_id: string; account_id?: string | null; type: string; category: string; amount: string | number; happened_at: string };
+type TransactionRow = { group_id: string; account_id?: string | null; type: string; category: string; amount: string | number; happened_at: string; projection_type?: FinancialMovementClassification | null };
 type MovementAction = {
   action: 'income' | 'expense' | null;
   amount: number;
@@ -144,6 +146,7 @@ type MovementAction = {
   reason: string;
   description: string;
   classification: FinancialMovementClassification;
+  classificationSource: ProjectionClassificationSource;
   classificationReason: string;
   isExtraordinary: boolean;
   isTransferLike: boolean;
@@ -207,7 +210,12 @@ export function classifyFinancialMovement(input: {
   amount?: number;
   accountType?: string | null;
   hasMirrorMovement?: boolean;
-}): { classification: FinancialMovementClassification; reason: string } {
+  projectionType?: FinancialMovementClassification | null;
+}): { classification: FinancialMovementClassification; source: ProjectionClassificationSource; reason: string } {
+  if (input.projectionType) {
+    return { classification: input.projectionType, source: 'manual', reason: `Clasificación manual de proyección: ${input.projectionType}.` };
+  }
+
   const haystack = normalizeText(`${input.category} ${input.type ?? ''} ${input.description ?? ''} ${input.accountType ?? ''}`);
 
   // Heurísticas iniciales documentadas para Proyección v1:
@@ -216,15 +224,15 @@ export function classifyFinancialMovement(input: {
   // - recurrent: lo operativo no clasificado como interno/extraordinario; alimenta el promedio semanal.
   const internalKeywords = ['transfer', 'traspaso', 'rebalanceo', 'payment_internal', 'interno', 'movimiento tecnico', 'ajuste tecnico'];
   if (input.hasMirrorMovement || internalKeywords.some((word) => haystack.includes(word))) {
-    return { classification: 'internal', reason: 'Movimiento interno/técnico detectado; no afecta el flujo proyectable.' };
+    return { classification: 'internal', source: 'automatic', reason: 'Movimiento interno/técnico detectado; no afecta el flujo proyectable.' };
   }
 
   const extraordinaryKeywords = ['aguinaldo', 'sat', 'devolucion', 'devolución', 'bono', 'prestamo', 'préstamo', 'extraordinario', 'excepcional', 'venta aislada', 'premio', 'finiquito'];
   if (extraordinaryKeywords.some((word) => haystack.includes(normalizeText(word)))) {
-    return { classification: 'extraordinary', reason: 'Movimiento extraordinario detectado; se separa del promedio recurrente.' };
+    return { classification: 'extraordinary', source: 'automatic', reason: 'Movimiento extraordinario detectado; se separa del promedio recurrente.' };
   }
 
-  return { classification: 'recurrent', reason: 'Movimiento operativo recurrente; alimenta el promedio semanal.' };
+  return { classification: 'recurrent', source: 'automatic', reason: 'Movimiento operativo recurrente; alimenta el promedio semanal.' };
 }
 
 function inferMovementAction(lines: Array<{ type: string; category: string }>) {
@@ -293,7 +301,8 @@ function actionToAuditItem(item: MovementAction): ProjectionMovementAuditItem {
     accountName: item.accountName,
     amount: roundMoney(item.amount),
     reason: item.reason,
-    classification: item.classification
+    classification: item.classification,
+    classificationSource: item.classificationSource
   };
 }
 
@@ -487,7 +496,7 @@ export async function buildProjectionScenario(
   const { data: transactionData, error: transactionsError } = groupIds.length
     ? await dbClient
       .from('transactions')
-      .select('group_id,account_id,type,category,amount,happened_at')
+      .select('group_id,account_id,type,category,amount,happened_at,projection_type')
       .in('group_id', groupIds)
       .gte('happened_at', fallbackStart)
     : { data: [] as TransactionRow[], error: null };
@@ -510,6 +519,7 @@ export async function buildProjectionScenario(
         : lines.find((line) => !isTransferLikeCategory(line.category)) ?? lines[0];
     const categoryLine = lines.find((line) => line.category && !['entrada_cuenta', 'salida_cuenta'].includes(line.category)) ?? amountLine ?? lines[0];
     const account = amountLine?.account_id ? accountById.get(amountLine.account_id) : undefined;
+    const manualProjectionType = lines.find((line) => line.projection_type)?.projection_type ?? null;
     const category = categoryLine?.category ?? 'sin_categoria';
     const amount = Number(amountLine?.amount ?? categoryLine?.amount ?? 0);
     const happenedAt = lines.reduce((latest, line) => line.happened_at > latest ? line.happened_at : latest, lines[0]?.happened_at ?? '');
@@ -523,17 +533,24 @@ export async function buildProjectionScenario(
       description,
       amount,
       accountType,
-      hasMirrorMovement: isTransferLike
+      hasMirrorMovement: isTransferLike,
+      projectionType: manualProjectionType
     });
-    const reason = classificationResult.classification === 'internal'
-      ? 'Excluido: movimiento internal/transferencia entre cuentas, no entra a proyección.'
-      : classificationResult.classification === 'extraordinary'
-        ? 'Excluido: movimiento extraordinary/atípico, no entra al promedio recurrente.'
-        : action === 'income'
-          ? 'Incluido: ingreso recurrente usado para proyección.'
-          : action === 'expense'
-            ? 'Incluido: gasto recurrente usado para proyección.'
-            : 'Excluido: no tiene patrón claro de ingreso o gasto operativo.';
+    const reason = classificationResult.source === 'manual'
+      ? `${classificationResult.reason} ${classificationResult.classification === 'recurrent' ? 'Incluido en promedio recurrente.' : 'Excluido del promedio recurrente.'}`
+      : classificationResult.classification === 'internal'
+        ? 'Excluido: movimiento internal/transferencia entre cuentas, no entra a proyección.'
+        : classificationResult.classification === 'extraordinary'
+          ? 'Excluido: movimiento extraordinary/atípico, no entra al promedio recurrente.'
+          : classificationResult.classification === 'debt_payment'
+            ? 'Excluido: pago de deuda/tarjeta separado de gasto variable.'
+            : classificationResult.classification === 'ignore'
+              ? 'Excluido: movimiento ignorado para proyección.'
+              : action === 'income'
+                ? 'Incluido: ingreso recurrente usado para proyección.'
+                : action === 'expense'
+                  ? 'Incluido: gasto recurrente usado para proyección.'
+                  : 'Excluido: no tiene patrón claro de ingreso o gasto operativo.';
 
     return {
       action,
@@ -543,6 +560,7 @@ export async function buildProjectionScenario(
       category,
       description,
       classification: classificationResult.classification,
+      classificationSource: classificationResult.source,
       classificationReason: classificationResult.reason,
       accountName: account?.name ?? null,
       accountType,
@@ -561,6 +579,7 @@ export async function buildProjectionScenario(
     const peerAverage = peers.reduce((acc, peer) => acc + peer.amount, 0) / peers.length;
     if (item.amount > Math.max(peerAverage * 3, 5000)) {
       item.classification = 'extraordinary';
+      item.classificationSource = 'automatic';
       item.classificationReason = 'Monto atípicamente superior al historial recurrente; se separa del promedio.';
       item.reason = 'Excluido: monto extraordinario detectado por comparación histórica.';
       item.isExtraordinary = true;
@@ -734,7 +753,7 @@ export async function buildProjectionScenario(
         weeklyAverage: estimatedVariableExpenses,
         variableExpenses: roundMoney(expenseAverage.included.filter((item) => !item.isFixedExpense).reduce((acc, item) => acc + item.amount, 0)),
         fixedExpenses: roundMoney(expenseAverage.included.filter((item) => item.isFixedExpense).reduce((acc, item) => acc + item.amount, 0)),
-        debtPaymentsIncluded: roundMoney(expenseAverage.included.filter((item) => item.isDebtPayment).reduce((acc, item) => acc + item.amount, 0)),
+        debtPaymentsIncluded: roundMoney(expenseAverage.excluded.filter((item) => item.action === 'expense' && item.classification === 'debt_payment').reduce((acc, item) => acc + item.amount, 0)),
         byCategory: mapBreakdown(expenseByCategory),
         includedMovements: expenseAverage.included.map(actionToAuditItem),
         excludedMovements: expenseAverage.excluded.map(actionToAuditItem)

@@ -49,8 +49,8 @@ vi.mock('@/lib/finance/projection', () => ({
           extraordinaryExcluded: 0,
           byCategory: [{ category: 'ingreso_sueldo', amount: 1000 }],
           byAccount: [{ category: 'Efectivo', amount: 1000 }],
-          includedMovements: [{ groupId: 'income-1', date: '2026-05-05', category: 'ingreso_sueldo', accountName: 'Efectivo', amount: 1000, reason: 'Incluido: movimiento con entrada a cuenta operativa registrado como ingreso.' }],
-          excludedMovements: [{ groupId: 'transfer-1', date: '2026-05-03', category: 'transferencia', accountName: 'Banco', amount: 999, reason: 'Excluido: parece transferencia interna o ajuste, no ingreso/gasto proyectable.' }]
+          includedMovements: [{ groupId: 'income-1', date: '2026-05-05', category: 'ingreso_sueldo', accountName: 'Efectivo', amount: 1000, reason: 'Incluido: movimiento con entrada a cuenta operativa registrado como ingreso.', classification: 'recurrent', classificationSource: 'manual' }],
+          excludedMovements: [{ groupId: 'transfer-1', date: '2026-05-03', category: 'transferencia', accountName: 'Banco', amount: 999, reason: 'Excluido: parece transferencia interna o ajuste, no ingreso/gasto proyectable.', classification: 'internal', classificationSource: 'automatic' }]
         },
         expenses: {
           periodStart: '2026-04-14',
@@ -62,8 +62,8 @@ vi.mock('@/lib/finance/projection', () => ({
           fixedExpenses: 0,
           debtPaymentsIncluded: 0,
           byCategory: [{ category: 'super', amount: 800 }],
-          includedMovements: [{ groupId: 'expense-1', date: '2026-05-06', category: 'super', accountName: 'Efectivo', amount: 800, reason: 'Incluido: movimiento con salida de cuenta registrado como gasto.' }],
-          excludedMovements: [{ groupId: 'transfer-1', date: '2026-05-03', category: 'transferencia', accountName: 'Banco', amount: 999, reason: 'Excluido: parece transferencia interna o ajuste, no ingreso/gasto proyectable.' }]
+          includedMovements: [{ groupId: 'expense-1', date: '2026-05-06', category: 'super', accountName: 'Efectivo', amount: 800, reason: 'Incluido: movimiento con salida de cuenta registrado como gasto.', classification: 'recurrent', classificationSource: 'automatic' }],
+          excludedMovements: [{ groupId: 'transfer-1', date: '2026-05-03', category: 'transferencia', accountName: 'Banco', amount: 999, reason: 'Excluido: parece transferencia interna o ajuste, no ingreso/gasto proyectable.', classification: 'internal', classificationSource: 'automatic' }]
         },
         commitments: {
           criterion: 'Se incluyen installments MSI pendientes.',
@@ -104,5 +104,7 @@ describe('ProjectionPage', () => {
     expect(html).toContain('Eventos extraordinarios detectados');
     expect(html).toContain('Movimientos internos excluidos');
     expect(html).toContain('Promedio semanal de las últimas 4 semanas');
+    expect(html).toContain('recurrent');
+    expect(html).toContain('manual');
   });
 });

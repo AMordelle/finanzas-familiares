@@ -57,6 +57,7 @@ function MovementList({ items, emptyLabel }: { items: ProjectionCalculationTrans
             <span className="font-semibold">{formatCurrencyMXN(item.amount)}</span>
           </div>
           <p className="mt-1 text-xs text-slate-500">{item.date}{item.accountName ? ` · ${item.accountName}` : ''}</p>
+          <p className="mt-1 text-xs font-medium text-slate-600">Clasificación usada: {item.classification} · {item.classificationSource === 'manual' ? 'manual' : 'automática'}</p>
           <p className="mt-1 text-xs text-slate-600">{item.reason}</p>
         </li>
       ))}

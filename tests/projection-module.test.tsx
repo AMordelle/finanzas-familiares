@@ -101,6 +101,7 @@ describe('classifyFinancialMovement', () => {
     expect(classifyFinancialMovement({ category: 'aguinaldo', amount: 12000 }).classification).toBe('extraordinary');
     expect(classifyFinancialMovement({ category: 'bono_unico', amount: 5000 }).classification).toBe('extraordinary');
     expect(classifyFinancialMovement({ category: 'transferencia', hasMirrorMovement: true }).classification).toBe('internal');
+    expect(classifyFinancialMovement({ category: 'devolucion_sat', projectionType: 'recurrent' }).classification).toBe('recurrent');
   });
 });
 
@@ -141,6 +142,49 @@ describe('buildProjectionScenario', () => {
     expect(scenario.calculation.events.includedEvents[0]).toMatchObject({ label: 'Reembolso fechado', weekNumber: 2, amount: 100 });
     expect(scenario.calculation.warnings).toContain('Se detectaron movimientos extraordinarios y no se incluyeron en el promedio recurrente.');
     expect(scenario.summary.dataLimitations).toContain('Hay extras pendientes por cobrar; se muestran como pendientes y no se suman a la proyección base.');
+    expect(JSON.stringify(fakeClient.db)).toBe(before);
+  });
+
+
+
+  it('usa projection_type manual antes que heurísticas y separa ignore/debt_payment', async () => {
+    const fakeClient = createFakeSupabase({
+      transaction_groups: [
+        { id: 'income-manual', household_id: 'house-1' },
+        { id: 'income-extra', household_id: 'house-1' },
+        { id: 'expense-recurrent', household_id: 'house-1' },
+        { id: 'expense-ignore', household_id: 'house-1' },
+        { id: 'expense-debt', household_id: 'house-1' },
+        { id: 'transfer-internal', household_id: 'house-1' }
+      ],
+      transactions: [
+        { group_id: 'income-manual', type: 'debit', category: 'entrada_cuenta', amount: '1000.00', happened_at: '2026-05-05T12:00:00.000Z', projection_type: 'recurrent' },
+        { group_id: 'income-manual', type: 'credit', category: 'devolucion_sat', amount: '1000.00', happened_at: '2026-05-05T12:00:00.000Z', projection_type: 'recurrent' },
+        { group_id: 'income-extra', type: 'debit', category: 'entrada_cuenta', amount: '800.00', happened_at: '2026-05-06T12:00:00.000Z', projection_type: 'extraordinary' },
+        { group_id: 'income-extra', type: 'credit', category: 'ingreso_fijo', amount: '800.00', happened_at: '2026-05-06T12:00:00.000Z', projection_type: 'extraordinary' },
+        { group_id: 'expense-recurrent', type: 'debit', category: 'super', amount: '400.00', happened_at: '2026-05-07T12:00:00.000Z', projection_type: 'recurrent' },
+        { group_id: 'expense-recurrent', type: 'credit', category: 'salida_cuenta', amount: '400.00', happened_at: '2026-05-07T12:00:00.000Z', projection_type: 'recurrent' },
+        { group_id: 'expense-ignore', type: 'debit', category: 'comida', amount: '999.00', happened_at: '2026-05-08T12:00:00.000Z', projection_type: 'ignore' },
+        { group_id: 'expense-ignore', type: 'credit', category: 'salida_cuenta', amount: '999.00', happened_at: '2026-05-08T12:00:00.000Z', projection_type: 'ignore' },
+        { group_id: 'expense-debt', type: 'debit', category: 'comida', amount: '300.00', happened_at: '2026-05-09T12:00:00.000Z', projection_type: 'debt_payment' },
+        { group_id: 'expense-debt', type: 'credit', category: 'salida_cuenta', amount: '300.00', happened_at: '2026-05-09T12:00:00.000Z', projection_type: 'debt_payment' },
+        { group_id: 'transfer-internal', type: 'debit', category: 'transferencia', amount: '500.00', happened_at: '2026-05-10T12:00:00.000Z', projection_type: 'internal' },
+        { group_id: 'transfer-internal', type: 'credit', category: 'transferencia', amount: '500.00', happened_at: '2026-05-10T12:00:00.000Z', projection_type: 'internal' }
+      ],
+      msi_installments: [],
+      calendar_events: [],
+      extra_work_entries: []
+    });
+    const before = JSON.stringify(fakeClient.db);
+    const scenario = await buildProjectionScenario('house-1', fakeClient as NonNullable<Parameters<typeof buildProjectionScenario>[1]>, new Date('2026-05-12T10:00:00.000Z'));
+
+    expect(scenario.recurringWeeklyIncome).toBe(250);
+    expect(scenario.recurringWeeklyExpenses).toBe(100);
+    expect(scenario.calculation.income.includedMovements[0]).toMatchObject({ category: 'devolucion_sat', classification: 'recurrent', classificationSource: 'manual' });
+    expect(scenario.extraordinaryDetected[0]).toMatchObject({ description: 'ingreso_fijo', amount: 800 });
+    expect(scenario.internalExcluded[0]).toMatchObject({ description: 'transferencia', amount: 500 });
+    expect(scenario.calculation.expenses.excludedMovements.some((item) => item.classification === 'ignore')).toBe(true);
+    expect(scenario.calculation.expenses.debtPaymentsIncluded).toBe(300);
     expect(JSON.stringify(fakeClient.db)).toBe(before);
   });
 
