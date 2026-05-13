@@ -291,7 +291,6 @@ function buildWeekFromAccumulator(input: {
 function addAmountToAccumulator(accumulator: WeekAccumulator, key: ProjectionColumnKey, amount: number) {
   accumulator[key] = roundMoney(accumulator[key] + amount);
   accumulator.hasData = true;
-  accumulator.relevantMovementCount += 1;
   if (key === 'msiComprasMeses') accumulator.hasMsiMovement = true;
 }
 
@@ -303,15 +302,11 @@ function calculateAccumulatorTotals(accumulator: Pick<WeekAccumulator, Projectio
 
 function getHistoricalExclusionReason(accumulator: WeekAccumulator) {
   const { totalIngresos, totalGastos } = calculateAccumulatorTotals(accumulator);
-  const mainIncome = roundMoney(accumulator.nomina + accumulator.cajaAhorro + accumulator.ingresosExtra);
-  const hasMainIncome = mainIncome > 0;
-  const hasIncomeAndExpense = totalIngresos > 0 && totalGastos > 0;
-  const hasEnoughActivity = accumulator.relevantMovementCount >= 3;
 
-  if (hasMainIncome || hasIncomeAndExpense || hasEnoughActivity) return null;
-  if (totalIngresos === 0 && totalGastos > 0 && totalGastos === accumulator.deudaTarjetas) return 'Solo contiene pagos de deuda/tarjeta';
-  if (!hasMainIncome) return 'Sin ingresos principales detectados';
-  return 'Actividad insuficiente para considerarse semana representativa';
+  if (totalIngresos > 0 && totalGastos > 0) return null;
+  if (totalIngresos === 0 && totalGastos === 0) return 'Sin ingresos ni gastos clasificados.';
+  if (totalIngresos > 0 && totalGastos === 0) return 'Tiene ingresos, pero no gastos; semana incompleta para promedio.';
+  return 'Tiene gastos, pero no ingresos; semana incompleta para promedio.';
 }
 
 function averageColumns(weeks: ProjectionWeek[]) {
@@ -377,16 +372,18 @@ export function buildProjectionScenario(input: {
   }
 
   for (const { movement, date } of movementsWithDates) {
-    const column = classifyMovement(movement);
-    if (!column) continue;
     const accumulator = weekAccumulators.get(weekKey(date));
     if (!accumulator) continue;
+    accumulator.relevantMovementCount += 1;
+    const column = classifyMovement(movement);
+    if (!column) continue;
     addAmountToAccumulator(accumulator, column, movement.amount);
   }
 
   for (const { event, date } of eventsWithDates) {
     const accumulator = weekAccumulators.get(weekKey(date));
     if (!accumulator) continue;
+    accumulator.relevantMovementCount += 1;
     addAmountToAccumulator(accumulator, 'eventosExtraordinarios', event.amount);
   }
 
@@ -400,7 +397,7 @@ export function buildProjectionScenario(input: {
   });
 
   const calendarAccumulators = Array.from(weekAccumulators.values())
-    .filter((accumulator) => accumulator.start <= lastHistoricalStart && accumulator.hasData)
+    .filter((accumulator) => accumulator.start <= lastHistoricalStart && (accumulator.hasData || accumulator.relevantMovementCount > 0))
     .sort((a, b) => a.start.getTime() - b.start.getTime());
   const validHistoricalAccumulators: WeekAccumulator[] = [];
   const excludedHistoricalAccumulators: Array<{ accumulator: WeekAccumulator; reason: string }> = [];

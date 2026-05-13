@@ -14,6 +14,8 @@ const baseInput = {
     { id: 'recv', name: 'Por cobrar', type: 'receivable', balance: 700, isActive: true }
   ],
   movements: [
+    { id: 'z1', groupId: 'gz1', note: 'Transferencia de prueba', action: 'transferencia' as const, category: 'transferencia', amount: 123, happenedAt: '2026-03-31T12:00:00.000Z' },
+    { id: 'i1', groupId: 'gi1', note: 'Ingreso aislado', action: 'ingreso' as const, category: 'ingreso_extra', amount: 800, happenedAt: '2026-04-07T12:00:00.000Z' },
     { id: 'e1', groupId: 'ge1', note: 'Pago tarjeta aislado', action: 'pago_deuda' as const, category: 'pago_deuda', amount: 900, happenedAt: '2026-04-14T12:00:00.000Z' },
     { id: 'e2', groupId: 'ge2', note: 'Prueba gasolina aislada', action: 'gasto' as const, category: 'gasolina', amount: 100, happenedAt: '2026-04-21T12:00:00.000Z' },
     { id: 'e3', groupId: 'ge3', note: 'Comida', action: 'gasto' as const, category: 'comida', amount: 50, happenedAt: '2026-04-22T12:00:00.000Z' },
@@ -40,7 +42,7 @@ describe('módulo Proyección con histórico semanal tipo Excel', () => {
   it('construye semanas históricas completas lunes-domingo y excluye semana parcial del promedio', () => {
     const scenario = buildProjectionScenario(baseInput);
 
-    expect(scenario.calendarWeeksDetected).toBe(4);
+    expect(scenario.calendarWeeksDetected).toBe(6);
     expect(scenario.historicalWeeks).toHaveLength(2);
     expect(scenario.historicalWeeks[0]).toMatchObject({ rowType: 'historical_valid', startDate: '2026-04-27', endDate: '2026-05-03' });
     expect(scenario.historicalWeeks[1]).toMatchObject({ rowType: 'historical_valid', startDate: '2026-05-04', endDate: '2026-05-10' });
@@ -54,14 +56,16 @@ describe('módulo Proyección con histórico semanal tipo Excel', () => {
   it('excluye semanas no representativas y muestra razones de exclusión', () => {
     const scenario = buildProjectionScenario(baseInput);
 
-    expect(scenario.excludedWeeks).toHaveLength(2);
-    expect(scenario.excludedWeeks[0]).toMatchObject({ rowType: 'historical_excluded', startDate: '2026-04-13', endDate: '2026-04-19', exclusionReason: 'Solo contiene pagos de deuda/tarjeta' });
-    expect(scenario.excludedWeeks[1]).toMatchObject({ rowType: 'historical_excluded', startDate: '2026-04-20', endDate: '2026-04-26', exclusionReason: 'Sin ingresos principales detectados' });
-    expect(scenario.excludedWeeksCount).toBe(2);
+    expect(scenario.excludedWeeks).toHaveLength(4);
+    expect(scenario.excludedWeeks[0]).toMatchObject({ rowType: 'historical_excluded', startDate: '2026-03-30', endDate: '2026-04-05', exclusionReason: 'Sin ingresos ni gastos clasificados.' });
+    expect(scenario.excludedWeeks[1]).toMatchObject({ rowType: 'historical_excluded', startDate: '2026-04-06', endDate: '2026-04-12', exclusionReason: 'Tiene ingresos, pero no gastos; semana incompleta para promedio.' });
+    expect(scenario.excludedWeeks[2]).toMatchObject({ rowType: 'historical_excluded', startDate: '2026-04-13', endDate: '2026-04-19', exclusionReason: 'Tiene gastos, pero no ingresos; semana incompleta para promedio.' });
+    expect(scenario.excludedWeeks[3]).toMatchObject({ rowType: 'historical_excluded', startDate: '2026-04-20', endDate: '2026-04-26', exclusionReason: 'Tiene gastos, pero no ingresos; semana incompleta para promedio.' });
+    expect(scenario.excludedWeeksCount).toBe(4);
     expect(scenario.weeks.some((week) => week.rowType === 'historical_excluded')).toBe(false);
   });
 
-  it('incluye semanas con ingresos extra suficientes o con ingresos y gastos', () => {
+  it('incluye únicamente semanas con ingresos y gastos', () => {
     const scenario = buildProjectionScenario({
       ...baseInput,
       startDate: new Date('2026-05-20T00:00:00.000Z'),
@@ -158,8 +162,9 @@ describe('módulo Proyección con histórico semanal tipo Excel', () => {
     expect(html).toContain('Semanas históricas usadas');
     expect(html).toContain('2026-04-27 a 2026-05-10');
     expect(html).toContain('Semanas excluidas del promedio');
-    expect(html).toContain('Solo contiene pagos de deuda/tarjeta');
-    expect(html).toContain('Sin ingresos principales detectados');
+    expect(html).toContain('Sin ingresos ni gastos clasificados.');
+    expect(html).toContain('Tiene ingresos, pero no gastos; semana incompleta para promedio.');
+    expect(html).toContain('Tiene gastos, pero no ingresos; semana incompleta para promedio.');
     expect(html).toContain('Fondo / dinero operativo');
     expect(html).toContain('Cómo se armó este escenario');
   });
