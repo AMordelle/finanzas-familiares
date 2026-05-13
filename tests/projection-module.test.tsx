@@ -14,6 +14,9 @@ const baseInput = {
     { id: 'recv', name: 'Por cobrar', type: 'receivable', balance: 700, isActive: true }
   ],
   movements: [
+    { id: 'e1', groupId: 'ge1', note: 'Pago tarjeta aislado', action: 'pago_deuda' as const, category: 'pago_deuda', amount: 900, happenedAt: '2026-04-14T12:00:00.000Z' },
+    { id: 'e2', groupId: 'ge2', note: 'Prueba gasolina aislada', action: 'gasto' as const, category: 'gasolina', amount: 100, happenedAt: '2026-04-21T12:00:00.000Z' },
+    { id: 'e3', groupId: 'ge3', note: 'Comida', action: 'gasto' as const, category: 'comida', amount: 50, happenedAt: '2026-04-22T12:00:00.000Z' },
     { id: 'm1', groupId: 'g1', note: 'Ingreso sueldo semanal', action: 'ingreso' as const, category: 'ingreso_fijo', amount: 2000, happenedAt: '2026-04-28T12:00:00.000Z' },
     { id: 'm2', groupId: 'g2', note: 'PrimeIPTV recurrente', action: 'ingreso' as const, category: 'ingreso_extra', amount: 400, happenedAt: '2026-04-29T12:00:00.000Z' },
     { id: 'm3', groupId: 'g3', note: 'Entrega semanal esposa familia', action: 'gasto' as const, category: 'gasto_familiar', amount: 700, happenedAt: '2026-04-30T12:00:00.000Z' },
@@ -37,12 +40,39 @@ describe('módulo Proyección con histórico semanal tipo Excel', () => {
   it('construye semanas históricas completas lunes-domingo y excluye semana parcial del promedio', () => {
     const scenario = buildProjectionScenario(baseInput);
 
+    expect(scenario.calendarWeeksDetected).toBe(4);
     expect(scenario.historicalWeeks).toHaveLength(2);
-    expect(scenario.historicalWeeks[0]).toMatchObject({ rowType: 'historical', startDate: '2026-04-27', endDate: '2026-05-03' });
-    expect(scenario.historicalWeeks[1]).toMatchObject({ rowType: 'historical', startDate: '2026-05-04', endDate: '2026-05-10' });
+    expect(scenario.historicalWeeks[0]).toMatchObject({ rowType: 'historical_valid', startDate: '2026-04-27', endDate: '2026-05-03' });
+    expect(scenario.historicalWeeks[1]).toMatchObject({ rowType: 'historical_valid', startDate: '2026-05-04', endDate: '2026-05-10' });
     expect(scenario.partialWeek).toMatchObject({ rowType: 'partial', label: 'Semana actual parcial', startDate: '2026-05-11', endDate: '2026-05-17' });
     expect(scenario.partialWeekExcluded).toBe(true);
     expect(scenario.averages.nomina).toBe(2500);
+  });
+
+
+
+  it('excluye semanas no representativas y muestra razones de exclusión', () => {
+    const scenario = buildProjectionScenario(baseInput);
+
+    expect(scenario.excludedWeeks).toHaveLength(2);
+    expect(scenario.excludedWeeks[0]).toMatchObject({ rowType: 'historical_excluded', startDate: '2026-04-13', endDate: '2026-04-19', exclusionReason: 'Solo contiene pagos de deuda/tarjeta' });
+    expect(scenario.excludedWeeks[1]).toMatchObject({ rowType: 'historical_excluded', startDate: '2026-04-20', endDate: '2026-04-26', exclusionReason: 'Sin ingresos principales detectados' });
+    expect(scenario.excludedWeeksCount).toBe(2);
+    expect(scenario.weeks.some((week) => week.rowType === 'historical_excluded')).toBe(false);
+  });
+
+  it('incluye semanas con ingresos extra suficientes o con ingresos y gastos', () => {
+    const scenario = buildProjectionScenario({
+      ...baseInput,
+      startDate: new Date('2026-05-20T00:00:00.000Z'),
+      movements: [
+        ...baseInput.movements,
+        { id: 'extra-valid', groupId: 'extra-valid', note: 'PrimeIPTV semanal', action: 'ingreso' as const, category: 'ingreso_extra', amount: 600, happenedAt: '2026-05-13T12:00:00.000Z' },
+        { id: 'expense-valid', groupId: 'expense-valid', note: 'Comida semana', action: 'gasto' as const, category: 'comida', amount: 150, happenedAt: '2026-05-14T12:00:00.000Z' }
+      ]
+    });
+
+    expect(scenario.historicalWeeks.some((week) => week.startDate === '2026-05-11' && week.ingresosExtra === 600 && week.gastosVariables === 150)).toBe(true);
   });
 
   it('agrupa columnas reales por semana antes de calcular promedios', () => {
@@ -77,7 +107,7 @@ describe('módulo Proyección con histórico semanal tipo Excel', () => {
     expect(scenario.historicalWeeks[1].balanceSemanal).toBe(800);
   });
 
-  it('calcula promedios por columna desde semanas reales completas', () => {
+  it('calcula promedios por columna solo desde semanas válidas', () => {
     const scenario = buildProjectionScenario(baseInput);
 
     expect(scenario.averages.nomina).toBe(2500);
@@ -90,6 +120,7 @@ describe('módulo Proyección con histórico semanal tipo Excel', () => {
     expect(scenario.averageWeeklyIncome).toBe(2800);
     expect(scenario.averageWeeklyExpenses).toBe(1950);
     expect(scenario.averageWeeklyBalance).toBe(850);
+    expect(scenario.historicalWeeksUsed).toBe(2);
   });
 
   it('genera filas proyectadas usando promedios por columna después del histórico real', () => {
@@ -121,11 +152,14 @@ describe('módulo Proyección con histórico semanal tipo Excel', () => {
     const html = renderToStaticMarkup(await ProjectionPage());
 
     expect(html).toContain('Histórico real + proyección');
-    expect(html).toContain('Histórico real');
+    expect(html).toContain('Histórico real válido');
     expect(html).toContain('Proyección');
     expect(html).toContain('Semana actual parcial');
     expect(html).toContain('Semanas históricas usadas');
     expect(html).toContain('2026-04-27 a 2026-05-10');
+    expect(html).toContain('Semanas excluidas del promedio');
+    expect(html).toContain('Solo contiene pagos de deuda/tarjeta');
+    expect(html).toContain('Sin ingresos principales detectados');
     expect(html).toContain('Fondo / dinero operativo');
     expect(html).toContain('Cómo se armó este escenario');
   });

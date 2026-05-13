@@ -51,7 +51,7 @@ export type ProjectionColumnExplanation = {
   warning?: string;
 };
 
-export type ProjectionRowType = 'historical' | 'partial' | 'projected';
+export type ProjectionRowType = 'historical_valid' | 'historical_excluded' | 'partial' | 'projected';
 
 export type ProjectionWeek = {
   weekNumber: number;
@@ -74,6 +74,8 @@ export type ProjectionWeek = {
   totalGastos: number;
   balanceSemanal: number;
   dineroOperativoProyectado: number;
+  relevantMovementCount: number;
+  exclusionReason: string | null;
 };
 
 export type ProjectionScenario = {
@@ -88,9 +90,12 @@ export type ProjectionScenario = {
   trend: 'positiva' | 'negativa' | 'estable';
   historicalWeeksUsed: number;
   historicalRangeLabel: string;
+  calendarWeeksDetected: number;
+  excludedWeeksCount: number;
   partialWeekExcluded: boolean;
   weeks: ProjectionWeek[];
   historicalWeeks: ProjectionWeek[];
+  excludedWeeks: ProjectionWeek[];
   partialWeek: ProjectionWeek | null;
   projectedWeeks: ProjectionWeek[];
   averages: Record<ProjectionColumnKey, number>;
@@ -132,6 +137,7 @@ type WeekAccumulator = Record<ProjectionColumnKey, number> & {
   end: Date;
   hasData: boolean;
   hasMsiMovement: boolean;
+  relevantMovementCount: number;
 };
 
 function roundMoney(value: number) {
@@ -181,6 +187,7 @@ function createWeekAccumulator(start: Date): WeekAccumulator {
     end: addDays(start, 6),
     hasData: false,
     hasMsiMovement: false,
+    relevantMovementCount: 0,
     ...emptyColumnTotals()
   };
 }
@@ -249,8 +256,9 @@ function buildWeekFromAccumulator(input: {
   projectionIndex?: number | null;
   label: string;
   previousMoney: number;
+  exclusionReason?: string | null;
 }): ProjectionWeek {
-  const { accumulator, rowType, weekNumber, projectionIndex = null, label, previousMoney } = input;
+  const { accumulator, rowType, weekNumber, projectionIndex = null, label, previousMoney, exclusionReason = null } = input;
   const totalIngresos = roundMoney(accumulator.nomina + accumulator.cajaAhorro + accumulator.ingresosExtra + accumulator.eventosExtraordinarios);
   const totalGastos = roundMoney(accumulator.gastoFamiliarFijo + accumulator.gastosVariables + accumulator.serviciosSuscripciones + accumulator.deudaTarjetas + accumulator.msiComprasMeses + accumulator.ahorroInversion);
   const balanceSemanal = roundMoney(totalIngresos - totalGastos);
@@ -274,14 +282,36 @@ function buildWeekFromAccumulator(input: {
     ahorroInversion: roundMoney(accumulator.ahorroInversion),
     totalGastos,
     balanceSemanal,
-    dineroOperativoProyectado: roundMoney(previousMoney + balanceSemanal)
+    dineroOperativoProyectado: roundMoney(previousMoney + balanceSemanal),
+    relevantMovementCount: accumulator.relevantMovementCount,
+    exclusionReason
   };
 }
 
 function addAmountToAccumulator(accumulator: WeekAccumulator, key: ProjectionColumnKey, amount: number) {
   accumulator[key] = roundMoney(accumulator[key] + amount);
   accumulator.hasData = true;
+  accumulator.relevantMovementCount += 1;
   if (key === 'msiComprasMeses') accumulator.hasMsiMovement = true;
+}
+
+function calculateAccumulatorTotals(accumulator: Pick<WeekAccumulator, ProjectionColumnKey>) {
+  const totalIngresos = roundMoney(accumulator.nomina + accumulator.cajaAhorro + accumulator.ingresosExtra + accumulator.eventosExtraordinarios);
+  const totalGastos = roundMoney(accumulator.gastoFamiliarFijo + accumulator.gastosVariables + accumulator.serviciosSuscripciones + accumulator.deudaTarjetas + accumulator.msiComprasMeses + accumulator.ahorroInversion);
+  return { totalIngresos, totalGastos };
+}
+
+function getHistoricalExclusionReason(accumulator: WeekAccumulator) {
+  const { totalIngresos, totalGastos } = calculateAccumulatorTotals(accumulator);
+  const mainIncome = roundMoney(accumulator.nomina + accumulator.cajaAhorro + accumulator.ingresosExtra);
+  const hasMainIncome = mainIncome > 0;
+  const hasIncomeAndExpense = totalIngresos > 0 && totalGastos > 0;
+  const hasEnoughActivity = accumulator.relevantMovementCount >= 3;
+
+  if (hasMainIncome || hasIncomeAndExpense || hasEnoughActivity) return null;
+  if (totalIngresos === 0 && totalGastos > 0 && totalGastos === accumulator.deudaTarjetas) return 'Solo contiene pagos de deuda/tarjeta';
+  if (!hasMainIncome) return 'Sin ingresos principales detectados';
+  return 'Actividad insuficiente para considerarse semana representativa';
 }
 
 function averageColumns(weeks: ProjectionWeek[]) {
@@ -301,6 +331,7 @@ function buildProjectionAccumulator(start: Date, averages: Record<ProjectionColu
     end: addDays(start, 6),
     hasData: true,
     hasMsiMovement: false,
+    relevantMovementCount: 0,
     ...averages,
     eventosExtraordinarios: 0
   } satisfies WeekAccumulator;
@@ -368,9 +399,18 @@ export function buildProjectionScenario(input: {
     }
   });
 
-  const historicalAccumulators = Array.from(weekAccumulators.values())
+  const calendarAccumulators = Array.from(weekAccumulators.values())
     .filter((accumulator) => accumulator.start <= lastHistoricalStart && accumulator.hasData)
     .sort((a, b) => a.start.getTime() - b.start.getTime());
+  const validHistoricalAccumulators: WeekAccumulator[] = [];
+  const excludedHistoricalAccumulators: Array<{ accumulator: WeekAccumulator; reason: string }> = [];
+
+  for (const accumulator of calendarAccumulators) {
+    const reason = getHistoricalExclusionReason(accumulator);
+    if (reason) excludedHistoricalAccumulators.push({ accumulator, reason });
+    else validHistoricalAccumulators.push(accumulator);
+  }
+
   const partialAccumulator = weekAccumulators.get(dateOnly(currentWeekStart));
   const shouldShowPartial = Boolean(partialAccumulator?.hasData);
   const dineroOperativoActual = calculateOperationalMoney(input.accounts);
@@ -378,18 +418,17 @@ export function buildProjectionScenario(input: {
     partialAccumulator.nomina + partialAccumulator.cajaAhorro + partialAccumulator.ingresosExtra + partialAccumulator.eventosExtraordinarios
     - partialAccumulator.gastoFamiliarFijo - partialAccumulator.gastosVariables - partialAccumulator.serviciosSuscripciones - partialAccumulator.deudaTarjetas - partialAccumulator.msiComprasMeses - partialAccumulator.ahorroInversion
   ) : 0;
-  const historicalBalance = historicalAccumulators.reduce((sum, accumulator) => {
-    const ingresos = accumulator.nomina + accumulator.cajaAhorro + accumulator.ingresosExtra + accumulator.eventosExtraordinarios;
-    const gastos = accumulator.gastoFamiliarFijo + accumulator.gastosVariables + accumulator.serviciosSuscripciones + accumulator.deudaTarjetas + accumulator.msiComprasMeses + accumulator.ahorroInversion;
-    return roundMoney(sum + ingresos - gastos);
+  const validHistoricalBalance = validHistoricalAccumulators.reduce((sum, accumulator) => {
+    const { totalIngresos, totalGastos } = calculateAccumulatorTotals(accumulator);
+    return roundMoney(sum + totalIngresos - totalGastos);
   }, 0);
   const closingAfterCompleteWeeks = roundMoney(dineroOperativoActual - partialBalance);
-  let previousMoney = roundMoney(closingAfterCompleteWeeks - historicalBalance);
+  let previousMoney = roundMoney(closingAfterCompleteWeeks - validHistoricalBalance);
 
-  const historicalWeeks = historicalAccumulators.map((accumulator, index) => {
+  const historicalWeeks = validHistoricalAccumulators.map((accumulator, index) => {
     const week = buildWeekFromAccumulator({
       accumulator,
-      rowType: 'historical',
+      rowType: 'historical_valid',
       weekNumber: index + 1,
       label: `Histórico real ${index + 1}`,
       previousMoney
@@ -397,6 +436,15 @@ export function buildProjectionScenario(input: {
     previousMoney = week.dineroOperativoProyectado;
     return week;
   });
+
+  const excludedWeeks = excludedHistoricalAccumulators.map(({ accumulator, reason }, index) => buildWeekFromAccumulator({
+    accumulator,
+    rowType: 'historical_excluded',
+    weekNumber: index + 1,
+    label: `Semana excluida ${index + 1}`,
+    previousMoney: 0,
+    exclusionReason: reason
+  }));
 
   let partialWeek: ProjectionWeek | null = null;
   if (shouldShowPartial && partialAccumulator) {
@@ -462,7 +510,7 @@ export function buildProjectionScenario(input: {
       key: 'gastosVariables',
       label: 'Semana actual parcial',
       baseValue: partialWeek?.balanceSemanal ?? 0,
-      criteria: 'La semana actual parcial se muestra como dato real capturado, pero no se usa para calcular promedios base.',
+      criteria: 'La semana actual parcial se muestra como dato real capturado, pero no se usa para calcular promedios base ni proyección.',
       estimated: false,
       warning: 'Semana actual no usada por estar incompleta.'
     });
@@ -480,9 +528,12 @@ export function buildProjectionScenario(input: {
     trend,
     historicalWeeksUsed: historicalWeeks.length,
     historicalRangeLabel: buildHistoricalRangeLabel(historicalWeeks),
+    calendarWeeksDetected: calendarAccumulators.length,
+    excludedWeeksCount: excludedWeeks.length,
     partialWeekExcluded,
     weeks: [...historicalWeeks, ...(partialWeek ? [partialWeek] : []), ...projectedWeeks],
     historicalWeeks,
+    excludedWeeks,
     partialWeek,
     projectedWeeks,
     averages,

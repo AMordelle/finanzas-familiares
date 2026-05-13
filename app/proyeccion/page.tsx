@@ -78,7 +78,7 @@ export default async function ProjectionPage() {
             <p className="text-sm text-slate-600">Primero se agrupan semanas reales lunes-domingo; después se proyectan 12 semanas con promedios por columna.</p>
           </div>
           <div className="flex flex-wrap gap-2 text-xs font-semibold">
-            <span className="rounded-full bg-white px-3 py-1 text-slate-700 ring-1 ring-slate-200">Histórico real</span>
+            <span className="rounded-full bg-white px-3 py-1 text-slate-700 ring-1 ring-slate-200">Histórico real válido</span>
             <span className="rounded-full bg-sky-50 px-3 py-1 text-sky-800 ring-1 ring-sky-200">Proyección</span>
           </div>
         </div>
@@ -107,7 +107,7 @@ export default async function ProjectionPage() {
             <tbody>
               {scenario.weeks.map((week) => {
                 const rowTone = week.rowType === 'projected' ? 'bg-sky-50/60' : week.rowType === 'partial' ? 'bg-amber-50/70' : 'bg-white';
-                const badge = week.rowType === 'projected' ? 'Proyección' : week.rowType === 'partial' ? 'Parcial' : 'Histórico real';
+                const badge = week.rowType === 'projected' ? 'Proyección' : week.rowType === 'partial' ? 'Parcial' : 'Histórico real válido';
                 const badgeClass = week.rowType === 'projected' ? 'bg-sky-100 text-sky-800' : week.rowType === 'partial' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700';
                 return (
                 <tr key={`${week.rowType}-${week.weekNumber}-${week.startDate}`} className={`border-b last:border-0 ${rowTone}`}>
@@ -137,7 +137,20 @@ export default async function ProjectionPage() {
 
       <Card className="mt-4">
         <h2 className="text-lg font-semibold">Cómo se armó este escenario</h2>
-        <p className="mt-2 text-sm text-slate-700">Se usaron {scenario.historicalWeeksUsed} semanas históricas completas ({scenario.historicalRangeLabel}) para calcular promedios por columna. {scenario.partialWeekExcluded ? 'La semana actual parcial se muestra, pero no entra al promedio.' : ''}</p>
+        <p className="mt-2 text-sm text-slate-700">Se detectaron {scenario.calendarWeeksDetected} semanas calendario con datos; se usaron {scenario.historicalWeeksUsed} semanas históricas representativas ({scenario.historicalRangeLabel}) y se excluyeron {scenario.excludedWeeksCount}. {scenario.partialWeekExcluded ? 'La semana actual parcial se muestra, pero no entra al promedio.' : ''}</p>
+        <details className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
+          <summary className="cursor-pointer font-semibold text-amber-900">Semanas excluidas del promedio</summary>
+          <p className="mt-2 text-sm text-amber-900">Estas semanas tienen datos incompletos o no representativos y no se usan para calcular promedios.</p>
+          {scenario.excludedWeeks.length ? (
+            <ul className="mt-3 space-y-2 text-sm text-amber-950">
+              {scenario.excludedWeeks.map((week) => (
+                <li key={`${week.startDate}-${week.endDate}`} className="rounded-lg bg-white/70 p-2">
+                  <span className="font-semibold">{week.startDate} a {week.endDate}:</span> {week.exclusionReason ?? 'Actividad insuficiente para considerarse semana representativa'}
+                </li>
+              ))}
+            </ul>
+          ) : <p className="mt-3 text-sm text-amber-900">No hay semanas excluidas.</p>}
+        </details>
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           {scenario.explanations.map((explanation) => (
             <div key={`${explanation.key}-${explanation.label}`} className="rounded-xl border border-slate-200 p-3">
