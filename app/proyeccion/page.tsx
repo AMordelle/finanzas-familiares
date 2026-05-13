@@ -44,42 +44,49 @@ export default async function ProjectionPage() {
 
       <section className="grid gap-4 md:grid-cols-3">
         <Card>
-          <p className="text-sm text-slate-500">Dinero operativo actual</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{formatCurrencyMXN(scenario.dineroOperativoActual)}</p>
+          <p className="text-sm text-slate-500">Semanas históricas usadas</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-900">{scenario.historicalWeeksUsed}</p>
+          <p className="mt-1 text-xs text-slate-500">{scenario.historicalRangeLabel}</p>
         </Card>
         <Card>
-          <p className="text-sm text-slate-500">Proyección a 12 semanas</p>
-          <p className={`mt-2 text-2xl font-semibold ${moneyClass(scenario.projectionAt12Weeks)}`}>{formatCurrencyMXN(scenario.projectionAt12Weeks)}</p>
+          <p className="text-sm text-slate-500">Promedio semanal de ingresos</p>
+          <p className="mt-2 text-2xl font-semibold text-emerald-700">{formatCurrencyMXN(scenario.averageWeeklyIncome)}</p>
         </Card>
         <Card>
-          <p className="text-sm text-slate-500">Cambio proyectado</p>
-          <p className={`mt-2 text-2xl font-semibold ${moneyClass(scenario.projectedChange)}`}>{signedMoney(scenario.projectedChange)}</p>
+          <p className="text-sm text-slate-500">Promedio semanal de gastos</p>
+          <p className="mt-2 text-2xl font-semibold text-amber-700">{formatCurrencyMXN(scenario.averageWeeklyExpenses)}</p>
         </Card>
         <Card>
           <p className="text-sm text-slate-500">Balance semanal promedio</p>
           <p className={`mt-2 text-2xl font-semibold ${moneyClass(scenario.averageWeeklyBalance)}`}>{signedMoney(scenario.averageWeeklyBalance)}</p>
         </Card>
         <Card>
-          <p className="text-sm text-slate-500">Semana más baja</p>
-          <p className="mt-2 text-lg font-semibold text-slate-900">{scenario.lowestWeek ? `${scenario.lowestWeek.label}: ${formatCurrencyMXN(scenario.lowestWeek.dineroOperativoProyectado)}` : 'Sin datos'}</p>
+          <p className="text-sm text-slate-500">Dinero operativo actual</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-900">{formatCurrencyMXN(scenario.dineroOperativoActual)}</p>
         </Card>
         <Card>
-          <p className="text-sm text-slate-500">Tendencia</p>
-          <p className={`mt-2 text-2xl font-semibold ${scenario.trend === 'positiva' ? 'text-emerald-700' : scenario.trend === 'negativa' ? 'text-red-700' : 'text-slate-700'}`}>{scenario.trend}</p>
+          <p className="text-sm text-slate-500">Proyección a 12 semanas</p>
+          <p className={`mt-2 text-2xl font-semibold ${moneyClass(scenario.projectionAt12Weeks)}`}>{formatCurrencyMXN(scenario.projectionAt12Weeks)}</p>
+          <p className={`mt-1 text-sm font-medium ${moneyClass(scenario.projectedChange)}`}>Cambio: {signedMoney(scenario.projectedChange)}</p>
         </Card>
       </section>
 
       <Card className="mt-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="mb-3 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
-            <h2 className="text-lg font-semibold">Tabla de 12 semanas</h2>
-            <p className="text-sm text-slate-600">Columnas financieras agregadas; no se proyecta movimiento por movimiento.</p>
+            <h2 className="text-lg font-semibold">Histórico real + proyección</h2>
+            <p className="text-sm text-slate-600">Primero se agrupan semanas reales lunes-domingo; después se proyectan 12 semanas con promedios por columna.</p>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs font-semibold">
+            <span className="rounded-full bg-white px-3 py-1 text-slate-700 ring-1 ring-slate-200">Histórico real</span>
+            <span className="rounded-full bg-sky-50 px-3 py-1 text-sky-800 ring-1 ring-sky-200">Proyección</span>
           </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="min-w-[1500px] border-collapse text-sm">
+          <table className="min-w-[1650px] border-collapse text-sm">
             <thead>
               <tr className="border-b text-left text-xs uppercase tracking-wide text-slate-500">
+                <th className="p-2">Bloque</th>
                 <th className="p-2">Semana</th>
                 <th className="p-2 text-emerald-700">Nómina</th>
                 <th className="p-2 text-emerald-700">Caja ahorro</th>
@@ -94,12 +101,17 @@ export default async function ProjectionPage() {
                 <th className="p-2 text-amber-700">Ahorro / inversión</th>
                 <th className="p-2 text-amber-800">Total gastos</th>
                 <th className="p-2">Balance semanal</th>
-                <th className="p-2">Dinero operativo proyectado</th>
+                <th className="p-2 text-sky-800">Fondo / dinero operativo</th>
               </tr>
             </thead>
             <tbody>
-              {scenario.weeks.map((week) => (
-                <tr key={week.weekNumber} className="border-b last:border-0">
+              {scenario.weeks.map((week) => {
+                const rowTone = week.rowType === 'projected' ? 'bg-sky-50/60' : week.rowType === 'partial' ? 'bg-amber-50/70' : 'bg-white';
+                const badge = week.rowType === 'projected' ? 'Proyección' : week.rowType === 'partial' ? 'Parcial' : 'Histórico real';
+                const badgeClass = week.rowType === 'projected' ? 'bg-sky-100 text-sky-800' : week.rowType === 'partial' ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700';
+                return (
+                <tr key={`${week.rowType}-${week.weekNumber}-${week.startDate}`} className={`border-b last:border-0 ${rowTone}`}>
+                  <td className="whitespace-nowrap p-2"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${badgeClass}`}>{badge}</span></td>
                   <td className="whitespace-nowrap p-2 font-medium text-slate-900">{week.label}<br /><span className="text-xs font-normal text-slate-500">{week.startDate} a {week.endDate}</span></td>
                   <td className="p-2 text-emerald-700">{formatCurrencyMXN(week.nomina)}</td>
                   <td className="p-2 text-emerald-700">{formatCurrencyMXN(week.cajaAhorro)}</td>
@@ -114,9 +126,10 @@ export default async function ProjectionPage() {
                   <td className="p-2 text-amber-700">{formatCurrencyMXN(week.ahorroInversion)}</td>
                   <td className="p-2 font-semibold text-amber-800">{formatCurrencyMXN(week.totalGastos)}</td>
                   <td className={`p-2 font-semibold ${moneyClass(week.balanceSemanal)}`}>{signedMoney(week.balanceSemanal)}</td>
-                  <td className={`p-2 font-semibold ${week.dineroOperativoProyectado < 0 ? 'text-red-700' : 'text-slate-900'}`}>{formatCurrencyMXN(week.dineroOperativoProyectado)}</td>
+                  <td className={`p-2 font-semibold ${week.dineroOperativoProyectado < 0 ? 'text-red-700' : 'text-sky-900'}`}>{formatCurrencyMXN(week.dineroOperativoProyectado)}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -124,9 +137,10 @@ export default async function ProjectionPage() {
 
       <Card className="mt-4">
         <h2 className="text-lg font-semibold">Cómo se armó este escenario</h2>
+        <p className="mt-2 text-sm text-slate-700">Se usaron {scenario.historicalWeeksUsed} semanas históricas completas ({scenario.historicalRangeLabel}) para calcular promedios por columna. {scenario.partialWeekExcluded ? 'La semana actual parcial se muestra, pero no entra al promedio.' : ''}</p>
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           {scenario.explanations.map((explanation) => (
-            <div key={explanation.key} className="rounded-xl border border-slate-200 p-3">
+            <div key={`${explanation.key}-${explanation.label}`} className="rounded-xl border border-slate-200 p-3">
               <div className="flex items-start justify-between gap-3">
                 <h3 className="font-semibold text-slate-900">{explanation.label}</h3>
                 <span className="whitespace-nowrap text-sm font-semibold text-slate-700">{formatCurrencyMXN(explanation.baseValue)}</span>

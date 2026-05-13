@@ -51,8 +51,12 @@ export type ProjectionColumnExplanation = {
   warning?: string;
 };
 
+export type ProjectionRowType = 'historical' | 'partial' | 'projected';
+
 export type ProjectionWeek = {
   weekNumber: number;
+  rowType: ProjectionRowType;
+  projectionIndex: number | null;
   label: string;
   startDate: string;
   endDate: string;
@@ -78,14 +82,37 @@ export type ProjectionScenario = {
   projectionAt12Weeks: number;
   projectedChange: number;
   averageWeeklyBalance: number;
+  averageWeeklyIncome: number;
+  averageWeeklyExpenses: number;
   lowestWeek: ProjectionWeek | null;
   trend: 'positiva' | 'negativa' | 'estable';
+  historicalWeeksUsed: number;
+  historicalRangeLabel: string;
+  partialWeekExcluded: boolean;
   weeks: ProjectionWeek[];
+  historicalWeeks: ProjectionWeek[];
+  partialWeek: ProjectionWeek | null;
+  projectedWeeks: ProjectionWeek[];
+  averages: Record<ProjectionColumnKey, number>;
   explanations: ProjectionColumnExplanation[];
 };
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const PROJECTION_WEEKS = 12;
+
+const columnKeys: ProjectionColumnKey[] = [
+  'nomina',
+  'cajaAhorro',
+  'ingresosExtra',
+  'eventosExtraordinarios',
+  'gastoFamiliarFijo',
+  'gastosVariables',
+  'serviciosSuscripciones',
+  'deudaTarjetas',
+  'msiComprasMeses',
+  'ahorroInversion'
+];
 
 const labels: Record<ProjectionColumnKey, string> = {
   nomina: 'Nómina',
@@ -100,8 +127,19 @@ const labels: Record<ProjectionColumnKey, string> = {
   ahorroInversion: 'Ahorro / inversión'
 };
 
+type WeekAccumulator = Record<ProjectionColumnKey, number> & {
+  start: Date;
+  end: Date;
+  hasData: boolean;
+  hasMsiMovement: boolean;
+};
+
 function roundMoney(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function emptyColumnTotals() {
+  return Object.fromEntries(columnKeys.map((key) => [key, 0])) as Record<ProjectionColumnKey, number>;
 }
 
 function dateOnly(date: Date) {
@@ -116,8 +154,43 @@ function includesAny(text: string, keywords: string[]) {
   return keywords.some((keyword) => text.includes(keyword));
 }
 
+function parseUtcDate(value: string | Date) {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function startOfMondayWeek(date: Date) {
+  const normalized = parseUtcDate(date) ?? new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = normalized.getUTCDay();
+  const offset = day === 0 ? 6 : day - 1;
+  return new Date(normalized.getTime() - offset * DAY_MS);
+}
+
+function addDays(date: Date, days: number) {
+  return new Date(date.getTime() + days * DAY_MS);
+}
+
+function weekKey(date: Date) {
+  return dateOnly(startOfMondayWeek(date));
+}
+
+function createWeekAccumulator(start: Date): WeekAccumulator {
+  return {
+    start,
+    end: addDays(start, 6),
+    hasData: false,
+    hasMsiMovement: false,
+    ...emptyColumnTotals()
+  };
+}
+
 function isOperationalAccountType(type: string) {
   return new Set(['operativa', 'operational_cash', 'cash', 'debit', 'debit_card', 'checking', 'bank_account', 'operative']).has(normalize(type).trim());
+}
+
+function isExtraordinaryText(text: string) {
+  return includesAny(text, ['sat', 'aguinaldo', 'bono', 'devolucion', 'devolucion', 'prestamo recibido', 'evento unico', 'evento extraordinario', 'extraordinario']);
 }
 
 function classifyMovement(movement: ProjectionMovement): ProjectionColumnKey | null {
@@ -126,6 +199,7 @@ function classifyMovement(movement: ProjectionMovement): ProjectionColumnKey | n
   const text = `${category} ${note}`;
 
   if (movement.action === 'ingreso' || movement.action === 'pago_recibido') {
+    if (isExtraordinaryText(text)) return 'eventosExtraordinarios';
     if (category.includes('ingreso_fijo') || includesAny(text, ['nomina', 'sueldo', 'salario', 'quincena', 'payroll'])) return 'nomina';
     if (includesAny(text, ['caja de ahorro', 'caja ahorro'])) return 'cajaAhorro';
     return 'ingresosExtra';
@@ -133,48 +207,110 @@ function classifyMovement(movement: ProjectionMovement): ProjectionColumnKey | n
 
   if (movement.action === 'pago_deuda') return 'deudaTarjetas';
   if (movement.action === 'objetivo_aporte') return 'ahorroInversion';
-  if (movement.action !== 'gasto' && movement.action !== 'msi_purchase') return null;
+  if (movement.action === 'msi_purchase') return 'msiComprasMeses';
+  if (movement.action !== 'gasto') return null;
 
-  if (movement.action === 'msi_purchase' || includesAny(text, ['msi', 'meses sin intereses', 'compras a meses', 'mensualidad'])) return null;
+  if (includesAny(text, ['msi', 'meses sin intereses', 'compras a meses', 'mensualidad'])) return 'msiComprasMeses';
   if (includesAny(text, ['esposa', 'familia', 'familiar fijo', 'gasto familiar', 'casa semanal', 'semanal familiar'])) return 'gastoFamiliarFijo';
-  if (includesAny(text, ['tarjeta', 'tdc', 'prestamo', 'prestamo', 'credito', 'deuda', 'auto', 'departamental', 'liverpool', 'palacio', 'coppel'])) return 'deudaTarjetas';
+  if (includesAny(text, ['tarjeta', 'tdc', 'prestamo', 'credito', 'deuda', 'auto', 'departamental', 'liverpool', 'palacio', 'coppel'])) return 'deudaTarjetas';
   if (includesAny(text, ['amazon', 'internet', 'celular', 'luz', 'agua', 'streaming', 'netflix', 'spotify', 'prime', 'suscripcion', 'servicio', 'izzi', 'telmex', 'cfe'])) return 'serviciosSuscripciones';
-  if (includesAny(text, ['gnp', 'fondo', 'inversion', 'inversion', 'ahorro programado', 'aportacion', 'aportacion'])) return 'ahorroInversion';
-  if (includesAny(text, ['extraordinario', 'evento extraordinario', 'bono anual', 'aguinaldo'])) return null;
+  if (includesAny(text, ['gnp', 'fondo', 'inversion', 'ahorro programado', 'aportacion'])) return 'ahorroInversion';
+  if (isExtraordinaryText(text)) return null;
 
   return 'gastosVariables';
 }
 
-function buildWeeklyMsiAmounts(installments: ProjectionMsiInstallment[], start: Date) {
-  const amounts = Array.from({ length: PROJECTION_WEEKS }, () => 0);
-  const pending = installments.filter((installment) => installment.status === 'pending');
+function buildWeeklyMsiAmounts(installments: ProjectionMsiInstallment[], start: Date, weeks: number, status: 'pending' | 'paid') {
+  const amounts = Array.from({ length: weeks }, () => 0);
   const withoutDate: ProjectionMsiInstallment[] = [];
 
-  for (const installment of pending) {
+  for (const installment of installments.filter((item) => item.status === status)) {
     if (!installment.dueDate) {
       withoutDate.push(installment);
       continue;
     }
-    const due = new Date(`${installment.dueDate.slice(0, 10)}T00:00:00.000Z`);
+    const due = parseUtcDate(installment.dueDate);
+    if (!due) continue;
     const index = Math.floor((due.getTime() - start.getTime()) / WEEK_MS);
-    if (index >= 0 && index < PROJECTION_WEEKS) amounts[index] += installment.amount;
+    if (index >= 0 && index < weeks) amounts[index] += installment.amount;
   }
 
   withoutDate.forEach((installment, index) => {
-    amounts[index % PROJECTION_WEEKS] += installment.amount;
+    amounts[index % weeks] += installment.amount;
   });
 
   return amounts.map(roundMoney);
 }
 
-function buildWeeklyEventAmounts(events: ProjectionExtraordinaryEvent[], start: Date) {
-  const amounts = Array.from({ length: PROJECTION_WEEKS }, () => 0);
-  for (const event of events) {
-    const date = new Date(event.eventDate);
-    const index = Math.floor((Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()) - start.getTime()) / WEEK_MS);
-    if (index >= 0 && index < PROJECTION_WEEKS) amounts[index] += event.amount;
+function buildWeekFromAccumulator(input: {
+  accumulator: WeekAccumulator;
+  rowType: ProjectionRowType;
+  weekNumber: number;
+  projectionIndex?: number | null;
+  label: string;
+  previousMoney: number;
+}): ProjectionWeek {
+  const { accumulator, rowType, weekNumber, projectionIndex = null, label, previousMoney } = input;
+  const totalIngresos = roundMoney(accumulator.nomina + accumulator.cajaAhorro + accumulator.ingresosExtra + accumulator.eventosExtraordinarios);
+  const totalGastos = roundMoney(accumulator.gastoFamiliarFijo + accumulator.gastosVariables + accumulator.serviciosSuscripciones + accumulator.deudaTarjetas + accumulator.msiComprasMeses + accumulator.ahorroInversion);
+  const balanceSemanal = roundMoney(totalIngresos - totalGastos);
+  return {
+    weekNumber,
+    rowType,
+    projectionIndex,
+    label,
+    startDate: dateOnly(accumulator.start),
+    endDate: dateOnly(accumulator.end),
+    nomina: roundMoney(accumulator.nomina),
+    cajaAhorro: roundMoney(accumulator.cajaAhorro),
+    ingresosExtra: roundMoney(accumulator.ingresosExtra),
+    eventosExtraordinarios: roundMoney(accumulator.eventosExtraordinarios),
+    totalIngresos,
+    gastoFamiliarFijo: roundMoney(accumulator.gastoFamiliarFijo),
+    gastosVariables: roundMoney(accumulator.gastosVariables),
+    serviciosSuscripciones: roundMoney(accumulator.serviciosSuscripciones),
+    deudaTarjetas: roundMoney(accumulator.deudaTarjetas),
+    msiComprasMeses: roundMoney(accumulator.msiComprasMeses),
+    ahorroInversion: roundMoney(accumulator.ahorroInversion),
+    totalGastos,
+    balanceSemanal,
+    dineroOperativoProyectado: roundMoney(previousMoney + balanceSemanal)
+  };
+}
+
+function addAmountToAccumulator(accumulator: WeekAccumulator, key: ProjectionColumnKey, amount: number) {
+  accumulator[key] = roundMoney(accumulator[key] + amount);
+  accumulator.hasData = true;
+  if (key === 'msiComprasMeses') accumulator.hasMsiMovement = true;
+}
+
+function averageColumns(weeks: ProjectionWeek[]) {
+  const averages = emptyColumnTotals();
+  if (!weeks.length) return averages;
+
+  for (const key of columnKeys) {
+    averages[key] = roundMoney(weeks.reduce((sum, week) => sum + week[key], 0) / weeks.length);
   }
-  return amounts.map(roundMoney);
+
+  return averages;
+}
+
+function buildProjectionAccumulator(start: Date, averages: Record<ProjectionColumnKey, number>) {
+  return {
+    start,
+    end: addDays(start, 6),
+    hasData: true,
+    hasMsiMovement: false,
+    ...averages,
+    eventosExtraordinarios: 0
+  } satisfies WeekAccumulator;
+}
+
+function buildHistoricalRangeLabel(weeks: ProjectionWeek[]) {
+  if (!weeks.length) return 'Sin semanas históricas completas';
+  const first = weeks[0];
+  const last = weeks[weeks.length - 1];
+  return `${first.startDate} a ${last.endDate}`;
 }
 
 export function calculateOperationalMoney(accounts: ProjectionAccount[]) {
@@ -190,88 +326,147 @@ export function buildProjectionScenario(input: {
   msiInstallments?: ProjectionMsiInstallment[];
   extraordinaryEvents?: ProjectionExtraordinaryEvent[];
   startDate?: Date;
-  recentWeeks?: number;
 }): ProjectionScenario {
   const hasHousehold = input.hasHousehold ?? true;
-  const startDate = new Date(input.startDate ?? new Date());
-  const start = new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth(), startDate.getUTCDate()));
-  const recentWeeks = input.recentWeeks ?? 12;
-  const recentStart = new Date(start.getTime() - recentWeeks * WEEK_MS);
-  const totals = Object.fromEntries(Object.keys(labels).map((key) => [key, 0])) as Record<ProjectionColumnKey, number>;
-  const counts = Object.fromEntries(Object.keys(labels).map((key) => [key, 0])) as Record<ProjectionColumnKey, number>;
+  const startDate = parseUtcDate(input.startDate ?? new Date()) ?? parseUtcDate(new Date())!;
+  const currentWeekStart = startOfMondayWeek(startDate);
+  const movementsWithDates = input.movements
+    .map((movement) => ({ movement, date: parseUtcDate(movement.happenedAt) }))
+    .filter((item): item is { movement: ProjectionMovement; date: Date } => Boolean(item.date));
+  const eventsWithDates = (input.extraordinaryEvents ?? [])
+    .map((event) => ({ event, date: parseUtcDate(event.eventDate) }))
+    .filter((item): item is { event: ProjectionExtraordinaryEvent; date: Date } => Boolean(item.date));
+  const firstRealDate = [...movementsWithDates.map((item) => item.date), ...eventsWithDates.map((item) => item.date)]
+    .sort((a, b) => a.getTime() - b.getTime())[0] ?? currentWeekStart;
+  const firstWeekStart = startOfMondayWeek(firstRealDate);
+  const weekAccumulators = new Map<string, WeekAccumulator>();
 
-  for (const movement of input.movements) {
-    const happened = new Date(movement.happenedAt);
-    if (Number.isNaN(happened.getTime()) || happened < recentStart || happened >= start) continue;
-    const column = classifyMovement(movement);
-    if (!column || column === 'eventosExtraordinarios' || column === 'msiComprasMeses') continue;
-    totals[column] += movement.amount;
-    counts[column] += 1;
+  for (let cursor = firstWeekStart; cursor <= currentWeekStart; cursor = addDays(cursor, 7)) {
+    weekAccumulators.set(dateOnly(cursor), createWeekAccumulator(cursor));
   }
 
-  const base = Object.fromEntries(Object.keys(labels).map((key) => [key, roundMoney((totals[key as ProjectionColumnKey] ?? 0) / recentWeeks)])) as Record<ProjectionColumnKey, number>;
-  base.eventosExtraordinarios = 0;
-  base.msiComprasMeses = 0;
+  for (const { movement, date } of movementsWithDates) {
+    const column = classifyMovement(movement);
+    if (!column) continue;
+    const accumulator = weekAccumulators.get(weekKey(date));
+    if (!accumulator) continue;
+    addAmountToAccumulator(accumulator, column, movement.amount);
+  }
 
-  const msiByWeek = buildWeeklyMsiAmounts(input.msiInstallments ?? [], start);
-  const eventsByWeek = buildWeeklyEventAmounts(input.extraordinaryEvents ?? [], start);
+  for (const { event, date } of eventsWithDates) {
+    const accumulator = weekAccumulators.get(weekKey(date));
+    if (!accumulator) continue;
+    addAmountToAccumulator(accumulator, 'eventosExtraordinarios', event.amount);
+  }
+
+  const lastHistoricalStart = addDays(currentWeekStart, -7);
+  const firstProjectionStart = addDays(currentWeekStart, 7);
+  const paidMsiAmounts = buildWeeklyMsiAmounts(input.msiInstallments ?? [], firstWeekStart, Math.max(1, Math.ceil((currentWeekStart.getTime() - firstWeekStart.getTime()) / WEEK_MS) + 1), 'paid');
+  Array.from(weekAccumulators.values()).forEach((accumulator, index) => {
+    if (accumulator.start <= currentWeekStart && !accumulator.hasMsiMovement && paidMsiAmounts[index]) {
+      addAmountToAccumulator(accumulator, 'msiComprasMeses', paidMsiAmounts[index]);
+    }
+  });
+
+  const historicalAccumulators = Array.from(weekAccumulators.values())
+    .filter((accumulator) => accumulator.start <= lastHistoricalStart && accumulator.hasData)
+    .sort((a, b) => a.start.getTime() - b.start.getTime());
+  const partialAccumulator = weekAccumulators.get(dateOnly(currentWeekStart));
+  const shouldShowPartial = Boolean(partialAccumulator?.hasData);
   const dineroOperativoActual = calculateOperationalMoney(input.accounts);
-  let previousMoney = dineroOperativoActual;
+  const partialBalance = shouldShowPartial && partialAccumulator ? roundMoney(
+    partialAccumulator.nomina + partialAccumulator.cajaAhorro + partialAccumulator.ingresosExtra + partialAccumulator.eventosExtraordinarios
+    - partialAccumulator.gastoFamiliarFijo - partialAccumulator.gastosVariables - partialAccumulator.serviciosSuscripciones - partialAccumulator.deudaTarjetas - partialAccumulator.msiComprasMeses - partialAccumulator.ahorroInversion
+  ) : 0;
+  const historicalBalance = historicalAccumulators.reduce((sum, accumulator) => {
+    const ingresos = accumulator.nomina + accumulator.cajaAhorro + accumulator.ingresosExtra + accumulator.eventosExtraordinarios;
+    const gastos = accumulator.gastoFamiliarFijo + accumulator.gastosVariables + accumulator.serviciosSuscripciones + accumulator.deudaTarjetas + accumulator.msiComprasMeses + accumulator.ahorroInversion;
+    return roundMoney(sum + ingresos - gastos);
+  }, 0);
+  const closingAfterCompleteWeeks = roundMoney(dineroOperativoActual - partialBalance);
+  let previousMoney = roundMoney(closingAfterCompleteWeeks - historicalBalance);
 
-  const weeks = Array.from({ length: PROJECTION_WEEKS }, (_, index): ProjectionWeek => {
-    const weekStart = new Date(start.getTime() + index * WEEK_MS);
-    const weekEnd = new Date(weekStart.getTime() + 6 * 24 * 60 * 60 * 1000);
-    const row = {
+  const historicalWeeks = historicalAccumulators.map((accumulator, index) => {
+    const week = buildWeekFromAccumulator({
+      accumulator,
+      rowType: 'historical',
       weekNumber: index + 1,
-      label: `Semana ${index + 1}`,
-      startDate: dateOnly(weekStart),
-      endDate: dateOnly(weekEnd),
-      nomina: base.nomina,
-      cajaAhorro: base.cajaAhorro,
-      ingresosExtra: base.ingresosExtra,
-      eventosExtraordinarios: eventsByWeek[index],
-      gastoFamiliarFijo: base.gastoFamiliarFijo,
-      gastosVariables: base.gastosVariables,
-      serviciosSuscripciones: base.serviciosSuscripciones,
-      deudaTarjetas: base.deudaTarjetas,
-      msiComprasMeses: msiByWeek[index],
-      ahorroInversion: base.ahorroInversion
-    };
-    const totalIngresos = roundMoney(row.nomina + row.cajaAhorro + row.ingresosExtra + row.eventosExtraordinarios);
-    const totalGastos = roundMoney(row.gastoFamiliarFijo + row.gastosVariables + row.serviciosSuscripciones + row.deudaTarjetas + row.msiComprasMeses + row.ahorroInversion);
-    const balanceSemanal = roundMoney(totalIngresos - totalGastos);
-    const dineroOperativoProyectado = roundMoney(previousMoney + balanceSemanal);
-    previousMoney = dineroOperativoProyectado;
-    return { ...row, totalIngresos, totalGastos, balanceSemanal, dineroOperativoProyectado };
+      label: `Histórico real ${index + 1}`,
+      previousMoney
+    });
+    previousMoney = week.dineroOperativoProyectado;
+    return week;
   });
 
-  const projectionAt12Weeks = weeks.at(-1)?.dineroOperativoProyectado ?? dineroOperativoActual;
+  let partialWeek: ProjectionWeek | null = null;
+  if (shouldShowPartial && partialAccumulator) {
+    partialWeek = buildWeekFromAccumulator({
+      accumulator: partialAccumulator,
+      rowType: 'partial',
+      weekNumber: historicalWeeks.length + 1,
+      label: 'Semana actual parcial',
+      previousMoney
+    });
+    previousMoney = partialWeek.dineroOperativoProyectado;
+  }
+
+  const averages = averageColumns(historicalWeeks);
+  const projectionStartMoney = partialWeek?.dineroOperativoProyectado ?? historicalWeeks.at(-1)?.dineroOperativoProyectado ?? dineroOperativoActual;
+  previousMoney = projectionStartMoney;
+  const projectedWeeks = Array.from({ length: PROJECTION_WEEKS }, (_, index) => {
+    const accumulator = buildProjectionAccumulator(addDays(firstProjectionStart, index * 7), averages);
+    const week = buildWeekFromAccumulator({
+      accumulator,
+      rowType: 'projected',
+      weekNumber: historicalWeeks.length + (partialWeek ? 1 : 0) + index + 1,
+      projectionIndex: index + 1,
+      label: `Proyección semana ${index + 1}`,
+      previousMoney
+    });
+    previousMoney = week.dineroOperativoProyectado;
+    return week;
+  });
+
+  const projectionAt12Weeks = projectedWeeks.at(-1)?.dineroOperativoProyectado ?? projectionStartMoney;
   const projectedChange = roundMoney(projectionAt12Weeks - dineroOperativoActual);
-  const averageWeeklyBalance = roundMoney(weeks.reduce((sum, week) => sum + week.balanceSemanal, 0) / Math.max(weeks.length, 1));
-  const lowestWeek = weeks.reduce<ProjectionWeek | null>((lowest, week) => !lowest || week.dineroOperativoProyectado < lowest.dineroOperativoProyectado ? week : lowest, null);
+  const averageWeeklyIncome = roundMoney(columnKeys.slice(0, 4).reduce((sum, key) => sum + (key === 'eventosExtraordinarios' ? 0 : averages[key]), 0));
+  const averageWeeklyExpenses = roundMoney(['gastoFamiliarFijo', 'gastosVariables', 'serviciosSuscripciones', 'deudaTarjetas', 'msiComprasMeses', 'ahorroInversion'].reduce((sum, key) => sum + averages[key as ProjectionColumnKey], 0));
+  const averageWeeklyBalance = roundMoney(averageWeeklyIncome - averageWeeklyExpenses);
+  const lowestWeek = projectedWeeks.reduce<ProjectionWeek | null>((lowest, week) => !lowest || week.dineroOperativoProyectado < lowest.dineroOperativoProyectado ? week : lowest, null);
   const trend = projectedChange > 0 ? 'positiva' : projectedChange < 0 ? 'negativa' : 'estable';
+  const partialWeekExcluded = Boolean(partialWeek);
 
-  const explanations: ProjectionColumnExplanation[] = (Object.keys(labels) as ProjectionColumnKey[]).map((key) => {
-    const baseValue = key === 'msiComprasMeses' ? roundMoney(msiByWeek.reduce((sum, amount) => sum + amount, 0) / PROJECTION_WEEKS) : key === 'eventosExtraordinarios' ? 0 : base[key];
+  const explanations: ProjectionColumnExplanation[] = columnKeys.map((key) => {
     const criteriaByKey: Record<ProjectionColumnKey, string> = {
-      nomina: 'Promedio semanal reciente de ingresos con categoría ingreso_fijo o textos de nómina/sueldo/salario.',
-      cajaAhorro: 'Promedio semanal reciente de movimientos relacionados con Caja de ahorro.',
-      ingresosExtra: 'Promedio semanal reciente de ingresos recurrentes no nómina, como PrimeIPTV, extras pagados, ventas o servicios.',
-      eventosExtraordinarios: 'No se promedia. Solo se incluyen eventos registrados explícitamente en el calendario financiero.',
-      gastoFamiliarFijo: 'Promedio semanal reciente de gastos detectados como entrega fija a esposa/familia.',
-      gastosVariables: 'Promedio semanal reciente de gastos recurrentes no fijos, excluyendo deuda, MSI, servicios, inversión y eventos extraordinarios.',
-      serviciosSuscripciones: 'Promedio semanal reciente de servicios y suscripciones como Amazon, internet, celular, luz, agua o streaming.',
-      deudaTarjetas: 'Promedio semanal reciente de pagos a tarjetas, préstamos, auto o departamentales.',
-      msiComprasMeses: 'Usa pagos pendientes del módulo Compras a meses, ubicados por fecha de vencimiento o distribuidos semanalmente si no tienen fecha.',
-      ahorroInversion: 'Promedio semanal reciente de GNP, fondos, ahorro programado, aportaciones o inversión.'
+      nomina: 'Histórico real lunes-domingo: suma ingresos laborales de nómina/sueldo/salario/ingreso_fijo. La proyección usa el promedio de esas semanas reales.',
+      cajaAhorro: 'Histórico real lunes-domingo: suma movimientos asociados a Caja de ahorro. La proyección usa el promedio semanal histórico.',
+      ingresosExtra: 'Histórico real lunes-domingo: suma PrimeIPTV, ventas, servicios, extras pagados y otros ingresos recurrentes no nómina.',
+      eventosExtraordinarios: 'Histórico real lunes-domingo: suma SAT, aguinaldo, bonos, devoluciones o eventos únicos. No se proyecta automáticamente en semanas futuras.',
+      gastoFamiliarFijo: 'Histórico real lunes-domingo: suma entregas recurrentes a esposa/familia/gasto semanal. La proyección usa el promedio histórico.',
+      gastosVariables: 'Histórico real lunes-domingo: suma Oxxo, comida, gasolina, antojos, súper, hogar, educación y varios no fijos.',
+      serviciosSuscripciones: 'Histórico real lunes-domingo: suma Amazon, internet, celular, luz, agua, streaming y suscripciones.',
+      deudaTarjetas: 'Histórico real lunes-domingo: suma pagos a TDC, préstamos, auto y departamentales; no se mezcla con gasto variable.',
+      msiComprasMeses: 'Histórico real lunes-domingo: suma pagos MSI registrados como movimiento o pagos MSI pagados del módulo cuando no hay movimiento MSI en esa semana.',
+      ahorroInversion: 'Histórico real lunes-domingo: suma GNP, fondos, ahorro programado, aportaciones o inversión.'
     };
-    const warning = key === 'gastoFamiliarFijo' && counts[key] === 0
-      ? 'No se detectó automáticamente. En esta versión aparece en $0.'
-      : key === 'eventosExtraordinarios' && (input.extraordinaryEvents ?? []).length === 0
-        ? 'Los eventos se agregarán manualmente en una versión posterior; por ahora quedan en $0 si no hay registros explícitos.'
+    const warning = key === 'eventosExtraordinarios'
+      ? 'Los eventos extraordinarios se muestran en histórico real, pero las filas proyectadas los dejan en $0 para no repetir eventos únicos.'
+      : historicalWeeks.length > 0 && historicalWeeks.filter((week) => week[key] > 0).length <= 1
+        ? 'Hay poca información histórica para esta columna; el promedio puede cambiar cuando captures más semanas.'
         : undefined;
-    return { key, label: labels[key], baseValue, criteria: criteriaByKey[key], estimated: key !== 'eventosExtraordinarios', warning };
+    return { key, label: labels[key], baseValue: key === 'eventosExtraordinarios' ? 0 : averages[key], criteria: criteriaByKey[key], estimated: true, warning };
   });
+
+  if (partialWeekExcluded) {
+    explanations.unshift({
+      key: 'gastosVariables',
+      label: 'Semana actual parcial',
+      baseValue: partialWeek?.balanceSemanal ?? 0,
+      criteria: 'La semana actual parcial se muestra como dato real capturado, pero no se usa para calcular promedios base.',
+      estimated: false,
+      warning: 'Semana actual no usada por estar incompleta.'
+    });
+  }
 
   return {
     hasHousehold,
@@ -279,9 +474,18 @@ export function buildProjectionScenario(input: {
     projectionAt12Weeks,
     projectedChange,
     averageWeeklyBalance,
+    averageWeeklyIncome,
+    averageWeeklyExpenses,
     lowestWeek,
     trend,
-    weeks,
+    historicalWeeksUsed: historicalWeeks.length,
+    historicalRangeLabel: buildHistoricalRangeLabel(historicalWeeks),
+    partialWeekExcluded,
+    weeks: [...historicalWeeks, ...(partialWeek ? [partialWeek] : []), ...projectedWeeks],
+    historicalWeeks,
+    partialWeek,
+    projectedWeeks,
+    averages,
     explanations
   };
 }
