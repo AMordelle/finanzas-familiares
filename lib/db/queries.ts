@@ -19,6 +19,7 @@ import { buildHouseholdRecommendationContext } from '@/lib/finance/recommendatio
 import type { HouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
 import { transactionIntentSchema, type TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
+import { buildProjectionScenario, type ProjectionScenario, type ProjectionMovement, type ProjectionMsiInstallment, type ProjectionExtraordinaryEvent } from '@/lib/finance/projection';
 
 const DEV_FALLBACK_PROFILE_ID = '00000000-0000-4000-8000-000000000001';
 
@@ -45,6 +46,8 @@ export const movementEditSchema = z.object({
 export const movementDeleteSchema = z.object({
   movementId: z.string().min(1)
 });
+
+export type { ProjectionScenario, ProjectionWeek, ProjectionColumnExplanation } from '@/lib/finance/projection';
 
 
 const financialClosureTypeValues = ['weekly', 'monthly'] as const;
@@ -2999,6 +3002,105 @@ function buildEmptyMsiSummary(): MsiSummary {
     interestFree: buildEmptyMsiSectionSummary(),
     interestBearing: buildEmptyMsiSectionSummary()
   };
+}
+
+
+export async function getProjectionData(client: SupabaseClientLike = supabaseAdmin): Promise<ProjectionScenario> {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) {
+    return buildProjectionScenario({ hasHousehold: false, accounts: [], movements: [], msiInstallments: [], extraordinaryEvents: [] });
+  }
+
+  const { data: accountsData, error: accountsError } = await client
+    .from('accounts')
+    .select('id,name,type,balance,is_active')
+    .eq('household_id', householdId);
+
+  if (accountsError) {
+    throw new Error(`No fue posible leer cuentas para la proyección: ${accountsError.message}`);
+  }
+
+  const accounts = ((accountsData ?? []) as Array<{ id: string; name: string; type: string; balance: string | number; is_active?: boolean | null }>).map((account) => ({
+    id: account.id,
+    name: account.name,
+    type: account.type,
+    balance: Number(account.balance),
+    isActive: account.is_active
+  }));
+
+  const { data: groupsData, error: groupsError } = await client
+    .from('transaction_groups')
+    .select('id,household_id,note,created_at')
+    .eq('household_id', householdId);
+
+  if (groupsError) {
+    throw new Error(`No fue posible leer grupos de movimientos para la proyección: ${groupsError.message}`);
+  }
+
+  const groups = (groupsData ?? []) as Array<{ id: string; household_id: string; note?: string | null; created_at?: string }>;
+  const groupIds = groups.map((group) => group.id);
+
+  const { data: txData, error: txError } = groupIds.length
+    ? await client
+      .from('transactions')
+      .select('id,group_id,account_id,type,category,amount,happened_at')
+      .in('group_id', groupIds)
+    : { data: [] as ClosureTransactionLine[], error: null };
+
+  if (txError) {
+    throw new Error(`No fue posible leer movimientos para la proyección: ${txError.message}`);
+  }
+
+  const txByGroup = groupTransactionLines((txData ?? []) as ClosureTransactionLine[]);
+  const movements: ProjectionMovement[] = groups.map((group) => {
+    const lines = txByGroup[group.id] ?? [];
+    const debitLine = lines.find((line) => line.type === 'debit');
+    const creditLine = lines.find((line) => line.type === 'credit');
+    const action = inferMovementAction(lines);
+    return {
+      id: group.id,
+      groupId: group.id,
+      note: group.note ?? '',
+      action,
+      category: inferSemanticMovementCategory(action, lines),
+      amount: Number(debitLine?.amount ?? creditLine?.amount ?? 0),
+      happenedAt: String(debitLine?.happened_at ?? creditLine?.happened_at ?? group.created_at ?? new Date().toISOString())
+    };
+  });
+
+  const { data: installmentsData, error: installmentsError } = await client
+    .from('msi_installments')
+    .select('id,household_id,amount,due_date,status')
+    .eq('household_id', householdId);
+
+  if (installmentsError) {
+    throw new Error(`No fue posible leer pagos MSI para la proyección: ${installmentsError.message}`);
+  }
+
+  const msiInstallments: ProjectionMsiInstallment[] = ((installmentsData ?? []) as Array<{ id: string; amount: string | number; due_date: string | null; status: string }>).map((installment) => ({
+    id: installment.id,
+    amount: Number(installment.amount),
+    dueDate: installment.due_date,
+    status: installment.status
+  }));
+
+  const { data: eventsData, error: eventsError } = await client
+    .from('calendar_events')
+    .select('id,label,amount,event_date')
+    .eq('household_id', householdId);
+
+  if (eventsError) {
+    throw new Error(`No fue posible leer eventos extraordinarios para la proyección: ${eventsError.message}`);
+  }
+
+  const extraordinaryEvents: ProjectionExtraordinaryEvent[] = ((eventsData ?? []) as Array<{ id: string; label: string; amount: string | number; event_date: string }>).map((event) => ({
+    id: event.id,
+    label: event.label,
+    amount: Number(event.amount),
+    eventDate: event.event_date
+  }));
+
+  return buildProjectionScenario({ hasHousehold: true, accounts, movements, msiInstallments, extraordinaryEvents });
 }
 
 export async function getMsiPurchases(client: SupabaseClientLike = supabaseAdmin): Promise<MsiData> {

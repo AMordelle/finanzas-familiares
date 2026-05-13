@@ -9,7 +9,8 @@ const nav = [
   ['Movimientos', '/movimientos'],
   ['MSI', '/msi'],
   ['Extras', '/extras'],
-  ['Cierre', '/cierre']
+  ['Cierre', '/cierre'],
+  ['Proyección', '/proyeccion']
 ] as const;
 
 export function AppShell({ title, children }: { title: string; children: React.ReactNode }) {
