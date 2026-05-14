@@ -34,7 +34,8 @@ describe('movimientos actions revalidation', () => {
       description: 'Movimiento actualizado',
       amount: 300,
       sourceAccountId: '00000000-0000-4000-8000-000000000011',
-      destinationAccountId: null
+      destinationAccountId: null,
+      category: 'gasto_semanal'
     };
 
     const result = await updateMovementAction(payload);
@@ -43,6 +44,7 @@ describe('movimientos actions revalidation', () => {
     expect(updateMovementMock).toHaveBeenCalledWith(payload);
     expect(revalidatePathMock).toHaveBeenCalledWith('/dashboard');
     expect(revalidatePathMock).toHaveBeenCalledWith('/movimientos');
+    expect(revalidatePathMock).toHaveBeenCalledWith('/proyeccion');
     expect(revalidatePathMock).toHaveBeenCalledWith('/cuentas');
     expect(result).toEqual({ success: true, message: 'Movimiento actualizado correctamente.' });
   });
@@ -57,6 +59,7 @@ describe('movimientos actions revalidation', () => {
     expect(deleteMovementMock).toHaveBeenCalledWith(payload);
     expect(revalidatePathMock).toHaveBeenCalledWith('/dashboard');
     expect(revalidatePathMock).toHaveBeenCalledWith('/movimientos');
+    expect(revalidatePathMock).toHaveBeenCalledWith('/proyeccion');
     expect(revalidatePathMock).toHaveBeenCalledWith('/cuentas');
     expect(result).toEqual({ success: true, message: 'Movimiento eliminado correctamente.' });
   });

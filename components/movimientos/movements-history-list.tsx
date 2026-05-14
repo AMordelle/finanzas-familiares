@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import React, { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -298,7 +298,7 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
   );
 }
 
-function EditMovementForm({
+export function EditMovementForm({
   movement,
   accounts,
   disabled,
@@ -309,10 +309,11 @@ function EditMovementForm({
   accounts: AccountOption[];
   disabled: boolean;
   onCancel: () => void;
-  onSubmit: (payload: { movementId: string; description: string; amount: number; sourceAccountId: string | null; destinationAccountId: string | null }) => void;
+  onSubmit: (payload: { movementId: string; description: string; amount: number; category: string; sourceAccountId: string | null; destinationAccountId: string | null }) => void;
 }) {
   const [description, setDescription] = useState(movement.descripcion);
   const [amount, setAmount] = useState(String(movement.monto));
+  const [category, setCategory] = useState(movement.categoria);
 
   const sourceAccountId = accounts.find((account) => account.name === movement.cuentaOrigen)?.id ?? '';
   const destinationAccountId = accounts.find((account) => account.name === movement.cuentaDestino)?.id ?? '';
@@ -329,6 +330,7 @@ function EditMovementForm({
           movementId: movement.id,
           description,
           amount: Number(amount),
+          category,
           sourceAccountId: source || null,
           destinationAccountId: destination || null
         });
@@ -342,6 +344,17 @@ function EditMovementForm({
       <label className="block text-sm text-slate-700">
         Monto
         <input className="mt-1 w-full rounded-md border border-slate-300 p-2" type="number" step="0.01" min="0" value={amount} onChange={(event) => setAmount(event.target.value)} disabled={disabled} />
+      </label>
+      <label className="block text-sm text-slate-700">
+        Categoría
+        <input
+          className="mt-1 w-full rounded-md border border-slate-300 p-2"
+          value={category}
+          onChange={(event) => setCategory(event.target.value)}
+          disabled={disabled}
+          placeholder="Ej. gasto_semanal, prime_iptv, pago_deuda"
+        />
+        <span className="mt-1 block text-xs text-slate-500">Puedes escribirla con espacios; se guardará normalizada.</span>
       </label>
       <label className="block text-sm text-slate-700">
         Cuenta origen
