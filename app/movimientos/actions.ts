@@ -12,6 +12,7 @@ export async function updateMovementAction(payload: unknown) {
   await updateMovement(parsed.data);
   revalidatePath('/dashboard');
   revalidatePath('/movimientos');
+  revalidatePath('/proyeccion');
   revalidatePath('/cuentas');
 
   return {
@@ -29,6 +30,7 @@ export async function deleteMovementAction(payload: unknown) {
   await deleteMovement(parsed.data);
   revalidatePath('/dashboard');
   revalidatePath('/movimientos');
+  revalidatePath('/proyeccion');
   revalidatePath('/cuentas');
 
   return {

@@ -980,6 +980,135 @@ describe('onboarding persistence', () => {
     delete process.env.DEV_PROFILE_ID;
   });
 
+
+  it('editar categoría normaliza sin modificar montos, cuentas ni saldos', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createHouseholdOnboarding, saveConversationalTransaction, updateMovement } = await import('@/lib/db/queries');
+
+    process.env.DEV_PROFILE_ID = 'profile-edit-category';
+
+    await createHouseholdOnboarding({
+      householdName: 'Caso categoría',
+      householdType: 'familia',
+      regularIncomes: [{ nombre: 'Sueldo', monto: 10000, periodicidad: 'mensual' }],
+      extraordinaryIncomes: [],
+      operationalAccounts: [{ nombre: 'efectivo', saldoInicial: 1000 }, { nombre: 'banco', saldoInicial: 4000 }],
+      fundAccounts: [],
+      debtAccounts: [],
+      receivables: [],
+      fixedExpenses: [{ nombre: 'Servicios', monto: 500, periodicidad: 'mensual' }],
+      variableSpending: [{ nombre: 'Gasto variable', monto: 3000 }]
+    });
+
+    await saveConversationalTransaction({
+      action: 'gasto',
+      amount: 250,
+      category: 'alimentos',
+      description: 'Gasto efectivo',
+      sourceAccount: 'efectivo',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok'
+    });
+
+    const movementId = fakeClient.db.transaction_groups.at(-1).id;
+    const efectivoId = fakeClient.db.accounts.find((acc) => acc.name === 'efectivo').id;
+    const accountsBefore = JSON.stringify(fakeClient.db.accounts);
+    const transactionsBefore = JSON.parse(JSON.stringify(fakeClient.db.transactions));
+
+    await updateMovement({
+      movementId,
+      description: 'Gasto efectivo',
+      amount: 250,
+      category: 'Gasto semanal',
+      sourceAccountId: efectivoId,
+      destinationAccountId: null
+    });
+
+    const updatedTransactions = fakeClient.db.transactions.filter((tx) => tx.group_id === movementId);
+    expect(updatedTransactions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'debit', account_id: null, amount: '250.00', category: 'gasto_semanal' }),
+      expect.objectContaining({ type: 'credit', account_id: efectivoId, amount: '250.00', category: 'salida_cuenta' })
+    ]));
+    expect(JSON.stringify(fakeClient.db.accounts)).toBe(accountsBefore);
+    expect(updatedTransactions.map((tx) => tx.account_id)).toEqual(transactionsBefore.filter((tx: any) => tx.group_id === movementId).map((tx: any) => tx.account_id));
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+
+  it('rechaza editar categoría de movimiento de otro household', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createHouseholdOnboarding, saveConversationalTransaction, updateMovement } = await import('@/lib/db/queries');
+
+    process.env.DEV_PROFILE_ID = 'profile-category-owner';
+    await createHouseholdOnboarding({
+      householdName: 'Hogar dueño',
+      householdType: 'familia',
+      regularIncomes: [{ nombre: 'Sueldo', monto: 10000, periodicidad: 'mensual' }],
+      extraordinaryIncomes: [],
+      operationalAccounts: [{ nombre: 'efectivo', saldoInicial: 1000 }],
+      fundAccounts: [],
+      debtAccounts: [],
+      receivables: [],
+      fixedExpenses: [],
+      variableSpending: []
+    });
+    await saveConversationalTransaction({
+      action: 'gasto',
+      amount: 100,
+      category: 'comida',
+      description: 'Gasto hogar dueño',
+      sourceAccount: 'efectivo',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok'
+    });
+    const foreignMovementId = fakeClient.db.transaction_groups.at(-1).id;
+
+    process.env.DEV_PROFILE_ID = 'profile-category-other';
+    await createHouseholdOnboarding({
+      householdName: 'Hogar otro',
+      householdType: 'familia',
+      regularIncomes: [{ nombre: 'Sueldo', monto: 10000, periodicidad: 'mensual' }],
+      extraordinaryIncomes: [],
+      operationalAccounts: [{ nombre: 'banco', saldoInicial: 1000 }],
+      fundAccounts: [],
+      debtAccounts: [],
+      receivables: [],
+      fixedExpenses: [],
+      variableSpending: []
+    });
+
+    await expect(updateMovement({
+      movementId: foreignMovementId,
+      description: 'Intento otro household',
+      amount: 100,
+      category: 'gasolina',
+      sourceAccountId: null,
+      destinationAccountId: null
+    })).rejects.toThrow('No se encontró el movimiento solicitado.');
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('rechaza categoría vacía al editar movimiento', async () => {
+    const { movementEditSchema } = await import('@/lib/db/queries');
+
+    const parsed = movementEditSchema.safeParse({
+      movementId: 'movement-1',
+      description: 'Movimiento',
+      amount: 100,
+      category: '   ',
+      sourceAccountId: null,
+      destinationAccountId: null
+    });
+
+    expect(parsed.success).toBe(false);
+  });
+
   it('eliminar ingreso corrige banco y mantiene OFH estable', async () => {
     const fakeClient = createFakeSupabase();
     vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));

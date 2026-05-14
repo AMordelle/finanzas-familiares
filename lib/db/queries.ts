@@ -19,6 +19,7 @@ import { buildHouseholdRecommendationContext } from '@/lib/finance/recommendatio
 import type { HouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
 import { transactionIntentSchema, type TransactionIntent } from '@/lib/ai/transactionInterpreter';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
+import { resolveCategoryInput } from '@/lib/ai/semanticCategory';
 import { buildProjectionScenario, type ProjectionScenario, type ProjectionMovement, type ProjectionMsiInstallment, type ProjectionExtraordinaryEvent } from '@/lib/finance/projection';
 
 const DEV_FALLBACK_PROFILE_ID = '00000000-0000-4000-8000-000000000001';
@@ -39,6 +40,7 @@ export const movementEditSchema = z.object({
   movementId: z.string().min(1),
   description: z.string().trim().min(1, 'La descripción es obligatoria.'),
   amount: z.coerce.number().positive('El monto debe ser mayor a 0.'),
+  category: z.string().trim().min(1, 'La categoría es obligatoria.').max(48, 'La categoría debe tener 48 caracteres o menos.').optional(),
   sourceAccountId: z.string().min(1).nullable().optional(),
   destinationAccountId: z.string().min(1).nullable().optional()
 });
@@ -1478,6 +1480,16 @@ function inferSemanticMovementCategory(action: SupportedMovementAction | null, l
   return inferStoredMovementCategory(lines) ?? 'general';
 }
 
+
+function shouldUpdateMovementLineCategory(action: SupportedMovementAction, line: { type: string; category: string; account_id: string | null }) {
+  if (action === 'ingreso') return line.type === 'credit' && !line.account_id;
+  if (action === 'gasto' || action === 'msi_purchase') return line.type === 'debit' && !line.account_id;
+  if (action === 'transferencia') return true;
+
+  const systemCategories = new Set(['entrada_cuenta', 'salida_cuenta', 'deuda', 'por_cobrar', 'ahorro_meta']);
+  return !systemCategories.has(line.category);
+}
+
 function inferMovementAction(lines: Array<{ type: string; category: string }>): SupportedMovementAction | null {
   const has = (type: string, category: string) => lines.some((line) => line.type === type && line.category === category);
 
@@ -2734,6 +2746,10 @@ export async function updateMovement(rawInput: unknown) {
   }
 
   const input = movementEditSchema.parse(rawInput);
+  const normalizedCategory = input.category === undefined ? null : resolveCategoryInput(input.category);
+  if (normalizedCategory?.error || normalizedCategory?.value === null) {
+    throw new Error(normalizedCategory?.error ?? 'La categoría no es válida.');
+  }
   const { group, lines, descriptor: previousMovement } = await getStoredMovementForEdition(householdId, input.movementId);
 
   const sourceAccountId = input.sourceAccountId ?? previousMovement.sourceAccountId;
@@ -2773,7 +2789,10 @@ export async function updateMovement(rawInput: unknown) {
       .from('transactions')
       .update({
         account_id: nextAccountId ?? null,
-        amount: input.amount.toFixed(2)
+        amount: input.amount.toFixed(2),
+        ...(normalizedCategory?.value && shouldUpdateMovementLineCategory(previousMovement.action, line)
+          ? { category: normalizedCategory.value }
+          : {})
       })
       .eq('id', line.id)
       .eq('group_id', group.id);
