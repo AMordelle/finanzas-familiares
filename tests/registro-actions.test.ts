@@ -7,6 +7,8 @@ const saveMock = vi.fn();
 const saveBatchMock = vi.fn();
 const interpretTransactionsMock = vi.fn();
 const revalidatePathMock = vi.fn();
+const getDefaultHouseholdIdMock = vi.fn();
+const validateCategorySelectionMock = vi.fn();
 
 describe('registro actions revalidation', () => {
   beforeEach(() => {
@@ -15,6 +17,15 @@ describe('registro actions revalidation', () => {
 
     parseMock.mockImplementation((payload) => payload);
     enforceFinancialConsistencyMock.mockImplementation((payload) => payload);
+    getDefaultHouseholdIdMock.mockResolvedValue('house-1');
+    validateCategorySelectionMock.mockImplementation(async (_householdId, category, subcategory) => {
+      const allowed = ['comida', 'transporte', 'servicios', 'otros_gastos', 'ingreso_extra'];
+      const trimmed = typeof category === 'string' ? category.trim() : '';
+      if (!trimmed) throw new Error('La categoría seleccionada no existe o está inactiva en este hogar.');
+      if (!allowed.includes(trimmed)) throw new Error('La categoría seleccionada no existe o está inactiva en este hogar.');
+      if (subcategory && subcategory !== 'oxxo') throw new Error('La subcategoría seleccionada no existe, está inactiva o no pertenece a la categoría elegida.');
+      return { categoryKey: trimmed, subcategoryKey: subcategory || null };
+    });
 
     vi.doMock('next/cache', () => ({
       revalidatePath: revalidatePathMock
@@ -43,6 +54,8 @@ describe('registro actions revalidation', () => {
 
     vi.doMock('@/lib/db/queries', () => ({
       getAccountsForRegistration: vi.fn(),
+      getDefaultHouseholdId: getDefaultHouseholdIdMock,
+      validateCategorySelection: validateCategorySelectionMock,
       saveConversationalTransaction: saveMock,
       saveConversationalTransactionBatch: saveBatchMock
     }));
@@ -65,12 +78,13 @@ describe('registro actions revalidation', () => {
     const response = await saveInterpretedTransactionAction(intent);
 
     expect(parseMock).toHaveBeenCalledWith(intent);
-    expect(enforceFinancialConsistencyMock).toHaveBeenCalledWith(intent);
-    expect(saveMock).toHaveBeenCalledWith(intent, expect.objectContaining({ happenedAt: expect.any(String) }));
+    expect(enforceFinancialConsistencyMock).toHaveBeenCalledWith(expect.objectContaining(intent));
+    expect(saveMock).toHaveBeenCalledWith(expect.objectContaining(intent), expect.objectContaining({ happenedAt: expect.any(String) }));
     expect(revalidatePathMock).toHaveBeenCalledWith('/dashboard');
     expect(revalidatePathMock).toHaveBeenCalledWith('/movimientos');
     expect(revalidatePathMock).toHaveBeenCalledWith('/cuentas');
     expect(revalidatePathMock).toHaveBeenCalledWith('/registro');
+    expect(revalidatePathMock).toHaveBeenCalledWith('/proyeccion');
     expect(response).toEqual({ success: true, message: 'Movimiento registrado correctamente.' });
   });
 
@@ -78,6 +92,8 @@ describe('registro actions revalidation', () => {
     const getAccountsForRegistrationMock = vi.fn().mockResolvedValue([{ name: 'TDC BBVA', type: 'credit_card' }]);
     vi.doMock('@/lib/db/queries', () => ({
       getAccountsForRegistration: getAccountsForRegistrationMock,
+      getDefaultHouseholdId: getDefaultHouseholdIdMock,
+      validateCategorySelection: validateCategorySelectionMock,
       saveConversationalTransaction: saveMock,
       saveConversationalTransactionBatch: saveBatchMock
     }));
@@ -169,6 +185,8 @@ describe('registro actions revalidation', () => {
     const getAccountsForRegistrationMock = vi.fn().mockResolvedValue([{ name: 'Efectivo', type: 'operational_cash' }]);
     vi.doMock('@/lib/db/queries', () => ({
       getAccountsForRegistration: getAccountsForRegistrationMock,
+      getDefaultHouseholdId: getDefaultHouseholdIdMock,
+      validateCategorySelection: validateCategorySelectionMock,
       saveConversationalTransaction: saveMock,
       saveConversationalTransactionBatch: saveBatchMock
     }));
@@ -213,7 +231,10 @@ describe('registro actions revalidation', () => {
     const response = await saveInterpretedTransactionBatchAction(batch);
 
     expect(enforceFinancialConsistencyMock).toHaveBeenCalledTimes(2);
-    expect(saveBatchMock).toHaveBeenCalledWith(batch.items, expect.objectContaining({ happenedAt: '2026-04-11T12:00:00.000Z' }));
+    expect(saveBatchMock).toHaveBeenCalledWith([
+      expect.objectContaining({ category: 'comida', subcategory: null }),
+      expect.objectContaining({ category: 'ingreso_extra', subcategory: null })
+    ], expect.objectContaining({ happenedAt: '2026-04-11T12:00:00.000Z' }));
     expect(revalidatePathMock).toHaveBeenCalledWith('/dashboard');
     expect(revalidatePathMock).toHaveBeenCalledWith('/movimientos');
     expect(revalidatePathMock).toHaveBeenCalledWith('/cuentas');
@@ -241,32 +262,26 @@ describe('registro actions revalidation', () => {
     ], expect.any(Object));
   });
 
-  it('normaliza una categoría nueva antes de guardar movimiento único y lote', async () => {
+  it('rechaza categorías que no existen en el catálogo oficial', async () => {
     const { saveInterpretedTransactionAction, saveInterpretedTransactionBatchAction } = await import('@/app/registro/actions');
 
-    await saveInterpretedTransactionAction({
+    await expect(saveInterpretedTransactionAction({
       action: 'gasto',
       amount: 455,
       category: 'servicios',
       categoryOverride: 'Gasto escolar',
       sourceAccount: 'cuenta banco',
       destinationAccount: null
-    });
+    })).rejects.toThrow('categoría seleccionada no existe');
 
-    expect(saveMock).toHaveBeenCalledWith(expect.objectContaining({ category: 'gasto_escolar' }), expect.any(Object));
-
-    await saveInterpretedTransactionBatchAction({
+    await expect(saveInterpretedTransactionBatchAction({
       mode: 'batch',
       items: [
         { action: 'gasto', amount: 100, category: 'Gasto escolar', description: 'Escuela', sourceAccount: 'efectivo', missingFieldKinds: [] }
       ],
       missingFields: [],
       needsConfirmation: true
-    });
-
-    expect(saveBatchMock).toHaveBeenLastCalledWith([
-      expect.objectContaining({ category: 'gasto_escolar' })
-    ], expect.any(Object));
+    })).rejects.toThrow('categoría seleccionada no existe');
   });
 
   it('rechaza categoría vacía antes de guardar', async () => {

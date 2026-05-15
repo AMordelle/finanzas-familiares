@@ -7,7 +7,7 @@ export default async function RegistroPage() {
 
   return (
     <AppShell title="Registro por lote">
-      <ConversationalRegistration accounts={setup.accounts} hasHousehold={setup.hasHousehold} />
+      <ConversationalRegistration accounts={setup.accounts} hasHousehold={setup.hasHousehold} categoryCatalog={setup.categoryCatalog} />
     </AppShell>
   );
 }

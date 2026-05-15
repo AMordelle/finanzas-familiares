@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import type { AccountOption, MovementHistoryItem } from '@/lib/db/queries';
+import type { AccountOption, FinancialCategoryCatalogItem, MovementHistoryItem } from '@/lib/db/queries';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
 import { deleteMovementAction, updateMovementAction } from '@/app/movimientos/actions';
 import { applyQuickFilter, buildDynamicSummary, filterMovements, inferCategories, type MovementFilters, type QuickFilter } from '@/lib/movements/filters';
@@ -12,6 +12,7 @@ import { applyQuickFilter, buildDynamicSummary, filterMovements, inferCategories
 type Props = {
   movements: MovementHistoryItem[];
   accounts: AccountOption[];
+  categoryCatalog: FinancialCategoryCatalogItem[];
 };
 
 type MovementVisual = {
@@ -76,7 +77,7 @@ function getAmountText(amount: number, impact: MovementVisual['impact']) {
   return `${formatCurrencyMXN(amount)} ⇄`;
 }
 
-export function MovementsHistoryList({ movements, accounts }: Props) {
+export function MovementsHistoryList({ movements, accounts, categoryCatalog }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -273,6 +274,7 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
                       <EditMovementForm
                         movement={movement}
                         accounts={accounts}
+                        categoryCatalog={categoryCatalog}
                         disabled={isPending}
                         onCancel={() => setEditingId(null)}
                         onSubmit={(payload) => {
@@ -305,20 +307,26 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
 function EditMovementForm({
   movement,
   accounts,
+  categoryCatalog,
   disabled,
   onCancel,
   onSubmit
 }: {
   movement: MovementHistoryItem;
   accounts: AccountOption[];
+  categoryCatalog: FinancialCategoryCatalogItem[];
   disabled: boolean;
   onCancel: () => void;
   onSubmit: (payload: { movementId: string; description: string; amount: number; sourceAccountId: string | null; destinationAccountId: string | null; category: string; subcategory: string | null }) => void;
 }) {
   const [description, setDescription] = useState(movement.descripcion);
   const [amount, setAmount] = useState(String(movement.monto));
-  const [category, setCategory] = useState(movement.categoria);
-  const [subcategory, setSubcategory] = useState(movement.subcategoria ?? '');
+  const initialCategory = categoryCatalog.some((item) => item.key === movement.categoria) ? movement.categoria : '';
+  const [category, setCategory] = useState(initialCategory);
+  const selectedCategory = categoryCatalog.find((item) => item.key === category);
+  const selectedSubcategories = selectedCategory?.subcategories ?? [];
+  const initialSubcategory = selectedSubcategories.some((item) => item.key === movement.subcategoria) ? movement.subcategoria ?? '' : '';
+  const [subcategory, setSubcategory] = useState(initialSubcategory);
 
   const sourceAccountId = accounts.find((account) => account.name === movement.cuentaOrigen)?.id ?? '';
   const destinationAccountId = accounts.find((account) => account.name === movement.cuentaDestino)?.id ?? '';
@@ -338,7 +346,7 @@ function EditMovementForm({
           sourceAccountId: source || null,
           destinationAccountId: destination || null,
           category,
-          subcategory: subcategory.trim() || null
+          subcategory: subcategory || null
         });
       }}
     >
@@ -353,11 +361,18 @@ function EditMovementForm({
       </label>
       <label className="block text-sm text-slate-700">
         Categoría principal
-        <input className="mt-1 w-full rounded-md border border-slate-300 p-2" value={category} onChange={(event) => { setCategory(event.target.value); setSubcategory(''); }} disabled={disabled} />
+        <select className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2" value={category} onChange={(event) => { setCategory(event.target.value); setSubcategory(''); }} disabled={disabled || categoryCatalog.length === 0} required>
+          <option value="">Selecciona una categoría</option>
+          {categoryCatalog.map((item) => <option key={item.id} value={item.key}>{item.name}</option>)}
+        </select>
       </label>
+      {!initialCategory && movement.categoria && <p className="text-xs text-amber-700">La categoría actual no existe en tu catálogo activo. Selecciona una categoría válida para guardar.</p>}
       <label className="block text-sm text-slate-700">
         Subcategoría opcional
-        <input className="mt-1 w-full rounded-md border border-slate-300 p-2" value={subcategory} onChange={(event) => setSubcategory(event.target.value)} disabled={disabled} />
+        <select className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2" value={subcategory} onChange={(event) => setSubcategory(event.target.value)} disabled={disabled || !category}>
+          <option value="">Sin subcategoría</option>
+          {selectedSubcategories.map((item) => <option key={item.id} value={item.key}>{item.name}</option>)}
+        </select>
       </label>
       <label className="block text-sm text-slate-700">
         Cuenta origen
@@ -375,7 +390,7 @@ function EditMovementForm({
       </label>
 
       <div className="flex gap-2">
-        <Button type="submit" disabled={disabled}>{disabled ? 'Guardando...' : 'Guardar cambios'}</Button>
+        <Button type="submit" disabled={disabled || !category}>{disabled ? 'Guardando...' : 'Guardar cambios'}</Button>
         <Button type="button" variant="outline" onClick={onCancel} disabled={disabled}>Cancelar</Button>
       </div>
     </form>

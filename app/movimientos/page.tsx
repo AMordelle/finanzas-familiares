@@ -1,11 +1,13 @@
 import { AppShell } from '@/components/app-shell';
 import { MovementsHistoryList } from '@/components/movimientos/movements-history-list';
 import { Card } from '@/components/ui/card';
-import { getAccountsForRegistration, getMovementsHistory } from '@/lib/db/queries';
+import { getAccountsForRegistration, getFinancialCategoryCatalog, getMovementsHistory } from '@/lib/db/queries';
 
 export default async function MovimientosPage() {
   const { hasHousehold, movements } = await getMovementsHistory();
-  const accounts = hasHousehold ? await getAccountsForRegistration() : [];
+  const [accounts, categoryCatalog] = hasHousehold
+    ? await Promise.all([getAccountsForRegistration(), getFinancialCategoryCatalog()])
+    : [[], []];
 
   if (!hasHousehold) {
     return (
@@ -36,7 +38,7 @@ export default async function MovimientosPage() {
         <p className="mt-2 text-sm text-slate-600">Movimientos reales guardados, del más reciente al más antiguo.</p>
       </Card>
 
-      <MovementsHistoryList movements={movements} accounts={accounts} />
+      <MovementsHistoryList movements={movements} accounts={accounts} categoryCatalog={categoryCatalog} />
     </AppShell>
   );
 }

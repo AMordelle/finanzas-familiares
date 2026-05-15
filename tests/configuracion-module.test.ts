@@ -92,10 +92,31 @@ describe('módulo Configuración financiera', () => {
     expect(data.categories.some((item) => item.householdId === 'house-2')).toBe(false);
   });
 
+
+
+  it('carga solo categorías/subcategorías activas y valida selecciones del catálogo', async () => {
+    const q = await import('@/lib/db/queries');
+    const gastos = await q.createFinancialCategory({ name: 'Gastos variables', type: 'expense' });
+    const ingresos = await q.createFinancialCategory({ name: 'Ingresos extra', type: 'income' });
+    await q.createFinancialSubcategory({ financialCategoryId: gastos.id, name: 'Oxxo' });
+    await q.createFinancialSubcategory({ financialCategoryId: ingresos.id, name: 'PrimeIPTV' });
+    const inactive = await q.createFinancialCategory({ name: 'Archivada', type: 'expense' });
+    await q.toggleFinancialCategory({ categoryId: inactive.id, isActive: false });
+
+    const catalog = await q.getFinancialCategoryCatalog('house-1', fake as any);
+    expect(catalog.map((item) => item.key)).toEqual(['gastos_variables', 'ingresos_extra']);
+    expect(catalog[0]?.subcategories.map((item) => item.key)).toEqual(['oxxo']);
+
+    await expect(q.validateCategorySelection('house-1', 'no_existe', null, fake as any)).rejects.toThrow('categoría seleccionada no existe');
+    await expect(q.validateCategorySelection('house-1', 'gastos_variables', 'prime_iptv', fake as any)).rejects.toThrow('subcategoría seleccionada');
+    await expect(q.validateCategorySelection('house-1', 'gastos_variables', null, fake as any)).resolves.toMatchObject({ categoryKey: 'gastos_variables', subcategoryKey: null });
+  });
+
   it('edita movimiento con categoría/subcategoría sin modificar saldos y proyecta por categoría principal sin duplicar subcategorías', async () => {
     const q = await import('@/lib/db/queries');
     fake.db.accounts.push({ id: 'acc-1', household_id: 'house-1', name: 'BBVA', type: 'operational_cash', balance: '1000', is_active: true });
     const category = await q.createFinancialCategory({ name: 'Gastos variables', type: 'expense' });
+    await q.createFinancialSubcategory({ financialCategoryId: category.id, name: 'Oxxo' });
     const column = await q.createProjectionColumn({ name: 'Gastos variables', type: 'expense', displayOrder: 1 });
     await q.assignCategoryToProjectionColumn({ projectionColumnId: column.id, financialCategoryId: category.id });
     fake.db.transaction_groups.push({ id: 'group-1', household_id: 'house-1', note: 'Oxxo', created_at: '2026-05-01T12:00:00.000Z' });

@@ -6,23 +6,17 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { APPROVED_CATEGORY_CATALOG, formatCategoryLabel, resolveCategoryInput } from '@/lib/ai/semanticCategory';
 import { type BatchTransactionInterpretation, type TransactionIntent } from '@/lib/ai/transactionInterpreter';
-import type { AccountOption } from '@/lib/db/queries';
+import type { AccountOption, FinancialCategoryCatalogItem } from '@/lib/db/queries';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
 import { applyFollowUpAnswerAction, interpretTransactionAction, saveInterpretedTransactionAction, saveInterpretedTransactionBatchAction } from '@/app/registro/actions';
 
 type Props = {
   accounts: AccountOption[];
   hasHousehold: boolean;
+  categoryCatalog?: FinancialCategoryCatalogItem[];
   initialIntent?: TransactionIntent | null;
   initialInterpretation?: BatchTransactionInterpretation | null;
-};
-
-const missingFieldQuestions: Record<string, string> = {
-  sourceAccount: '¿De qué cuenta salió el dinero?',
-  destinationAccount: '¿A qué cuenta entró el dinero?',
-  debtAccount: '¿A qué tarjeta o préstamo pagaste?'
 };
 
 function isCreditCardLikeSource(intent: TransactionIntent | null) {
@@ -33,39 +27,39 @@ function isCreditCardLikeSource(intent: TransactionIntent | null) {
   return /\b(tdc|tarjeta|credit)\b/i.test(intent.sourceAccountName);
 }
 
+function formatCatalogLabel(key: string | null | undefined) {
+  if (!key) return 'Sin categoría';
+  const label = key.replace(/_/g, ' ').trim();
+  return label ? label.charAt(0).toUpperCase() + label.slice(1) : 'Sin categoría';
+}
 
-function buildInitialCategoryInputs(interpretation: BatchTransactionInterpretation | null) {
+function findCatalogCategory(catalog: FinancialCategoryCatalogItem[], key: string | null | undefined) {
+  return key ? catalog.find((category) => category.key === key) ?? null : null;
+}
+
+function buildCatalogCategoryInputs(interpretation: BatchTransactionInterpretation | null, catalog: FinancialCategoryCatalogItem[]) {
   return (interpretation?.items ?? []).reduce<Record<number, string>>((acc, item, index) => {
-    acc[index] = item.category ?? 'otros_gastos';
+    acc[index] = findCatalogCategory(catalog, item.category)?.key ?? '';
     return acc;
   }, {});
 }
 
-function buildInitialSubcategoryInputs(interpretation: BatchTransactionInterpretation | null) {
+function buildCatalogSubcategoryInputs(interpretation: BatchTransactionInterpretation | null, catalog: FinancialCategoryCatalogItem[]) {
   return (interpretation?.items ?? []).reduce<Record<number, string>>((acc, item, index) => {
-    acc[index] = item.subcategory ?? '';
+    const category = findCatalogCategory(catalog, item.category);
+    acc[index] = category?.subcategories.some((subcategory) => subcategory.key === item.subcategory) ? item.subcategory ?? '' : '';
     return acc;
   }, {});
 }
 
-function buildInitialCategoryModes(interpretation: BatchTransactionInterpretation | null) {
-  return (interpretation?.items ?? []).reduce<Record<number, 'existing' | 'custom'>>((acc, item, index) => {
-    acc[index] = item.category && !APPROVED_CATEGORY_CATALOG.includes(item.category as never) ? 'custom' : 'existing';
-    return acc;
-  }, {});
-}
-
-export function ConversationalRegistration({ accounts, hasHousehold, initialIntent = null, initialInterpretation = null }: Props) {
+export function ConversationalRegistration({ accounts, hasHousehold, categoryCatalog = [], initialIntent = null, initialInterpretation = null }: Props) {
   const initialRegistrationInterpretation = initialInterpretation ?? (initialIntent ? { mode: 'single' as const, items: [initialIntent], missingFields: [], needsConfirmation: true } : null);
   const [input, setInput] = useState('');
   const [interpretation, setInterpretation] = useState<BatchTransactionInterpretation | null>(initialRegistrationInterpretation);
   const [movementDate, setMovementDate] = useState(() => toDateInputValue(new Date()));
   const [isCustomDatePickerOpen, setIsCustomDatePickerOpen] = useState(false);
-  const [selectedCategory, setSelectedCategory] = useState<string>(APPROVED_CATEGORY_CATALOG[0]);
-  const [isManualCategoryOverride, setIsManualCategoryOverride] = useState(false);
-  const [categoryInputs, setCategoryInputs] = useState<Record<number, string>>(() => buildInitialCategoryInputs(initialRegistrationInterpretation));
-  const [categoryModes, setCategoryModes] = useState<Record<number, 'existing' | 'custom'>>(() => buildInitialCategoryModes(initialRegistrationInterpretation));
-  const [subcategoryInputs, setSubcategoryInputs] = useState<Record<number, string>>(() => buildInitialSubcategoryInputs(initialRegistrationInterpretation));
+  const [categoryInputs, setCategoryInputs] = useState<Record<number, string>>(() => buildCatalogCategoryInputs(initialRegistrationInterpretation, categoryCatalog));
+  const [subcategoryInputs, setSubcategoryInputs] = useState<Record<number, string>>(() => buildCatalogSubcategoryInputs(initialRegistrationInterpretation, categoryCatalog));
   const [followUpValue, setFollowUpValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -76,25 +70,19 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
   useEffect(() => {
     if (!interpretation) {
       setCategoryInputs({});
-      setCategoryModes({});
       setSubcategoryInputs({});
       return;
     }
 
-    setCategoryInputs(buildInitialCategoryInputs(interpretation));
-    setCategoryModes(buildInitialCategoryModes(interpretation));
-    setSubcategoryInputs(buildInitialSubcategoryInputs(interpretation));
-
-    const firstItem = interpretation.items[0];
-    if (!firstItem?.category || interpretation.mode === 'batch') return;
-    setSelectedCategory(firstItem.category);
-    setIsManualCategoryOverride(false);
-  }, [interpretation]);
+    setCategoryInputs(buildCatalogCategoryInputs(interpretation, categoryCatalog));
+    setSubcategoryInputs(buildCatalogSubcategoryInputs(interpretation, categoryCatalog));
+  }, [interpretation, categoryCatalog]);
 
   const activeIntent = interpretation?.mode === 'single' ? interpretation.items[0] : null;
   const batchItems = interpretation?.items ?? [];
   const incompleteItems = batchItems.filter((item) => item.missingFieldKinds.length > 0 || !isCreditCardLikeSource(item));
   const isBatch = interpretation?.mode === 'batch';
+  const missingCatalogSelectionCount = batchItems.filter((_, index) => !categoryInputs[index]).length;
   const isReadyToConfirm = useMemo(
     () => !!interpretation && incompleteItems.length === 0 && batchItems.length > 0,
     [interpretation, incompleteItems.length, batchItems.length]
@@ -111,7 +99,6 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
         setInterpretation(next);
         setMovementDate(toDateInputValue(new Date()));
         setIsCustomDatePickerOpen(false);
-        setIsManualCategoryOverride(false);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'No se pudo interpretar el movimiento.');
       }
@@ -124,7 +111,6 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
       const resolved = await applyFollowUpAnswerAction(activeIntent, followUpValue.trim());
       setInterpretation({ mode: 'single', items: [resolved], missingFields: resolved.missingFields, needsConfirmation: true });
       setFollowUpValue('');
-      setIsManualCategoryOverride(false);
     });
   };
 
@@ -146,44 +132,21 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
     return filtered;
   }, [accounts, activeIntent]);
 
-  const updateCategoryMode = (index: number, mode: 'existing' | 'custom') => {
-    setCategoryModes((current) => ({ ...current, [index]: mode }));
-    setCategoryInputs((current) => ({
-      ...current,
-      [index]: mode === 'custom' ? '' : (interpretation?.items[index]?.category ?? 'otros_gastos')
-    }));
-  };
-
   const updateCategoryInput = (index: number, value: string) => {
     setCategoryInputs((current) => ({ ...current, [index]: value }));
-    if (!isBatch && activeIntent) {
-      setSelectedCategory(value);
-      setIsManualCategoryOverride(value !== (activeIntent.category ?? ''));
-    }
+    setSubcategoryInputs((current) => ({ ...current, [index]: '' }));
   };
 
   const updateSubcategoryInput = (index: number, value: string) => {
     setSubcategoryInputs((current) => ({ ...current, [index]: value }));
   };
 
-  const getFinalCategory = (index: number) => {
-    const rawCategory = categoryInputs[index] ?? interpretation?.items[index]?.category ?? 'otros_gastos';
-    return resolveCategoryInput(rawCategory);
-  };
-
   const buildInterpretationWithFinalCategories = () => {
     if (!interpretation) return null;
     const finalItems = interpretation.items.map((item, index) => {
-      const resolved = getFinalCategory(index);
-      if (resolved.error || !resolved.value) {
-        throw new Error(`${resolved.error ?? 'Categoría inválida'} Movimiento ${index + 1}.`);
-      }
-      const rawSubcategory = subcategoryInputs[index] ?? item.subcategory ?? '';
-      const resolvedSubcategory = rawSubcategory.trim() ? resolveCategoryInput(rawSubcategory) : { value: null, error: null };
-      if (resolvedSubcategory.error) {
-        throw new Error(`${resolvedSubcategory.error} Subcategoría movimiento ${index + 1}.`);
-      }
-      return { ...item, category: resolved.value, subcategory: resolvedSubcategory.value ?? null };
+      const category = categoryInputs[index];
+      if (!category) throw new Error(`Selecciona una categoría válida para el movimiento ${index + 1}.`);
+      return { ...item, category, subcategory: subcategoryInputs[index] || null };
     });
     return { ...interpretation, items: finalItems };
   };
@@ -200,9 +163,8 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
     );
   }
 
-
   const handleSave = () => {
-    if (!interpretation || incompleteItems.length > 0 || isSavingRef.current) return;
+    if (!interpretation || incompleteItems.length > 0 || missingCatalogSelectionCount > 0 || isSavingRef.current) return;
     setError(null);
     isSavingRef.current = true;
     startTransition(async () => {
@@ -217,16 +179,13 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
           : await saveInterpretedTransactionAction({
             ...finalInterpretation.items[0],
             movementDate,
-            categoryOverride: getFinalCategory(0).value ?? undefined,
-            subcategoryOverride: subcategoryInputs[0] ?? undefined
+            categoryOverride: categoryInputs[0],
+            subcategoryOverride: subcategoryInputs[0] || null
           });
         setInput('');
         setInterpretation(null);
         setMovementDate(toDateInputValue(new Date()));
-        setSelectedCategory(APPROVED_CATEGORY_CATALOG[0]);
-        setIsManualCategoryOverride(false);
         setCategoryInputs({});
-        setCategoryModes({});
         setSubcategoryInputs({});
         setIsCustomDatePickerOpen(false);
         setSuccessMessage(result.message);
@@ -239,85 +198,60 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
     });
   };
 
-  const displayedCategory = categoryInputs[0] !== undefined ? categoryInputs[0] : (selectedCategory || activeIntent?.category || 'otros_gastos');
-
   return (
     <Card>
       <h2 className="text-xl font-semibold">Registro por lote</h2>
       <p className="mt-2 text-slate-600">Escribe un movimiento o una lista de movimientos. Puedes separar cada movimiento por renglón.</p>
+      <p className="mt-2 text-sm text-slate-500">Las categorías vienen de Configuración. Si necesitas una nueva, créala primero en Configuración.</p>
+      {categoryCatalog.length === 0 && <p className="mt-3 rounded-md bg-amber-50 p-3 text-sm text-amber-800">No hay categorías activas en tu catálogo. Crea al menos una en Configuración antes de guardar movimientos.</p>}
       <textarea className="mt-4 min-h-36 w-full rounded-lg border border-slate-300 p-3 text-sm" value={input} placeholder={`Ejemplo:\nGasté 600 en gasolina con efectivo\nGasté 300 en Oxxo con TDC BBVA\nRecibí 200 de Juan en Prime IPTV`} onChange={(event) => setInput(event.target.value)} />
       <div className="mt-4"><Button onClick={handleInterpret} disabled={isPending || !input.trim()}>{isPending ? 'Interpretando...' : 'Interpretar movimiento(s)'}</Button></div>
 
       {activeIntent && activeIntent.missingFieldKinds.length > 0 && (
         <div className="mt-6 space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
-          <p className="text-sm font-medium text-amber-900">Faltan datos para completar el movimiento:</p>
-          <p className="text-sm text-slate-700">{activeIntent.nextPrompt ?? missingFieldQuestions[activeIntent.missingFields[0] ?? 'sourceAccount']}</p>
-          {activeIntent.nextPromptInputType === 'guided_choice' && (
-            <select className="w-full rounded-md border border-slate-300 bg-white p-2" value={followUpValue} onChange={(event) => setFollowUpValue(event.target.value)}>
-              <option value="">Selecciona una opción</option>
-              <option value="tarjeta">Una tarjeta</option>
-              <option value="prestamo">Un préstamo</option>
-              <option value="gasto">Un gasto normal</option>
-              <option value="transferencia">Una transferencia</option>
-            </select>
-          )}
-          {activeIntent.nextPromptInputType === 'text_input' && (
-            <input className="w-full rounded-md border border-slate-300 bg-white p-2" placeholder="Escribe el detalle" value={followUpValue} onChange={(event) => setFollowUpValue(event.target.value)} />
-          )}
-          {activeIntent.nextPromptInputType === 'account_selector' && hasAccounts && (
-            <select className="w-full rounded-md border border-slate-300 bg-white p-2" value={followUpValue} onChange={(event) => setFollowUpValue(event.target.value)}>
+          <p className="text-sm font-medium text-amber-900">Faltan datos para completar el movimiento</p>
+          <p className="text-sm text-amber-800">{activeIntent.nextPrompt ?? 'Completa la información faltante.'}</p>
+          {activeIntent.nextPromptInputType === 'account_selector' && (
+            <select className="w-full rounded-md border border-amber-300 bg-white p-2 text-sm" value={followUpValue} onChange={(event) => setFollowUpValue(event.target.value)}>
               <option value="">Selecciona una cuenta</option>
               {allowedAccounts.map((account) => <option key={account.id} value={account.name}>{account.name}</option>)}
             </select>
           )}
-          <Button onClick={handleMissingFieldApply} disabled={!followUpValue.trim()}>Continuar</Button>
+          {activeIntent.nextPromptInputType !== 'account_selector' && <input className="w-full rounded-md border border-amber-300 bg-white p-2 text-sm" value={followUpValue} onChange={(event) => setFollowUpValue(event.target.value)} />}
+          <Button type="button" onClick={handleMissingFieldApply} disabled={!followUpValue.trim() || isPending}>Aplicar respuesta</Button>
         </div>
       )}
 
-      {interpretation && isBatch && incompleteItems.length > 0 && (
-        <div className="mt-6 space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
-          <p className="text-sm font-medium text-amber-900">Hay {batchItems.length - incompleteItems.length} movimientos listos y {incompleteItems.length} necesita{incompleteItems.length === 1 ? '' : 'n'} aclaración.</p>
-          <p className="text-sm text-slate-700">Corrige el texto completo y vuelve a interpretar el lote. No se guardará nada hasta que todos estén completos.</p>
-          <ol className="list-decimal space-y-2 pl-5 text-sm text-slate-700">
-            {incompleteItems.map((item) => (
-              <li key={item.rawText}>
-                <span className="font-medium">{item.rawText}</span> · faltan: {item.missingFieldKinds.join(', ')}
-              </li>
-            ))}
-          </ol>
-        </div>
+      {activeIntent && !hasAccounts && activeIntent.missingFieldKinds.length > 0 && (
+        <p className="mt-4 text-sm text-red-600">Necesitas cuentas activas para completar el registro.</p>
       )}
 
       {isReadyToConfirm && interpretation && isBatch && (
         <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <h3 className="font-semibold">Detecté {batchItems.length} movimientos:</h3>
-          <ol className="mt-3 list-decimal space-y-3 pl-5 text-sm text-slate-700">
+          <h3 className="font-semibold">Detecté {batchItems.length} movimientos</h3>
+          {missingCatalogSelectionCount > 0 && <p className="mt-2 text-sm text-amber-700">Hay {missingCatalogSelectionCount} movimiento(s) sin categoría válida del catálogo.</p>}
+          <ol className="mt-3 space-y-3 text-sm text-slate-700">
             {batchItems.map((item, index) => (
-              <li key={`${item.rawText}-${item.amount}`}>
-                <p className="font-medium text-slate-900">{item.visibleType} · {formatCurrencyMXN(item.amount)}{item.sourceAccountName ? ` · desde ${item.sourceAccountName}` : ''}{item.destinationAccountName ? ` · hacia ${item.destinationAccountName}` : ''}</p>
-                <p>Texto original: “{item.rawText}”</p>
+              <li key={`${item.rawText}-${index}`} className="rounded-md border border-slate-200 bg-white p-3">
+                <p className="font-medium">{index + 1}. {item.rawText}</p>
+                <p>Monto: {formatCurrencyMXN(item.action === 'msi_purchase' ? item.totalAmount ?? item.amount : item.amount)}</p>
                 <p>Descripción: {item.description}</p>
-                <CategoryEditor
+                <CatalogSelectionEditor
                   index={index}
-                  mode={categoryModes[index] ?? 'existing'}
-                  value={categoryInputs[index] ?? item.category ?? 'otros_gastos'}
-                  onModeChange={updateCategoryMode}
-                  onValueChange={updateCategoryInput}
+                  item={item}
+                  catalog={categoryCatalog}
+                  categoryValue={categoryInputs[index] ?? ''}
+                  subcategoryValue={subcategoryInputs[index] ?? ''}
+                  onCategoryChange={updateCategoryInput}
+                  onSubcategoryChange={updateSubcategoryInput}
                 />
-                <SubcategoryEditor index={index} value={subcategoryInputs[index] ?? item.subcategory ?? ''} onValueChange={updateSubcategoryInput} />
               </li>
             ))}
           </ol>
-          <li className="mt-3 list-none pt-2 text-sm text-slate-900">Fecha del lote: <span className="font-medium">{formatMovementDateLabel(movementDate)}</span></li>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={() => { setMovementDate(toDateInputValue(new Date())); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Hoy</Button>
-            <Button type="button" variant="outline" onClick={() => { setMovementDate(toDateInputValue(getRelativeDate(-1))); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Ayer</Button>
-            <Button type="button" variant="outline" onClick={() => setIsCustomDatePickerOpen((current) => !current)} disabled={isPending}>Elegir fecha</Button>
-          </div>
-          {isCustomDatePickerOpen && <input className="mt-2 w-full rounded-md border border-slate-300 bg-white p-2 text-sm" type="date" value={movementDate} max={toDateInputValue(new Date())} onChange={(event) => setMovementDate(event.target.value)} />}
+          <MovementDatePicker movementDate={movementDate} setMovementDate={setMovementDate} isCustomDatePickerOpen={isCustomDatePickerOpen} setIsCustomDatePickerOpen={setIsCustomDatePickerOpen} isPending={isPending} label="Fecha del lote" />
           <div className="mt-4 flex gap-2">
-            <Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Guardar movimientos'}</Button>
-            <Button variant="outline" onClick={() => { setInterpretation(null); setMovementDate(toDateInputValue(new Date())); setCategoryInputs({}); setCategoryModes({}); setSubcategoryInputs({}); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
+            <Button onClick={handleSave} disabled={isPending || missingCatalogSelectionCount > 0}>{isPending ? 'Guardando...' : 'Guardar movimientos'}</Button>
+            <Button variant="outline" onClick={() => { setInterpretation(null); setMovementDate(toDateInputValue(new Date())); setCategoryInputs({}); setSubcategoryInputs({}); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
           </div>
         </div>
       )}
@@ -337,34 +271,25 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
             <li>Descripción: {activeIntent.description}</li>
             <li>Cuenta origen: {activeIntent.sourceAccountName ?? 'N/A'}</li>
             <li>Cuenta destino: {activeIntent.destinationAccountName ?? 'N/A'}</li>
-            <li className="flex flex-wrap items-center gap-2">
-              <span>Categoría:</span>
-              <span className="font-medium">{displayedCategory}</span>
-              <span className="text-xs text-slate-500">({isManualCategoryOverride ? 'Manual' : 'IA'})</span>
-            </li>
-            <li>Subcategoría: {subcategoryInputs[0] || activeIntent.subcategory || 'Sin subcategoría'}</li>
+            <li>Categoría sugerida por IA: {formatCatalogLabel(activeIntent.category)}</li>
+            <li>Subcategoría sugerida por IA: {activeIntent.subcategory ? formatCatalogLabel(activeIntent.subcategory) : 'Sin subcategoría'}</li>
           </ul>
 
-          <CategoryEditor
+          <CatalogSelectionEditor
             index={0}
-            mode={categoryModes[0] ?? 'existing'}
-            value={displayedCategory}
-            onModeChange={updateCategoryMode}
-            onValueChange={updateCategoryInput}
+            item={activeIntent}
+            catalog={categoryCatalog}
+            categoryValue={categoryInputs[0] ?? ''}
+            subcategoryValue={subcategoryInputs[0] ?? ''}
+            onCategoryChange={updateCategoryInput}
+            onSubcategoryChange={updateSubcategoryInput}
           />
-          <SubcategoryEditor index={0} value={subcategoryInputs[0] ?? activeIntent.subcategory ?? ''} onValueChange={updateSubcategoryInput} />
 
-          <li className="mt-3 list-none pt-2 text-sm text-slate-900">Fecha del movimiento: <span className="font-medium">{formatMovementDateLabel(movementDate)}</span></li>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={() => { setMovementDate(toDateInputValue(new Date())); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Hoy</Button>
-            <Button type="button" variant="outline" onClick={() => { setMovementDate(toDateInputValue(getRelativeDate(-1))); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Ayer</Button>
-            <Button type="button" variant="outline" onClick={() => setIsCustomDatePickerOpen((current) => !current)} disabled={isPending}>Elegir fecha</Button>
-          </div>
-          {isCustomDatePickerOpen && <input className="mt-2 w-full rounded-md border border-slate-300 bg-white p-2 text-sm" type="date" value={movementDate} max={toDateInputValue(new Date())} onChange={(event) => setMovementDate(event.target.value)} />}
+          <MovementDatePicker movementDate={movementDate} setMovementDate={setMovementDate} isCustomDatePickerOpen={isCustomDatePickerOpen} setIsCustomDatePickerOpen={setIsCustomDatePickerOpen} isPending={isPending} label="Fecha del movimiento" />
           <p className="mt-3 text-sm font-medium text-slate-900">{activeIntent.humanConfirmation}</p>
           <div className="mt-4 flex gap-2">
-            <Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Confirmar'}</Button>
-            <Button variant="outline" onClick={() => { setInterpretation(null); setMovementDate(toDateInputValue(new Date())); setSelectedCategory(APPROVED_CATEGORY_CATALOG[0]); setIsManualCategoryOverride(false); setCategoryInputs({}); setCategoryModes({}); setSubcategoryInputs({}); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
+            <Button onClick={handleSave} disabled={isPending || missingCatalogSelectionCount > 0}>{isPending ? 'Guardando...' : 'Confirmar'}</Button>
+            <Button variant="outline" onClick={() => { setInterpretation(null); setMovementDate(toDateInputValue(new Date())); setCategoryInputs({}); setSubcategoryInputs({}); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
           </div>
         </div>
       )}
@@ -374,64 +299,68 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
   );
 }
 
-
-function SubcategoryEditor({ index, value, onValueChange }: { index: number; value: string; onValueChange: (index: number, value: string) => void }) {
-  return (
-    <label className="mt-3 block text-sm text-slate-700">
-      Subcategoría opcional
-      <input className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm" value={value} onChange={(event) => onValueChange(index, event.target.value)} placeholder="Ej. Oxxo, Prime IPTV, Gasolina" />
-      <span className="mt-1 block text-xs text-slate-500">Se normaliza al guardar; no alimenta columnas de Proyección.</span>
-    </label>
-  );
-}
-
-type CategoryEditorProps = {
+type CatalogSelectionEditorProps = {
   index: number;
-  mode: 'existing' | 'custom';
-  value: string;
-  onModeChange: (index: number, mode: 'existing' | 'custom') => void;
-  onValueChange: (index: number, value: string) => void;
+  item: TransactionIntent;
+  catalog: FinancialCategoryCatalogItem[];
+  categoryValue: string;
+  subcategoryValue: string;
+  onCategoryChange: (index: number, value: string) => void;
+  onSubcategoryChange: (index: number, value: string) => void;
 };
 
-function CategoryEditor({ index, mode, value, onModeChange, onValueChange }: CategoryEditorProps) {
-  const resolved = resolveCategoryInput(value);
-  const showNewCategory = mode === 'custom' && !resolved.error && resolved.value && resolved.isNew;
+function CatalogSelectionEditor({ index, item, catalog, categoryValue, subcategoryValue, onCategoryChange, onSubcategoryChange }: CatalogSelectionEditorProps) {
+  const suggestedCategory = findCatalogCategory(catalog, item.category);
+  const selectedCategory = findCatalogCategory(catalog, categoryValue);
+  const subcategories = selectedCategory?.subcategories ?? [];
+  const suggestedSubcategoryExists = Boolean(suggestedCategory?.subcategories.some((subcategory) => subcategory.key === item.subcategory));
 
   return (
     <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
-      <label className="text-xs font-semibold uppercase tracking-wide text-slate-500" htmlFor={`category-mode-${index}`}>Categoría</label>
-      <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <select
-          id={`category-mode-${index}`}
-          className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
-          value={mode === 'custom' ? '__custom__' : value}
-          onChange={(event) => {
-            if (event.target.value === '__custom__') {
-              onModeChange(index, 'custom');
-              return;
-            }
-            onModeChange(index, 'existing');
-            onValueChange(index, event.target.value);
-          }}
-        >
-          {APPROVED_CATEGORY_CATALOG.map((category) => (
-            <option key={category} value={category}>{formatCategoryLabel(category)}</option>
-          ))}
-          <option value="__custom__">Nueva categoría...</option>
-        </select>
-        {mode === 'custom' && (
-          <input
-            className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
-            placeholder="Ej. Gasto escolar"
-            value={value}
-            maxLength={64}
-            onChange={(event) => onValueChange(index, event.target.value)}
-          />
-        )}
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Clasificación del catálogo</p>
+      <p className="mt-1 text-xs text-slate-500">Categoría sugerida por IA: {formatCatalogLabel(item.category)}</p>
+      {item.category && !suggestedCategory && <p className="mt-2 text-xs font-medium text-amber-700">La categoría sugerida no existe en tu catálogo.</p>}
+      {item.subcategory && !suggestedSubcategoryExists && <p className="mt-1 text-xs text-amber-700">La subcategoría sugerida no existe bajo esa categoría; selecciona una válida o deja “Sin subcategoría”.</p>}
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <label className="block text-sm text-slate-700">
+          Categoría
+          <select className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm" value={categoryValue} onChange={(event) => onCategoryChange(index, event.target.value)} required>
+            <option value="">Selecciona una categoría</option>
+            {catalog.map((category) => <option key={category.id} value={category.key}>{category.name}</option>)}
+          </select>
+        </label>
+        <label className="block text-sm text-slate-700">
+          Subcategoría
+          <select className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm" value={subcategoryValue} onChange={(event) => onSubcategoryChange(index, event.target.value)} disabled={!categoryValue}>
+            <option value="">Sin subcategoría</option>
+            {subcategories.map((subcategory) => <option key={subcategory.id} value={subcategory.key}>{subcategory.name}</option>)}
+          </select>
+        </label>
       </div>
-      {showNewCategory && <p className="mt-2 text-xs font-medium text-emerald-700">Nueva categoría: {formatCategoryLabel(resolved.value)}</p>}
-      {resolved.error && <p className="mt-2 text-xs font-medium text-red-600">{resolved.error}</p>}
     </div>
+  );
+}
+
+type MovementDatePickerProps = {
+  movementDate: string;
+  setMovementDate: (value: string) => void;
+  isCustomDatePickerOpen: boolean;
+  setIsCustomDatePickerOpen: (updater: boolean | ((current: boolean) => boolean)) => void;
+  isPending: boolean;
+  label: string;
+};
+
+function MovementDatePicker({ movementDate, setMovementDate, isCustomDatePickerOpen, setIsCustomDatePickerOpen, isPending, label }: MovementDatePickerProps) {
+  return (
+    <>
+      <li className="mt-3 list-none pt-2 text-sm text-slate-900">{label}: <span className="font-medium">{formatMovementDateLabel(movementDate)}</span></li>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button type="button" variant="outline" onClick={() => { setMovementDate(toDateInputValue(new Date())); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Hoy</Button>
+        <Button type="button" variant="outline" onClick={() => { setMovementDate(toDateInputValue(getRelativeDate(-1))); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Ayer</Button>
+        <Button type="button" variant="outline" onClick={() => setIsCustomDatePickerOpen((current) => !current)} disabled={isPending}>Elegir fecha</Button>
+      </div>
+      {isCustomDatePickerOpen && <input className="mt-2 w-full rounded-md border border-slate-300 bg-white p-2 text-sm" type="date" value={movementDate} max={toDateInputValue(new Date())} onChange={(event) => setMovementDate(event.target.value)} />}
+    </>
   );
 }
 

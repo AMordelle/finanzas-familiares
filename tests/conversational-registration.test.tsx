@@ -15,6 +15,13 @@ vi.mock('@/app/registro/actions', () => ({
   saveInterpretedTransactionBatchAction: vi.fn()
 }));
 
+
+const categoryCatalog = [
+  { id: 'cat-comida', name: 'Comida', key: 'comida', type: 'expense' as const, subcategories: [{ id: 'sub-oxxo', name: 'Oxxo', key: 'oxxo' }] },
+  { id: 'cat-ingreso-extra', name: 'Ingreso extra', key: 'ingreso_extra', type: 'income' as const, subcategories: [{ id: 'sub-prime', name: 'PrimeIPTV', key: 'prime_iptv' }] },
+  { id: 'cat-transporte', name: 'Transporte', key: 'transporte', type: 'expense' as const, subcategories: [] }
+];
+
 function buildIntent(partial: Partial<TransactionIntent>): TransactionIntent {
   return transactionIntentSchema.parse({
     rawText: 'movimiento',
@@ -61,6 +68,7 @@ describe('ConversationalRegistration follow-up sync', () => {
         hasHousehold
         accounts={[{ id: 'acc-tdc', name: 'TDC BBVA', type: 'loan' }]}
         initialIntent={resolvedIntent}
+        categoryCatalog={categoryCatalog}
       />
     );
 
@@ -86,6 +94,7 @@ describe('ConversationalRegistration follow-up sync', () => {
         hasHousehold
         accounts={[{ id: 'acc-tdc', name: 'TDC BBVA', type: 'credit_card' }]}
         initialIntent={unresolvedIntent}
+        categoryCatalog={categoryCatalog}
       />
     );
 
@@ -111,6 +120,7 @@ describe('ConversationalRegistration follow-up sync', () => {
           { id: 'acc-card', name: 'TDC SEARS', type: 'credit_card' }
         ]}
         initialIntent={unresolvedIntent}
+        categoryCatalog={categoryCatalog}
       />
     );
 
@@ -118,7 +128,7 @@ describe('ConversationalRegistration follow-up sync', () => {
     expect(html).toContain('<option value="TDC SEARS">TDC SEARS</option>');
   });
 
-  it('shows visual confirmation for a custom category in preview', () => {
+  it('shows warning for a suggested category that is not in the catalog', () => {
     const batch = {
       mode: 'batch' as const,
       items: [
@@ -133,11 +143,12 @@ describe('ConversationalRegistration follow-up sync', () => {
         hasHousehold
         accounts={[{ id: 'acc-ef', name: 'Efectivo', type: 'operational_cash' }]}
         initialInterpretation={batch}
+        categoryCatalog={categoryCatalog}
       />
     );
 
-    expect(html).toContain('Nueva categoría: Gasto escolar');
-    expect(html).toContain('value="gasto_escolar"');
+    expect(html).toContain('La categoría sugerida no existe en tu catálogo.');
+    expect(html).toContain('Selecciona una categoría');
   });
 
 });
@@ -160,6 +171,7 @@ describe('ConversationalRegistration batch category preview', () => {
         hasHousehold
         accounts={[{ id: 'acc-tdd', name: 'TDD BBVA', type: 'operational_cash' }]}
         initialInterpretation={batch}
+        categoryCatalog={categoryCatalog}
       />
     );
 
@@ -167,6 +179,6 @@ describe('ConversationalRegistration batch category preview', () => {
     expect(html.match(/Categoría/g)?.length).toBeGreaterThanOrEqual(2);
     expect(html).toContain('<option value="comida" selected="">Comida</option>');
     expect(html).toContain('<option value="ingreso_extra" selected="">Ingreso extra</option>');
-    expect(html).toContain('Nueva categoría...');
+    expect(html).not.toContain('Nueva categoría...');
   });
 });

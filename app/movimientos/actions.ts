@@ -13,6 +13,7 @@ export async function updateMovementAction(payload: unknown) {
   revalidatePath('/dashboard');
   revalidatePath('/movimientos');
   revalidatePath('/cuentas');
+  revalidatePath('/proyeccion');
 
   return {
     success: true,

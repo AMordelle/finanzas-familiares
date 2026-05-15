@@ -1,7 +1,6 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { resolveCategoryInput } from '@/lib/ai/semanticCategory';
 import {
   applyFollowUpAnswer,
   batchTransactionInterpretationSchema,
@@ -9,7 +8,7 @@ import {
   interpretTransactions,
   transactionIntentSchema
 } from '@/lib/ai/transactionInterpreter';
-import { getAccountsForRegistration, saveConversationalTransaction, saveConversationalTransactionBatch } from '@/lib/db/queries';
+import { getAccountsForRegistration, getDefaultHouseholdId, saveConversationalTransaction, saveConversationalTransactionBatch, validateCategorySelection } from '@/lib/db/queries';
 
 export async function getRegistrationAccountsAction() {
   return getAccountsForRegistration();
@@ -28,16 +27,15 @@ export async function applyFollowUpAnswerAction(current: unknown, answer: string
 
 export async function saveInterpretedTransactionAction(payload: unknown) {
   const parsedIntent = transactionIntentSchema.parse(payload);
-  const categoryOverride = extractCategoryOverride(payload);
-  const subcategoryOverride = extractSubcategoryOverride(payload);
-  const intentPayload = {
+  const householdId = await requireActiveHouseholdForCatalog();
+  const selectedCategory = extractCategoryOverride(payload) ?? parsedIntent.category;
+  const selectedSubcategory = extractSubcategoryOverride(payload) ?? parsedIntent.subcategory ?? null;
+  const validated = await validateCategorySelection(householdId, selectedCategory ?? '', selectedSubcategory);
+  const intent = enforceFinancialConsistency({
     ...parsedIntent,
-    category: categoryOverride ?? parsedIntent.category
-  };
-  if (subcategoryOverride !== null || parsedIntent.subcategory) {
-    Object.assign(intentPayload, { subcategory: subcategoryOverride ?? parsedIntent.subcategory });
-  }
-  const intent = enforceFinancialConsistency(intentPayload);
+    category: validated.categoryKey,
+    subcategory: validated.subcategoryKey
+  });
 
   await saveConversationalTransaction(intent, {
     happenedAt: resolveMovementDate(payload)
@@ -57,15 +55,15 @@ export async function saveInterpretedTransactionBatchAction(payload: unknown) {
     throw new Error(`Hay ${parsedBatch.items.length - incompleteItems.length} movimientos listos y ${incompleteItems.length} necesita aclaración. Corrige el texto y vuelve a interpretarlo.`);
   }
 
-  const intents = parsedBatch.items.map((item, index) => {
-    const intentPayload = {
+  const householdId = await requireActiveHouseholdForCatalog();
+  const intents = await Promise.all(parsedBatch.items.map(async (item) => {
+    const validated = await validateCategorySelection(householdId, item.category ?? '', item.subcategory ?? null);
+    return enforceFinancialConsistency({
       ...item,
-      category: resolvePayloadCategory(item.category, `movimiento ${index + 1}`)
-    };
-    const subcategory = resolveOptionalPayloadSubcategory(item.subcategory, `movimiento ${index + 1}`);
-    if (subcategory) Object.assign(intentPayload, { subcategory });
-    return enforceFinancialConsistency(intentPayload);
-  });
+      category: validated.categoryKey,
+      subcategory: validated.subcategoryKey
+    });
+  }));
   await saveConversationalTransactionBatch(intents, {
     happenedAt: resolveMovementDate(payload)
   });
@@ -83,6 +81,13 @@ function revalidateRegistrationPaths() {
   revalidatePath('/cuentas');
   revalidatePath('/registro');
   revalidatePath('/msi');
+  revalidatePath('/proyeccion');
+}
+
+async function requireActiveHouseholdForCatalog() {
+  const householdId = await getDefaultHouseholdId();
+  if (!householdId) throw new Error('No existe un hogar configurado para validar categorías.');
+  return householdId;
 }
 
 function resolveMovementDate(payload: unknown) {
@@ -109,32 +114,13 @@ function extractCategoryOverride(payload: unknown) {
   if (!payload || typeof payload !== 'object') return null;
   const override = (payload as Record<string, unknown>).categoryOverride;
   if (typeof override !== 'string') return null;
-  return resolvePayloadCategory(override, 'movimiento');
+  return override;
 }
-
-function resolvePayloadCategory(category: unknown, label: string) {
-  if (typeof category !== 'string') {
-    throw new Error(`La categoría del ${label} no puede estar vacía.`);
-  }
-  const resolved = resolveCategoryInput(category);
-  if (resolved.error || !resolved.value) {
-    throw new Error(`${resolved.error ?? 'Categoría inválida'} (${label}).`);
-  }
-  return resolved.value;
-}
-
 
 function extractSubcategoryOverride(payload: unknown) {
   if (!payload || typeof payload !== 'object') return null;
   const override = (payload as Record<string, unknown>).subcategoryOverride;
-  return resolveOptionalPayloadSubcategory(override, 'movimiento');
-}
-
-function resolveOptionalPayloadSubcategory(subcategory: unknown, label: string) {
-  if (subcategory === undefined || subcategory === null) return null;
-  if (typeof subcategory !== 'string') throw new Error(`La subcategoría del ${label} no es válida.`);
-  if (!subcategory.trim()) return null;
-  const resolved = resolveCategoryInput(subcategory);
-  if (resolved.error || !resolved.value) throw new Error(`${resolved.error ?? 'Subcategoría inválida'} (${label}).`);
-  return resolved.value;
+  if (override === undefined || override === null) return null;
+  if (typeof override !== 'string') throw new Error('La subcategoría del movimiento no es válida.');
+  return override.trim() ? override : null;
 }

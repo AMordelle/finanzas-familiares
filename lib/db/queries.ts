@@ -18,7 +18,6 @@ import { getPriorityDiagnostics, type PriorityDiagnostic } from '@/lib/finance/p
 import { buildHouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
 import type { HouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
 import { transactionIntentSchema, type TransactionIntent } from '@/lib/ai/transactionInterpreter';
-import { resolveCategoryInput } from '@/lib/ai/semanticCategory';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
 
 const DEV_FALLBACK_PROFILE_ID = '00000000-0000-4000-8000-000000000001';
@@ -144,9 +143,24 @@ export type ManagedAccount = AccountOption & {
   displayOrder: number | null;
 };
 
+export type FinancialCategoryCatalogSubcategory = {
+  id: string;
+  name: string;
+  key: string;
+};
+
+export type FinancialCategoryCatalogItem = {
+  id: string;
+  name: string;
+  key: string;
+  type: 'income' | 'expense' | 'both';
+  subcategories: FinancialCategoryCatalogSubcategory[];
+};
+
 export type RegistrationSetupStatus = {
   hasHousehold: boolean;
   accounts: AccountOption[];
+  categoryCatalog: FinancialCategoryCatalogItem[];
 };
 
 export type MovementHistoryItem = {
@@ -1428,15 +1442,20 @@ export async function getRegistrationSetupStatus(client: SupabaseClientLike = su
     logDebug('Registro setup fallback', { reason: 'no_household' });
     return {
       hasHousehold: false,
-      accounts: []
+      accounts: [],
+      categoryCatalog: []
     };
   }
 
-  const accounts = await getAccountsForRegistration(client);
-  logDebug('Registro setup', { householdId, accountCount: accounts.length, readMode: 'db_result' });
+  const [accounts, categoryCatalog] = await Promise.all([
+    getAccountsForRegistration(client),
+    getFinancialCategoryCatalog(householdId, client)
+  ]);
+  logDebug('Registro setup', { householdId, accountCount: accounts.length, categoryCount: categoryCatalog.length, readMode: 'db_result' });
   return {
     hasHousehold: true,
-    accounts
+    accounts,
+    categoryCatalog
   };
 }
 
@@ -2745,13 +2764,11 @@ export async function updateMovement(rawInput: unknown) {
   const input = movementEditSchema.parse(rawInput);
   const { group, lines, descriptor: previousMovement } = await getStoredMovementForEdition(householdId, input.movementId);
 
-  const categoryResolution = input.category ? resolveCategoryInput(input.category) : null;
-  if (categoryResolution?.error || categoryResolution?.value === null) {
-    throw new Error(categoryResolution?.error ?? 'La categoría principal no es válida.');
-  }
-  const subcategory = input.subcategory === null || input.subcategory === undefined || input.subcategory.trim() === ''
-    ? null
-    : normalizeAndValidateRequiredKey(input.subcategory, 'La subcategoría');
+  const categorySelection = input.category
+    ? await validateCategorySelection(householdId, input.category, input.subcategory)
+    : null;
+  const nextCategory = categorySelection?.categoryKey ?? null;
+  const subcategory = categorySelection?.subcategoryKey ?? null;
 
   const sourceAccountId = input.sourceAccountId ?? previousMovement.sourceAccountId;
   const destinationAccountId = input.destinationAccountId ?? previousMovement.destinationAccountId;
@@ -2790,8 +2807,8 @@ export async function updateMovement(rawInput: unknown) {
       .from('transactions')
       .update({
         account_id: nextAccountId ?? null,
-        category: categoryResolution?.value && line.category !== 'entrada_cuenta' && line.category !== 'salida_cuenta' ? categoryResolution.value : line.category,
-        subcategory: categoryResolution?.value && line.category !== 'entrada_cuenta' && line.category !== 'salida_cuenta' ? subcategory : null,
+        category: nextCategory && line.category !== 'entrada_cuenta' && line.category !== 'salida_cuenta' ? nextCategory : line.category,
+        subcategory: nextCategory && line.category !== 'entrada_cuenta' && line.category !== 'salida_cuenta' ? subcategory : null,
         amount: input.amount.toFixed(2)
       })
       .eq('id', line.id)
@@ -3466,6 +3483,71 @@ function mapProjectionColumn(row: ProjectionColumnRow, categories: ProjectionCol
     categoryIds: categories.map((category) => category.id),
     categories
   };
+}
+
+
+export async function getFinancialCategoryCatalog(householdId?: string | null, client: SupabaseClientLike = supabaseAdmin): Promise<FinancialCategoryCatalogItem[]> {
+  const resolvedHouseholdId = householdId ?? await getDefaultHouseholdId(client);
+  if (!resolvedHouseholdId) return [];
+
+  const [categoriesResult, subcategoriesResult] = await Promise.all([
+    client
+      .from('financial_categories')
+      .select('id,household_id,name,key,type,is_active,created_at,updated_at')
+      .eq('household_id', resolvedHouseholdId)
+      .eq('is_active', true)
+      .order('name', { ascending: true }),
+    client
+      .from('financial_subcategories')
+      .select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at')
+      .eq('household_id', resolvedHouseholdId)
+      .eq('is_active', true)
+      .order('name', { ascending: true })
+  ]);
+
+  if (categoriesResult.error) throw new Error(`No fue posible leer categorías activas: ${categoriesResult.error.message}`);
+  if (subcategoriesResult.error) throw new Error(`No fue posible leer subcategorías activas: ${subcategoriesResult.error.message}`);
+
+  const subcategoriesByCategory = ((subcategoriesResult.data ?? []) as FinancialSubcategoryRow[])
+    .reduce<Record<string, FinancialCategoryCatalogSubcategory[]>>((acc, row) => {
+      acc[row.financial_category_id] = [...(acc[row.financial_category_id] ?? []), { id: row.id, name: row.name, key: row.key }];
+      return acc;
+    }, {});
+
+  return ((categoriesResult.data ?? []) as FinancialCategoryRow[]).map((row) => ({
+    id: row.id,
+    name: row.name,
+    key: row.key,
+    type: row.type,
+    subcategories: subcategoriesByCategory[row.id] ?? []
+  }));
+}
+
+export async function validateCategorySelection(
+  householdId: string,
+  categoryKey: string,
+  subcategoryKey?: string | null,
+  client: SupabaseClientLike = supabaseAdmin
+) {
+  const normalizedCategoryKey = normalizeAndValidateRequiredKey(categoryKey, 'La categoría');
+  const normalizedSubcategoryKey = normalizeAndValidateOptionalKey(subcategoryKey, 'La subcategoría');
+  const catalog = await getFinancialCategoryCatalog(householdId, client);
+  const category = catalog.find((item) => item.key === normalizedCategoryKey);
+
+  if (!category) {
+    throw new Error('La categoría seleccionada no existe o está inactiva en este hogar. Créala o actívala en Configuración.');
+  }
+
+  if (!normalizedSubcategoryKey) {
+    return { categoryKey: category.key, subcategoryKey: null, category };
+  }
+
+  const subcategory = category.subcategories.find((item) => item.key === normalizedSubcategoryKey);
+  if (!subcategory) {
+    throw new Error('La subcategoría seleccionada no existe, está inactiva o no pertenece a la categoría elegida.');
+  }
+
+  return { categoryKey: category.key, subcategoryKey: subcategory.key, category, subcategory };
 }
 
 async function resolveInputHouseholdId(inputHouseholdId: string | undefined, client: SupabaseClientLike) {
