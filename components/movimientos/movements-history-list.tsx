@@ -7,7 +7,7 @@ import { Card } from '@/components/ui/card';
 import type { AccountOption, MovementHistoryItem } from '@/lib/db/queries';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
 import { deleteMovementAction, updateMovementAction } from '@/app/movimientos/actions';
-import { applyQuickFilter, buildDynamicSummary, filterMovements, inferCategories, type MovementFilters } from '@/lib/movements/filters';
+import { applyQuickFilter, buildDynamicSummary, filterMovements, inferCategories, type MovementFilters, type QuickFilter } from '@/lib/movements/filters';
 
 type Props = {
   movements: MovementHistoryItem[];
@@ -165,7 +165,7 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
             )}
           </div>
         )}
-        <div className="mt-2 flex flex-wrap gap-2">{['gastos_hormiga','gastos_fuertes','deuda','sin_clasificar','negocio_operacion'].map((q)=><Button key={q} variant="outline" onClick={()=>setFilters((p)=>applyQuickFilter(q as any,p))}>{q}</Button>)}<Button variant="outline" onClick={()=>setFilters(defaultFilters)}>Limpiar filtros</Button></div>
+        <div className="mt-2 flex flex-wrap gap-2">{(['gastos_hormiga','gastos_fuertes','deuda','sin_clasificar','negocio_operacion'] as QuickFilter[]).map((q)=><Button key={q} variant="outline" onClick={()=>setFilters((p)=>applyQuickFilter(q,p))}>{q}</Button>)}<Button variant="outline" onClick={()=>setFilters(defaultFilters)}>Limpiar filtros</Button></div>
         <div className="mt-2 space-y-1 text-xs text-slate-700">
           <p className="font-medium">{hasActiveFilters ? 'Resumen del filtro aplicado' : 'Resumen del historial visible'}</p>
           <p>Total de movimientos: {summary.count}</p>
@@ -225,6 +225,10 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
                       <p>
                         <span className="font-semibold">Categoría:</span>{' '}
                         <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{movement.categoria}</span>
+                      </p>
+                      <p>
+                        <span className="font-semibold">Subcategoría:</span>{' '}
+                        <span className="inline-flex rounded-full bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-600">{movement.subcategoria ?? 'Sin subcategoría'}</span>
                       </p>
                     </div>
 
@@ -309,10 +313,12 @@ function EditMovementForm({
   accounts: AccountOption[];
   disabled: boolean;
   onCancel: () => void;
-  onSubmit: (payload: { movementId: string; description: string; amount: number; sourceAccountId: string | null; destinationAccountId: string | null }) => void;
+  onSubmit: (payload: { movementId: string; description: string; amount: number; sourceAccountId: string | null; destinationAccountId: string | null; category: string; subcategory: string | null }) => void;
 }) {
   const [description, setDescription] = useState(movement.descripcion);
   const [amount, setAmount] = useState(String(movement.monto));
+  const [category, setCategory] = useState(movement.categoria);
+  const [subcategory, setSubcategory] = useState(movement.subcategoria ?? '');
 
   const sourceAccountId = accounts.find((account) => account.name === movement.cuentaOrigen)?.id ?? '';
   const destinationAccountId = accounts.find((account) => account.name === movement.cuentaDestino)?.id ?? '';
@@ -330,7 +336,9 @@ function EditMovementForm({
           description,
           amount: Number(amount),
           sourceAccountId: source || null,
-          destinationAccountId: destination || null
+          destinationAccountId: destination || null,
+          category,
+          subcategory: subcategory.trim() || null
         });
       }}
     >
@@ -342,6 +350,14 @@ function EditMovementForm({
       <label className="block text-sm text-slate-700">
         Monto
         <input className="mt-1 w-full rounded-md border border-slate-300 p-2" type="number" step="0.01" min="0" value={amount} onChange={(event) => setAmount(event.target.value)} disabled={disabled} />
+      </label>
+      <label className="block text-sm text-slate-700">
+        Categoría principal
+        <input className="mt-1 w-full rounded-md border border-slate-300 p-2" value={category} onChange={(event) => { setCategory(event.target.value); setSubcategory(''); }} disabled={disabled} />
+      </label>
+      <label className="block text-sm text-slate-700">
+        Subcategoría opcional
+        <input className="mt-1 w-full rounded-md border border-slate-300 p-2" value={subcategory} onChange={(event) => setSubcategory(event.target.value)} disabled={disabled} />
       </label>
       <label className="block text-sm text-slate-700">
         Cuenta origen

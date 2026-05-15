@@ -26,7 +26,9 @@ export function normalizeType(value: string) {
   return n;
 }
 
-export function applyQuickFilter(kind: 'gastos_hormiga'|'gastos_fuertes'|'deuda'|'sin_clasificar'|'negocio_operacion', base: MovementFilters): MovementFilters {
+export type QuickFilter = 'gastos_hormiga'|'gastos_fuertes'|'deuda'|'sin_clasificar'|'negocio_operacion';
+
+export function applyQuickFilter(kind: QuickFilter, base: MovementFilters): MovementFilters {
   if (kind === 'gastos_hormiga') return { ...base, type: 'gasto', amountFilter: 'custom', customAmountMin: 0, customAmountMax: 150, dateFilter: 'this_month' };
   if (kind === 'gastos_fuertes') return { ...base, amountFilter: 'gt_1000' };
   if (kind === 'deuda') return { ...base, type: 'pago_deuda' };

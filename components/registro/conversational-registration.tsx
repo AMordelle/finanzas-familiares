@@ -41,6 +41,13 @@ function buildInitialCategoryInputs(interpretation: BatchTransactionInterpretati
   }, {});
 }
 
+function buildInitialSubcategoryInputs(interpretation: BatchTransactionInterpretation | null) {
+  return (interpretation?.items ?? []).reduce<Record<number, string>>((acc, item, index) => {
+    acc[index] = item.subcategory ?? '';
+    return acc;
+  }, {});
+}
+
 function buildInitialCategoryModes(interpretation: BatchTransactionInterpretation | null) {
   return (interpretation?.items ?? []).reduce<Record<number, 'existing' | 'custom'>>((acc, item, index) => {
     acc[index] = item.category && !APPROVED_CATEGORY_CATALOG.includes(item.category as never) ? 'custom' : 'existing';
@@ -58,6 +65,7 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
   const [isManualCategoryOverride, setIsManualCategoryOverride] = useState(false);
   const [categoryInputs, setCategoryInputs] = useState<Record<number, string>>(() => buildInitialCategoryInputs(initialRegistrationInterpretation));
   const [categoryModes, setCategoryModes] = useState<Record<number, 'existing' | 'custom'>>(() => buildInitialCategoryModes(initialRegistrationInterpretation));
+  const [subcategoryInputs, setSubcategoryInputs] = useState<Record<number, string>>(() => buildInitialSubcategoryInputs(initialRegistrationInterpretation));
   const [followUpValue, setFollowUpValue] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -69,11 +77,13 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
     if (!interpretation) {
       setCategoryInputs({});
       setCategoryModes({});
+      setSubcategoryInputs({});
       return;
     }
 
     setCategoryInputs(buildInitialCategoryInputs(interpretation));
     setCategoryModes(buildInitialCategoryModes(interpretation));
+    setSubcategoryInputs(buildInitialSubcategoryInputs(interpretation));
 
     const firstItem = interpretation.items[0];
     if (!firstItem?.category || interpretation.mode === 'batch') return;
@@ -152,6 +162,10 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
     }
   };
 
+  const updateSubcategoryInput = (index: number, value: string) => {
+    setSubcategoryInputs((current) => ({ ...current, [index]: value }));
+  };
+
   const getFinalCategory = (index: number) => {
     const rawCategory = categoryInputs[index] ?? interpretation?.items[index]?.category ?? 'otros_gastos';
     return resolveCategoryInput(rawCategory);
@@ -164,7 +178,12 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
       if (resolved.error || !resolved.value) {
         throw new Error(`${resolved.error ?? 'Categoría inválida'} Movimiento ${index + 1}.`);
       }
-      return { ...item, category: resolved.value };
+      const rawSubcategory = subcategoryInputs[index] ?? item.subcategory ?? '';
+      const resolvedSubcategory = rawSubcategory.trim() ? resolveCategoryInput(rawSubcategory) : { value: null, error: null };
+      if (resolvedSubcategory.error) {
+        throw new Error(`${resolvedSubcategory.error} Subcategoría movimiento ${index + 1}.`);
+      }
+      return { ...item, category: resolved.value, subcategory: resolvedSubcategory.value ?? null };
     });
     return { ...interpretation, items: finalItems };
   };
@@ -198,7 +217,8 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
           : await saveInterpretedTransactionAction({
             ...finalInterpretation.items[0],
             movementDate,
-            categoryOverride: getFinalCategory(0).value ?? undefined
+            categoryOverride: getFinalCategory(0).value ?? undefined,
+            subcategoryOverride: subcategoryInputs[0] ?? undefined
           });
         setInput('');
         setInterpretation(null);
@@ -207,6 +227,7 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
         setIsManualCategoryOverride(false);
         setCategoryInputs({});
         setCategoryModes({});
+        setSubcategoryInputs({});
         setIsCustomDatePickerOpen(false);
         setSuccessMessage(result.message);
         router.refresh();
@@ -283,6 +304,7 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
                   onModeChange={updateCategoryMode}
                   onValueChange={updateCategoryInput}
                 />
+                <SubcategoryEditor index={index} value={subcategoryInputs[index] ?? item.subcategory ?? ''} onValueChange={updateSubcategoryInput} />
               </li>
             ))}
           </ol>
@@ -295,7 +317,7 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
           {isCustomDatePickerOpen && <input className="mt-2 w-full rounded-md border border-slate-300 bg-white p-2 text-sm" type="date" value={movementDate} max={toDateInputValue(new Date())} onChange={(event) => setMovementDate(event.target.value)} />}
           <div className="mt-4 flex gap-2">
             <Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Guardar movimientos'}</Button>
-            <Button variant="outline" onClick={() => { setInterpretation(null); setMovementDate(toDateInputValue(new Date())); setCategoryInputs({}); setCategoryModes({}); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
+            <Button variant="outline" onClick={() => { setInterpretation(null); setMovementDate(toDateInputValue(new Date())); setCategoryInputs({}); setCategoryModes({}); setSubcategoryInputs({}); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
           </div>
         </div>
       )}
@@ -320,6 +342,7 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
               <span className="font-medium">{displayedCategory}</span>
               <span className="text-xs text-slate-500">({isManualCategoryOverride ? 'Manual' : 'IA'})</span>
             </li>
+            <li>Subcategoría: {subcategoryInputs[0] || activeIntent.subcategory || 'Sin subcategoría'}</li>
           </ul>
 
           <CategoryEditor
@@ -329,6 +352,7 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
             onModeChange={updateCategoryMode}
             onValueChange={updateCategoryInput}
           />
+          <SubcategoryEditor index={0} value={subcategoryInputs[0] ?? activeIntent.subcategory ?? ''} onValueChange={updateSubcategoryInput} />
 
           <li className="mt-3 list-none pt-2 text-sm text-slate-900">Fecha del movimiento: <span className="font-medium">{formatMovementDateLabel(movementDate)}</span></li>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -340,7 +364,7 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
           <p className="mt-3 text-sm font-medium text-slate-900">{activeIntent.humanConfirmation}</p>
           <div className="mt-4 flex gap-2">
             <Button onClick={handleSave} disabled={isPending}>{isPending ? 'Guardando...' : 'Confirmar'}</Button>
-            <Button variant="outline" onClick={() => { setInterpretation(null); setMovementDate(toDateInputValue(new Date())); setSelectedCategory(APPROVED_CATEGORY_CATALOG[0]); setIsManualCategoryOverride(false); setCategoryInputs({}); setCategoryModes({}); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
+            <Button variant="outline" onClick={() => { setInterpretation(null); setMovementDate(toDateInputValue(new Date())); setSelectedCategory(APPROVED_CATEGORY_CATALOG[0]); setIsManualCategoryOverride(false); setCategoryInputs({}); setCategoryModes({}); setSubcategoryInputs({}); setIsCustomDatePickerOpen(false); }} disabled={isPending}>Cancelar</Button>
           </div>
         </div>
       )}
@@ -350,6 +374,16 @@ export function ConversationalRegistration({ accounts, hasHousehold, initialInte
   );
 }
 
+
+function SubcategoryEditor({ index, value, onValueChange }: { index: number; value: string; onValueChange: (index: number, value: string) => void }) {
+  return (
+    <label className="mt-3 block text-sm text-slate-700">
+      Subcategoría opcional
+      <input className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm" value={value} onChange={(event) => onValueChange(index, event.target.value)} placeholder="Ej. Oxxo, Prime IPTV, Gasolina" />
+      <span className="mt-1 block text-xs text-slate-500">Se normaliza al guardar; no alimenta columnas de Proyección.</span>
+    </label>
+  );
+}
 
 type CategoryEditorProps = {
   index: number;

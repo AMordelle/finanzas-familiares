@@ -1,5 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
-import { boolean, check, date, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, date, integer, jsonb, numeric, pgEnum, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core';
 
 export const accountTypeEnum = pgEnum('account_type', [
   'operativa',
@@ -84,9 +84,64 @@ export const transactions = pgTable('transactions', {
   accountId: uuid('account_id').references(() => accounts.id),
   type: text('type').notNull(),
   category: text('category').notNull(),
+  subcategory: text('subcategory'),
   amount: numeric('amount', { precision: 14, scale: 2 }).notNull(),
   happenedAt: timestamp('happened_at').defaultNow().notNull()
 });
+
+
+export const financialCategories = pgTable('financial_categories', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').references(() => households.id).notNull(),
+  name: text('name').notNull(),
+  key: text('key').notNull(),
+  type: text('type').notNull(),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull()
+}, (table) => ({
+  householdKeyUnique: uniqueIndex('financial_categories_household_key_unique').on(table.householdId, table.key),
+  typeCheck: check('financial_categories_type_check', sql`${table.type} IN ('income', 'expense', 'both')`)
+}));
+
+export const financialSubcategories = pgTable('financial_subcategories', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').references(() => households.id).notNull(),
+  financialCategoryId: uuid('financial_category_id').references(() => financialCategories.id).notNull(),
+  name: text('name').notNull(),
+  key: text('key').notNull(),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull()
+}, (table) => ({
+  categoryKeyUnique: uniqueIndex('financial_subcategories_category_key_unique').on(table.householdId, table.financialCategoryId, table.key)
+}));
+
+export const projectionColumns = pgTable('projection_columns', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').references(() => households.id).notNull(),
+  name: text('name').notNull(),
+  key: text('key').notNull(),
+  type: text('type').notNull(),
+  description: text('description'),
+  displayOrder: integer('display_order').notNull().default(0),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull()
+}, (table) => ({
+  householdKeyUnique: uniqueIndex('projection_columns_household_key_unique').on(table.householdId, table.key),
+  typeCheck: check('projection_columns_type_check', sql`${table.type} IN ('income', 'expense')`)
+}));
+
+export const projectionColumnCategories = pgTable('projection_column_categories', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').references(() => households.id).notNull(),
+  projectionColumnId: uuid('projection_column_id').references(() => projectionColumns.id).notNull(),
+  financialCategoryId: uuid('financial_category_id').references(() => financialCategories.id).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull()
+}, (table) => ({
+  assignmentUnique: uniqueIndex('projection_column_categories_assignment_unique').on(table.householdId, table.projectionColumnId, table.financialCategoryId)
+}));
 
 export const receivables = pgTable('receivables', {
   id: uuid('id').primaryKey().defaultRandom(),

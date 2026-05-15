@@ -29,10 +29,15 @@ export async function applyFollowUpAnswerAction(current: unknown, answer: string
 export async function saveInterpretedTransactionAction(payload: unknown) {
   const parsedIntent = transactionIntentSchema.parse(payload);
   const categoryOverride = extractCategoryOverride(payload);
-  const intent = enforceFinancialConsistency({
+  const subcategoryOverride = extractSubcategoryOverride(payload);
+  const intentPayload = {
     ...parsedIntent,
     category: categoryOverride ?? parsedIntent.category
-  });
+  };
+  if (subcategoryOverride !== null || parsedIntent.subcategory) {
+    Object.assign(intentPayload, { subcategory: subcategoryOverride ?? parsedIntent.subcategory });
+  }
+  const intent = enforceFinancialConsistency(intentPayload);
 
   await saveConversationalTransaction(intent, {
     happenedAt: resolveMovementDate(payload)
@@ -52,10 +57,15 @@ export async function saveInterpretedTransactionBatchAction(payload: unknown) {
     throw new Error(`Hay ${parsedBatch.items.length - incompleteItems.length} movimientos listos y ${incompleteItems.length} necesita aclaración. Corrige el texto y vuelve a interpretarlo.`);
   }
 
-  const intents = parsedBatch.items.map((item, index) => enforceFinancialConsistency({
-    ...item,
-    category: resolvePayloadCategory(item.category, `movimiento ${index + 1}`)
-  }));
+  const intents = parsedBatch.items.map((item, index) => {
+    const intentPayload = {
+      ...item,
+      category: resolvePayloadCategory(item.category, `movimiento ${index + 1}`)
+    };
+    const subcategory = resolveOptionalPayloadSubcategory(item.subcategory, `movimiento ${index + 1}`);
+    if (subcategory) Object.assign(intentPayload, { subcategory });
+    return enforceFinancialConsistency(intentPayload);
+  });
   await saveConversationalTransactionBatch(intents, {
     happenedAt: resolveMovementDate(payload)
   });
@@ -110,5 +120,21 @@ function resolvePayloadCategory(category: unknown, label: string) {
   if (resolved.error || !resolved.value) {
     throw new Error(`${resolved.error ?? 'Categoría inválida'} (${label}).`);
   }
+  return resolved.value;
+}
+
+
+function extractSubcategoryOverride(payload: unknown) {
+  if (!payload || typeof payload !== 'object') return null;
+  const override = (payload as Record<string, unknown>).subcategoryOverride;
+  return resolveOptionalPayloadSubcategory(override, 'movimiento');
+}
+
+function resolveOptionalPayloadSubcategory(subcategory: unknown, label: string) {
+  if (subcategory === undefined || subcategory === null) return null;
+  if (typeof subcategory !== 'string') throw new Error(`La subcategoría del ${label} no es válida.`);
+  if (!subcategory.trim()) return null;
+  const resolved = resolveCategoryInput(subcategory);
+  if (resolved.error || !resolved.value) throw new Error(`${resolved.error ?? 'Subcategoría inválida'} (${label}).`);
   return resolved.value;
 }

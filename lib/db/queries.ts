@@ -18,6 +18,7 @@ import { getPriorityDiagnostics, type PriorityDiagnostic } from '@/lib/finance/p
 import { buildHouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
 import type { HouseholdRecommendationContext } from '@/lib/finance/recommendationContext';
 import { transactionIntentSchema, type TransactionIntent } from '@/lib/ai/transactionInterpreter';
+import { resolveCategoryInput } from '@/lib/ai/semanticCategory';
 import { buildInitialIndicators, onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
 
 const DEV_FALLBACK_PROFILE_ID = '00000000-0000-4000-8000-000000000001';
@@ -39,7 +40,9 @@ export const movementEditSchema = z.object({
   description: z.string().trim().min(1, 'La descripción es obligatoria.'),
   amount: z.coerce.number().positive('El monto debe ser mayor a 0.'),
   sourceAccountId: z.string().min(1).nullable().optional(),
-  destinationAccountId: z.string().min(1).nullable().optional()
+  destinationAccountId: z.string().min(1).nullable().optional(),
+  category: z.string().trim().min(1, 'La categoría principal es obligatoria.').max(80).optional(),
+  subcategory: z.string().trim().max(80).nullable().optional()
 });
 
 export const movementDeleteSchema = z.object({
@@ -151,6 +154,7 @@ export type MovementHistoryItem = {
   fecha: string;
   tipoMovimiento: string;
   categoria: string;
+  subcategoria?: string | null;
   descripcion: string;
   monto: number;
   cuentaOrigen: string | null;
@@ -1582,7 +1586,7 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
   const groupIds = groups.map((group) => group.id);
   const { data: txData } = await client
     .from('transactions')
-    .select('id,group_id,account_id,type,category,amount,happened_at')
+    .select('id,group_id,account_id,type,category,subcategory,amount,happened_at')
     .in('group_id', groupIds);
 
   const transactions = (txData ?? []) as Array<{
@@ -1591,6 +1595,7 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
     account_id: string | null;
     type: string;
     category: string;
+    subcategory?: string | null;
     amount: string;
     happened_at?: string;
   }>;
@@ -1619,11 +1624,15 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
       householdAccounts
     });
 
+    const displayCategory = inferSemanticMovementCategory(action, lines);
+    const displaySubcategory = lines.find((tx) => tx.category === displayCategory && tx.subcategory)?.subcategory ?? null;
+
     return {
       id: group.id,
       fecha: happenedAt,
       tipoMovimiento: inferMovementType(lines),
-      categoria: inferSemanticMovementCategory(action, lines),
+      categoria: displayCategory,
+      subcategoria: displaySubcategory,
       descripcion: group.note?.trim() ? group.note : 'Movimiento sin descripción',
       monto: Number(debitLine?.amount ?? creditLine?.amount ?? 0),
       cuentaOrigen: reconstructedAccounts.sourceAccountName,
@@ -2215,7 +2224,7 @@ async function buildFinancialClosurePayload(input: FinancialClosureCalculationIn
   const { data: transactionsData, error: transactionsError } = groupIds.length
     ? await client
       .from('transactions')
-      .select('id,group_id,account_id,type,category,amount,happened_at')
+      .select('id,group_id,account_id,type,category,subcategory,amount,happened_at')
       .in('group_id', groupIds)
       .gte('happened_at', start)
     : { data: [] as ClosureTransactionLine[], error: null };
@@ -2538,6 +2547,7 @@ export async function saveConversationalTransaction(
     account_id: line.accountId,
     type: line.type,
     category: line.category,
+    subcategory: line.category === movementIntent.category ? movementIntent.subcategory ?? null : null,
     amount: line.amount.toFixed(2),
     happened_at: happenedAt
   }));
@@ -2657,6 +2667,7 @@ export async function saveConversationalTransactionBatch(
         account_id: line.accountId,
         type: line.type,
         category: line.category,
+        subcategory: line.category === intent.category ? intent.subcategory ?? null : null,
         amount: line.amount.toFixed(2),
         happened_at: happenedAt
       }));
@@ -2696,7 +2707,7 @@ async function getStoredMovementForEdition(householdId: string, movementId: stri
 
   const { data: txData, error: txError } = await supabaseAdmin
     .from('transactions')
-    .select('id,group_id,account_id,type,category,amount')
+    .select('id,group_id,account_id,type,category,subcategory,amount')
     .eq('group_id', group.id);
 
   if (txError) {
@@ -2709,6 +2720,7 @@ async function getStoredMovementForEdition(householdId: string, movementId: stri
     account_id: string | null;
     type: string;
     category: string;
+    subcategory?: string | null;
     amount: string;
   }>;
 
@@ -2732,6 +2744,14 @@ export async function updateMovement(rawInput: unknown) {
 
   const input = movementEditSchema.parse(rawInput);
   const { group, lines, descriptor: previousMovement } = await getStoredMovementForEdition(householdId, input.movementId);
+
+  const categoryResolution = input.category ? resolveCategoryInput(input.category) : null;
+  if (categoryResolution?.error || categoryResolution?.value === null) {
+    throw new Error(categoryResolution?.error ?? 'La categoría principal no es válida.');
+  }
+  const subcategory = input.subcategory === null || input.subcategory === undefined || input.subcategory.trim() === ''
+    ? null
+    : normalizeAndValidateRequiredKey(input.subcategory, 'La subcategoría');
 
   const sourceAccountId = input.sourceAccountId ?? previousMovement.sourceAccountId;
   const destinationAccountId = input.destinationAccountId ?? previousMovement.destinationAccountId;
@@ -2770,6 +2790,8 @@ export async function updateMovement(rawInput: unknown) {
       .from('transactions')
       .update({
         account_id: nextAccountId ?? null,
+        category: categoryResolution?.value && line.category !== 'entrada_cuenta' && line.category !== 'salida_cuenta' ? categoryResolution.value : line.category,
+        subcategory: categoryResolution?.value && line.category !== 'entrada_cuenta' && line.category !== 'salida_cuenta' ? subcategory : null,
         amount: input.amount.toFixed(2)
       })
       .eq('id', line.id)
@@ -3219,4 +3241,451 @@ export async function markMsiInstallmentAsPaid(rawInput: unknown, client: Supaba
 
 export async function restoreMsiInstallmentToPending(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
   return updateMsiInstallmentStatus(rawInput, 'pending', client);
+}
+
+export type FinancialCategoryType = 'income' | 'expense' | 'both';
+export type ProjectionColumnType = 'income' | 'expense';
+
+export type FinancialSubcategory = {
+  id: string;
+  householdId: string;
+  financialCategoryId: string;
+  name: string;
+  key: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FinancialCategory = {
+  id: string;
+  householdId: string;
+  name: string;
+  key: string;
+  type: FinancialCategoryType;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  subcategories: FinancialSubcategory[];
+};
+
+export type ProjectionColumn = {
+  id: string;
+  householdId: string;
+  name: string;
+  key: string;
+  type: ProjectionColumnType;
+  description: string | null;
+  displayOrder: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+  categoryIds: string[];
+  categories: Array<{ id: string; name: string; key: string; type: FinancialCategoryType; isActive: boolean }>;
+};
+
+export type ConfigurationData = {
+  hasHousehold: boolean;
+  householdId: string | null;
+  categories: FinancialCategory[];
+  projectionColumns: ProjectionColumn[];
+};
+
+export type WeeklyProjectionColumnSummary = {
+  columnId: string;
+  columnName: string;
+  columnKey: string;
+  type: ProjectionColumnType;
+  total: number;
+  subcategoryBreakdown: Array<{ subcategory: string; total: number }>;
+};
+
+export type WeeklyProjectionSummary = {
+  hasHousehold: boolean;
+  hasConfiguration: boolean;
+  columns: WeeklyProjectionColumnSummary[];
+  unclassified: Array<{ category: string; total: number; movementCount: number }>;
+};
+
+export const categoryTypeValues = ['income', 'expense', 'both'] as const;
+export const projectionColumnTypeValues = ['income', 'expense'] as const;
+
+export const normalizedKeySchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9_]+$/, 'Usa solo letras, números y guiones bajos.');
+
+export function normalizeFinancialKey(input: string | null | undefined) {
+  return (input ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+}
+
+function normalizeAndValidateRequiredKey(value: string, label: string) {
+  const key = normalizeFinancialKey(value);
+  const parsed = normalizedKeySchema.safeParse(key);
+  if (!parsed.success) {
+    throw new Error(`${label} debe tener letras o números y usar caracteres seguros.`);
+  }
+  return key;
+}
+
+function normalizeAndValidateOptionalKey(value: string | null | undefined, label: string) {
+  const raw = value?.trim() ?? '';
+  if (!raw) return null;
+  return normalizeAndValidateRequiredKey(raw, label);
+}
+
+export const financialCategoryCreateSchema = z.object({
+  name: z.string().trim().min(1, 'El nombre de la categoría es obligatorio.').max(80),
+  type: z.enum(categoryTypeValues),
+  householdId: z.string().min(1).optional()
+});
+
+export const financialCategoryUpdateSchema = financialCategoryCreateSchema.extend({
+  categoryId: z.string().min(1),
+  isActive: z.boolean().optional()
+});
+
+export const financialCategoryToggleSchema = z.object({ categoryId: z.string().min(1), isActive: z.boolean() });
+
+export const financialSubcategoryCreateSchema = z.object({
+  financialCategoryId: z.string().min(1),
+  name: z.string().trim().min(1, 'El nombre de la subcategoría es obligatorio.').max(80),
+  householdId: z.string().min(1).optional()
+});
+
+export const financialSubcategoryUpdateSchema = financialSubcategoryCreateSchema.extend({
+  subcategoryId: z.string().min(1),
+  isActive: z.boolean().optional()
+});
+
+export const financialSubcategoryToggleSchema = z.object({ subcategoryId: z.string().min(1), isActive: z.boolean() });
+
+export const projectionColumnCreateSchema = z.object({
+  name: z.string().trim().min(1, 'El nombre de la columna es obligatorio.').max(80),
+  type: z.enum(projectionColumnTypeValues),
+  description: z.string().trim().max(240).nullable().optional(),
+  displayOrder: z.coerce.number().int().min(0).default(0),
+  householdId: z.string().min(1).optional()
+});
+
+export const projectionColumnUpdateSchema = projectionColumnCreateSchema.extend({
+  columnId: z.string().min(1),
+  isActive: z.boolean().optional()
+});
+
+export const projectionColumnToggleSchema = z.object({ columnId: z.string().min(1), isActive: z.boolean() });
+
+export const projectionColumnCategoryAssignSchema = z.object({
+  projectionColumnId: z.string().min(1),
+  financialCategoryId: z.string().min(1)
+});
+
+export const projectionColumnCategoryRemoveSchema = projectionColumnCategoryAssignSchema;
+
+type FinancialSubcategoryRow = {
+  id: string;
+  household_id: string;
+  financial_category_id: string;
+  name: string;
+  key: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type FinancialCategoryRow = {
+  id: string;
+  household_id: string;
+  name: string;
+  key: string;
+  type: FinancialCategoryType;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type ProjectionColumnRow = {
+  id: string;
+  household_id: string;
+  name: string;
+  key: string;
+  type: ProjectionColumnType;
+  description?: string | null;
+  display_order?: number | string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type ProjectionAssignmentRow = { projection_column_id: string; financial_category_id: string };
+type ProjectionTransactionRow = { group_id: string; type: string; category: string; subcategory?: string | null; amount: string | number; happened_at?: string | null };
+
+function mapFinancialSubcategory(row: FinancialSubcategoryRow): FinancialSubcategory {
+  return {
+    id: row.id,
+    householdId: row.household_id,
+    financialCategoryId: row.financial_category_id,
+    name: row.name,
+    key: row.key,
+    isActive: row.is_active ?? true,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapFinancialCategory(row: FinancialCategoryRow, subcategories: FinancialSubcategory[] = []): FinancialCategory {
+  return {
+    id: row.id,
+    householdId: row.household_id,
+    name: row.name,
+    key: row.key,
+    type: row.type,
+    isActive: row.is_active ?? true,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    subcategories
+  };
+}
+
+function mapProjectionColumn(row: ProjectionColumnRow, categories: ProjectionColumn['categories'] = []): ProjectionColumn {
+  return {
+    id: row.id,
+    householdId: row.household_id,
+    name: row.name,
+    key: row.key,
+    type: row.type,
+    description: row.description ?? null,
+    displayOrder: Number(row.display_order ?? 0),
+    isActive: row.is_active ?? true,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    categoryIds: categories.map((category) => category.id),
+    categories
+  };
+}
+
+async function resolveInputHouseholdId(inputHouseholdId: string | undefined, client: SupabaseClientLike) {
+  const householdId = inputHouseholdId ?? await getDefaultHouseholdId(client);
+  if (!householdId) throw new Error('No existe un hogar configurado para Configuración.');
+  return householdId;
+}
+
+async function assertUniqueKey(table: string, householdId: string, key: string, client: SupabaseClientLike, ignoreId?: string, extra?: { field: string; value: string }) {
+  let query = client.from(table).select('id').eq('household_id', householdId).eq('key', key);
+  if (extra) query = query.eq(extra.field, extra.value);
+  const { data, error } = await query;
+  if (error) throw new Error(`No fue posible validar clave única: ${error.message}`);
+  const duplicate = ((data ?? []) as Array<{ id: string }>).find((row) => row.id !== ignoreId);
+  if (duplicate) throw new Error('Ya existe un registro activo con esa clave en este hogar.');
+}
+
+export async function getConfigurationData(client: SupabaseClientLike = supabaseAdmin): Promise<ConfigurationData> {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) return { hasHousehold: false, householdId: null, categories: [], projectionColumns: [] };
+
+  const [categoriesResult, subcategoriesResult, columnsResult, assignmentsResult] = await Promise.all([
+    client.from('financial_categories').select('id,household_id,name,key,type,is_active,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
+    client.from('financial_subcategories').select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
+    client.from('projection_columns').select('id,household_id,name,key,type,description,display_order,is_active,created_at,updated_at').eq('household_id', householdId).order('display_order', { ascending: true }),
+    client.from('projection_column_categories').select('projection_column_id,financial_category_id').eq('household_id', householdId)
+  ]);
+
+  for (const result of [categoriesResult, subcategoriesResult, columnsResult, assignmentsResult]) {
+    if (result.error) throw new Error(`No fue posible leer configuración: ${result.error.message}`);
+  }
+
+  const subcategoriesByCategory = ((subcategoriesResult.data ?? []) as FinancialSubcategoryRow[]).reduce<Record<string, FinancialSubcategory[]>>((acc, row) => {
+    const mapped = mapFinancialSubcategory(row);
+    acc[mapped.financialCategoryId] = [...(acc[mapped.financialCategoryId] ?? []), mapped];
+    return acc;
+  }, {});
+  const categories = ((categoriesResult.data ?? []) as FinancialCategoryRow[]).map((row) => mapFinancialCategory(row, subcategoriesByCategory[row.id] ?? []));
+  const categoryById = new Map(categories.map((category) => [category.id, category]));
+  const assignmentsByColumn = ((assignmentsResult.data ?? []) as ProjectionAssignmentRow[]).reduce<Record<string, string[]>>((acc, row) => {
+    acc[row.projection_column_id] = [...(acc[row.projection_column_id] ?? []), row.financial_category_id];
+    return acc;
+  }, {});
+  const projectionColumns = ((columnsResult.data ?? []) as ProjectionColumnRow[]).map((row) => mapProjectionColumn(row, (assignmentsByColumn[row.id] ?? []).flatMap((categoryId) => {
+    const category = categoryById.get(categoryId);
+    return category ? [{ id: category.id, name: category.name, key: category.key, type: category.type, isActive: category.isActive }] : [];
+  })));
+
+  return { hasHousehold: true, householdId, categories, projectionColumns };
+}
+
+export async function createFinancialCategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialCategoryCreateSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const key = normalizeAndValidateRequiredKey(input.name, 'La categoría');
+  await assertUniqueKey('financial_categories', householdId, key, client);
+  const now = new Date().toISOString();
+  const { data, error } = await client.from('financial_categories').insert({ household_id: householdId, name: input.name.trim(), key, type: input.type, is_active: true, updated_at: now }).select('id,household_id,name,key,type,is_active,created_at,updated_at').single();
+  if (error || !data) throw new Error(error?.message ?? 'No fue posible crear la categoría.');
+  return mapFinancialCategory(data);
+}
+
+export async function updateFinancialCategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialCategoryUpdateSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const key = normalizeAndValidateRequiredKey(input.name, 'La categoría');
+  await assertUniqueKey('financial_categories', householdId, key, client, input.categoryId);
+  const { data, error } = await client.from('financial_categories').update({ name: input.name.trim(), key, type: input.type, is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.categoryId).eq('household_id', householdId).select('id,household_id,name,key,type,is_active,created_at,updated_at').maybeSingle();
+  if (error) throw new Error(`No fue posible editar la categoría: ${error.message}`);
+  if (!data) throw new Error('No se encontró la categoría en este hogar.');
+  return mapFinancialCategory(data);
+}
+
+export async function toggleFinancialCategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialCategoryToggleSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  const { error } = await client.from('financial_categories').update({ is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.categoryId).eq('household_id', householdId);
+  if (error) throw new Error(`No fue posible cambiar estado de la categoría: ${error.message}`);
+}
+
+export async function createFinancialSubcategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialSubcategoryCreateSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const key = normalizeAndValidateRequiredKey(input.name, 'La subcategoría');
+  await assertUniqueKey('financial_subcategories', householdId, key, client, undefined, { field: 'financial_category_id', value: input.financialCategoryId });
+  const { data, error } = await client.from('financial_subcategories').insert({ household_id: householdId, financial_category_id: input.financialCategoryId, name: input.name.trim(), key, is_active: true, updated_at: new Date().toISOString() }).select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at').single();
+  if (error || !data) throw new Error(error?.message ?? 'No fue posible crear la subcategoría.');
+  return mapFinancialSubcategory(data);
+}
+
+export async function updateFinancialSubcategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialSubcategoryUpdateSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const key = normalizeAndValidateRequiredKey(input.name, 'La subcategoría');
+  await assertUniqueKey('financial_subcategories', householdId, key, client, input.subcategoryId, { field: 'financial_category_id', value: input.financialCategoryId });
+  const { data, error } = await client.from('financial_subcategories').update({ financial_category_id: input.financialCategoryId, name: input.name.trim(), key, is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.subcategoryId).eq('household_id', householdId).select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at').maybeSingle();
+  if (error) throw new Error(`No fue posible editar la subcategoría: ${error.message}`);
+  if (!data) throw new Error('No se encontró la subcategoría en este hogar.');
+  return mapFinancialSubcategory(data);
+}
+
+export async function toggleFinancialSubcategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialSubcategoryToggleSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  const { error } = await client.from('financial_subcategories').update({ is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.subcategoryId).eq('household_id', householdId);
+  if (error) throw new Error(`No fue posible cambiar estado de la subcategoría: ${error.message}`);
+}
+
+export async function createProjectionColumn(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = projectionColumnCreateSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const key = normalizeAndValidateRequiredKey(input.name, 'La columna');
+  await assertUniqueKey('projection_columns', householdId, key, client);
+  const { data, error } = await client.from('projection_columns').insert({ household_id: householdId, name: input.name.trim(), key, type: input.type, description: input.description?.trim() || null, display_order: input.displayOrder, is_active: true, updated_at: new Date().toISOString() }).select('id,household_id,name,key,type,description,display_order,is_active,created_at,updated_at').single();
+  if (error || !data) throw new Error(error?.message ?? 'No fue posible crear la columna de Proyección.');
+  return mapProjectionColumn(data);
+}
+
+export async function updateProjectionColumn(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = projectionColumnUpdateSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const key = normalizeAndValidateRequiredKey(input.name, 'La columna');
+  await assertUniqueKey('projection_columns', householdId, key, client, input.columnId);
+  const { data, error } = await client.from('projection_columns').update({ name: input.name.trim(), key, type: input.type, description: input.description?.trim() || null, display_order: input.displayOrder, is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.columnId).eq('household_id', householdId).select('id,household_id,name,key,type,description,display_order,is_active,created_at,updated_at').maybeSingle();
+  if (error) throw new Error(`No fue posible editar la columna: ${error.message}`);
+  if (!data) throw new Error('No se encontró la columna en este hogar.');
+  return mapProjectionColumn(data);
+}
+
+export async function toggleProjectionColumn(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = projectionColumnToggleSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  if (input.isActive) {
+    const { data: assignments, error: assignmentsError } = await client.from('projection_column_categories').select('financial_category_id').eq('household_id', householdId).eq('projection_column_id', input.columnId);
+    if (assignmentsError) throw new Error(`No fue posible validar asignaciones de la columna: ${assignmentsError.message}`);
+    for (const assignment of ((assignments ?? []) as Array<{ financial_category_id: string }>)) {
+      const activeColumnIds = await getActiveColumnIdsForCategory(householdId, assignment.financial_category_id, client);
+      if (activeColumnIds.some((id) => id !== input.columnId)) {
+        throw new Error('No puedes activar esta columna porque una de sus categorías ya alimenta otra columna activa.');
+      }
+    }
+  }
+  const { error } = await client.from('projection_columns').update({ is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.columnId).eq('household_id', householdId);
+  if (error) throw new Error(`No fue posible cambiar estado de la columna: ${error.message}`);
+}
+
+async function getActiveColumnIdsForCategory(householdId: string, categoryId: string, client: SupabaseClientLike) {
+  const { data: assignments, error: assignmentsError } = await client.from('projection_column_categories').select('projection_column_id,financial_category_id').eq('household_id', householdId).eq('financial_category_id', categoryId);
+  if (assignmentsError) throw new Error(`No fue posible validar asignaciones: ${assignmentsError.message}`);
+  const columnIds = ((assignments ?? []) as Array<{ projection_column_id: string }>).map((row) => row.projection_column_id);
+  if (!columnIds.length) return [];
+  const { data: columns, error: columnsError } = await client.from('projection_columns').select('id,is_active').eq('household_id', householdId).in('id', columnIds);
+  if (columnsError) throw new Error(`No fue posible validar columnas activas: ${columnsError.message}`);
+  return ((columns ?? []) as Array<{ id: string; is_active: boolean }>).filter((column) => column.is_active).map((column) => column.id);
+}
+
+export async function assignCategoryToProjectionColumn(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = projectionColumnCategoryAssignSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  const activeColumnIds = await getActiveColumnIdsForCategory(householdId, input.financialCategoryId, client);
+  if (activeColumnIds.some((id) => id !== input.projectionColumnId)) {
+    throw new Error('Esta categoría principal ya alimenta otra columna activa. Desactiva o remueve la asignación anterior para evitar duplicar importes.');
+  }
+  const { data: existing, error: existingError } = await client.from('projection_column_categories').select('id').eq('household_id', householdId).eq('projection_column_id', input.projectionColumnId).eq('financial_category_id', input.financialCategoryId).maybeSingle();
+  if (existingError) throw new Error(`No fue posible validar duplicados: ${existingError.message}`);
+  if (existing?.id) return existing;
+  const { data, error } = await client.from('projection_column_categories').insert({ household_id: householdId, projection_column_id: input.projectionColumnId, financial_category_id: input.financialCategoryId }).select('id,household_id,projection_column_id,financial_category_id,created_at').single();
+  if (error || !data) throw new Error(error?.message ?? 'No fue posible asignar la categoría a la columna.');
+  return data;
+}
+
+export async function removeCategoryFromProjectionColumn(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = projectionColumnCategoryRemoveSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  const { error } = await client.from('projection_column_categories').delete().eq('household_id', householdId).eq('projection_column_id', input.projectionColumnId).eq('financial_category_id', input.financialCategoryId);
+  if (error) throw new Error(`No fue posible quitar la categoría de la columna: ${error.message}`);
+}
+
+export async function buildWeeklyProjectionSummary(client: SupabaseClientLike = supabaseAdmin): Promise<WeeklyProjectionSummary> {
+  const configuration = await getConfigurationData(client);
+  if (!configuration.hasHousehold || !configuration.householdId) return { hasHousehold: false, hasConfiguration: false, columns: [], unclassified: [] };
+  const activeColumns = configuration.projectionColumns.filter((column) => column.isActive);
+  const activeAssignments = new Map<string, ProjectionColumn>();
+  for (const column of activeColumns) {
+    for (const categoryId of column.categoryIds) activeAssignments.set(categoryId, column);
+  }
+  const categoryByKey = new Map(configuration.categories.map((category) => [category.key, category]));
+  const { data: groups } = await client.from('transaction_groups').select('id').eq('household_id', configuration.householdId);
+  const groupIds = ((groups ?? []) as Array<{ id: string }>).map((group) => group.id);
+  const { data: rows } = groupIds.length
+    ? await client.from('transactions').select('group_id,type,category,subcategory,amount,happened_at').in('group_id', groupIds)
+    : { data: [] as ProjectionTransactionRow[] };
+  const columnTotals = new Map<string, WeeklyProjectionColumnSummary>();
+  const unclassified = new Map<string, { category: string; total: number; movementCount: number }>();
+  for (const tx of (rows ?? []) as ProjectionTransactionRow[]) {
+    if (tx.category === 'entrada_cuenta' || tx.category === 'salida_cuenta') continue;
+    const category = categoryByKey.get(tx.category);
+    const column = category ? activeAssignments.get(category.id) : undefined;
+    const signedAmount = tx.type === 'credit' ? Number(tx.amount) : Number(tx.amount);
+    if (!column) {
+      const existing = unclassified.get(tx.category) ?? { category: tx.category, total: 0, movementCount: 0 };
+      existing.total += signedAmount;
+      existing.movementCount += 1;
+      unclassified.set(tx.category, existing);
+      continue;
+    }
+    const summary = columnTotals.get(column.id) ?? { columnId: column.id, columnName: column.name, columnKey: column.key, type: column.type, total: 0, subcategoryBreakdown: [] };
+    summary.total += signedAmount;
+    const subcategory = normalizeAndValidateOptionalKey(tx.subcategory, 'La subcategoría');
+    if (subcategory) {
+      const existing = summary.subcategoryBreakdown.find((item) => item.subcategory === subcategory);
+      if (existing) existing.total += signedAmount;
+      else summary.subcategoryBreakdown.push({ subcategory, total: signedAmount });
+    }
+    columnTotals.set(column.id, summary);
+  }
+  return {
+    hasHousehold: true,
+    hasConfiguration: configuration.categories.length > 0 && configuration.projectionColumns.length > 0,
+    columns: activeColumns.map((column) => columnTotals.get(column.id) ?? { columnId: column.id, columnName: column.name, columnKey: column.key, type: column.type, total: 0, subcategoryBreakdown: [] }),
+    unclassified: [...unclassified.values()]
+  };
 }
