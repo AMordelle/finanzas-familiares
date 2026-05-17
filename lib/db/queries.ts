@@ -39,7 +39,9 @@ export const movementEditSchema = z.object({
   description: z.string().trim().min(1, 'La descripción es obligatoria.'),
   amount: z.coerce.number().positive('El monto debe ser mayor a 0.'),
   sourceAccountId: z.string().min(1).nullable().optional(),
-  destinationAccountId: z.string().min(1).nullable().optional()
+  destinationAccountId: z.string().min(1).nullable().optional(),
+  category: z.string().trim().min(1, 'La categoría principal es obligatoria.').max(80).optional(),
+  subcategory: z.string().trim().max(80).nullable().optional()
 });
 
 export const movementDeleteSchema = z.object({
@@ -141,9 +143,25 @@ export type ManagedAccount = AccountOption & {
   displayOrder: number | null;
 };
 
+export type FinancialCategoryCatalogSubcategory = {
+  id: string;
+  name: string;
+  key: string;
+};
+
+export type FinancialCategoryCatalogItem = {
+  id: string;
+  name: string;
+  key: string;
+  type: 'income' | 'expense' | 'both';
+  noProjectable: boolean;
+  subcategories: FinancialCategoryCatalogSubcategory[];
+};
+
 export type RegistrationSetupStatus = {
   hasHousehold: boolean;
   accounts: AccountOption[];
+  categoryCatalog: FinancialCategoryCatalogItem[];
 };
 
 export type MovementHistoryItem = {
@@ -151,6 +169,7 @@ export type MovementHistoryItem = {
   fecha: string;
   tipoMovimiento: string;
   categoria: string;
+  subcategoria?: string | null;
   descripcion: string;
   monto: number;
   cuentaOrigen: string | null;
@@ -1424,15 +1443,20 @@ export async function getRegistrationSetupStatus(client: SupabaseClientLike = su
     logDebug('Registro setup fallback', { reason: 'no_household' });
     return {
       hasHousehold: false,
-      accounts: []
+      accounts: [],
+      categoryCatalog: []
     };
   }
 
-  const accounts = await getAccountsForRegistration(client);
-  logDebug('Registro setup', { householdId, accountCount: accounts.length, readMode: 'db_result' });
+  const [accounts, categoryCatalog] = await Promise.all([
+    getAccountsForRegistration(client),
+    getFinancialCategoryCatalog(householdId, client)
+  ]);
+  logDebug('Registro setup', { householdId, accountCount: accounts.length, categoryCount: categoryCatalog.length, readMode: 'db_result' });
   return {
     hasHousehold: true,
-    accounts
+    accounts,
+    categoryCatalog
   };
 }
 
@@ -1582,7 +1606,7 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
   const groupIds = groups.map((group) => group.id);
   const { data: txData } = await client
     .from('transactions')
-    .select('id,group_id,account_id,type,category,amount,happened_at')
+    .select('id,group_id,account_id,type,category,subcategory,amount,happened_at')
     .in('group_id', groupIds);
 
   const transactions = (txData ?? []) as Array<{
@@ -1591,6 +1615,7 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
     account_id: string | null;
     type: string;
     category: string;
+    subcategory?: string | null;
     amount: string;
     happened_at?: string;
   }>;
@@ -1619,11 +1644,15 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
       householdAccounts
     });
 
+    const displayCategory = inferSemanticMovementCategory(action, lines);
+    const displaySubcategory = lines.find((tx) => tx.category === displayCategory && tx.subcategory)?.subcategory ?? null;
+
     return {
       id: group.id,
       fecha: happenedAt,
       tipoMovimiento: inferMovementType(lines),
-      categoria: inferSemanticMovementCategory(action, lines),
+      categoria: displayCategory,
+      subcategoria: displaySubcategory,
       descripcion: group.note?.trim() ? group.note : 'Movimiento sin descripción',
       monto: Number(debitLine?.amount ?? creditLine?.amount ?? 0),
       cuentaOrigen: reconstructedAccounts.sourceAccountName,
@@ -2215,7 +2244,7 @@ async function buildFinancialClosurePayload(input: FinancialClosureCalculationIn
   const { data: transactionsData, error: transactionsError } = groupIds.length
     ? await client
       .from('transactions')
-      .select('id,group_id,account_id,type,category,amount,happened_at')
+      .select('id,group_id,account_id,type,category,subcategory,amount,happened_at')
       .in('group_id', groupIds)
       .gte('happened_at', start)
     : { data: [] as ClosureTransactionLine[], error: null };
@@ -2538,6 +2567,7 @@ export async function saveConversationalTransaction(
     account_id: line.accountId,
     type: line.type,
     category: line.category,
+    subcategory: line.category === movementIntent.category ? movementIntent.subcategory ?? null : null,
     amount: line.amount.toFixed(2),
     happened_at: happenedAt
   }));
@@ -2657,6 +2687,7 @@ export async function saveConversationalTransactionBatch(
         account_id: line.accountId,
         type: line.type,
         category: line.category,
+        subcategory: line.category === intent.category ? intent.subcategory ?? null : null,
         amount: line.amount.toFixed(2),
         happened_at: happenedAt
       }));
@@ -2696,7 +2727,7 @@ async function getStoredMovementForEdition(householdId: string, movementId: stri
 
   const { data: txData, error: txError } = await supabaseAdmin
     .from('transactions')
-    .select('id,group_id,account_id,type,category,amount')
+    .select('id,group_id,account_id,type,category,subcategory,amount')
     .eq('group_id', group.id);
 
   if (txError) {
@@ -2709,6 +2740,7 @@ async function getStoredMovementForEdition(householdId: string, movementId: stri
     account_id: string | null;
     type: string;
     category: string;
+    subcategory?: string | null;
     amount: string;
   }>;
 
@@ -2732,6 +2764,12 @@ export async function updateMovement(rawInput: unknown) {
 
   const input = movementEditSchema.parse(rawInput);
   const { group, lines, descriptor: previousMovement } = await getStoredMovementForEdition(householdId, input.movementId);
+
+  const categorySelection = input.category
+    ? await validateCategorySelection(householdId, input.category, input.subcategory)
+    : null;
+  const nextCategory = categorySelection?.categoryKey ?? null;
+  const subcategory = categorySelection?.subcategoryKey ?? null;
 
   const sourceAccountId = input.sourceAccountId ?? previousMovement.sourceAccountId;
   const destinationAccountId = input.destinationAccountId ?? previousMovement.destinationAccountId;
@@ -2770,6 +2808,8 @@ export async function updateMovement(rawInput: unknown) {
       .from('transactions')
       .update({
         account_id: nextAccountId ?? null,
+        category: nextCategory && line.category !== 'entrada_cuenta' && line.category !== 'salida_cuenta' ? nextCategory : line.category,
+        subcategory: nextCategory && line.category !== 'entrada_cuenta' && line.category !== 'salida_cuenta' ? subcategory : null,
         amount: input.amount.toFixed(2)
       })
       .eq('id', line.id)
@@ -3219,4 +3259,933 @@ export async function markMsiInstallmentAsPaid(rawInput: unknown, client: Supaba
 
 export async function restoreMsiInstallmentToPending(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
   return updateMsiInstallmentStatus(rawInput, 'pending', client);
+}
+
+export type FinancialCategoryType = 'income' | 'expense' | 'both';
+export type ProjectionColumnType = 'income' | 'expense';
+
+export type FinancialSubcategory = {
+  id: string;
+  householdId: string;
+  financialCategoryId: string;
+  name: string;
+  key: string;
+  isActive: boolean;
+  canDelete: boolean;
+  deleteBlockedReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type FinancialCategory = {
+  id: string;
+  householdId: string;
+  name: string;
+  key: string;
+  type: FinancialCategoryType;
+  isActive: boolean;
+  noProjectable: boolean;
+  canDelete: boolean;
+  deleteBlockedReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  subcategories: FinancialSubcategory[];
+};
+
+export type ProjectionColumn = {
+  id: string;
+  householdId: string;
+  name: string;
+  key: string;
+  type: ProjectionColumnType;
+  description: string | null;
+  displayOrder: number;
+  isActive: boolean;
+  canDelete: boolean;
+  deleteBlockedReason: string | null;
+  createdAt: string;
+  updatedAt: string;
+  categoryIds: string[];
+  categories: Array<{ id: string; name: string; key: string; type: FinancialCategoryType; isActive: boolean; noProjectable: boolean }>;
+};
+
+export type ConfigurationData = {
+  hasHousehold: boolean;
+  householdId: string | null;
+  categories: FinancialCategory[];
+  projectionColumns: ProjectionColumn[];
+  categoryAudit: CategoryAuditData;
+};
+
+
+export type CategoryAuditStatus = 'missing_category' | 'inactive_category' | 'unassigned_projection' | 'no_projectable';
+
+export type CategoryAuditMovement = {
+  id: string;
+  date: string;
+  description: string;
+  accountName: string | null;
+  type: string;
+  amount: number;
+  category: string;
+  subcategory: string | null;
+  status: CategoryAuditStatus;
+};
+
+export type CategoryAuditGroup = {
+  category: string;
+  categoryName: string | null;
+  status: CategoryAuditStatus;
+  total: number;
+  movementCount: number;
+  movements: CategoryAuditMovement[];
+};
+
+export type CategoryAuditData = {
+  groups: CategoryAuditGroup[];
+  noProjectableGroups: CategoryAuditGroup[];
+  summary: {
+    problemCategoryCount: number;
+    problemMovementCount: number;
+    problemTotal: number;
+    noProjectableMovementCount: number;
+  };
+};
+
+export type WeeklyProjectionColumnSummary = {
+  columnId: string;
+  columnName: string;
+  columnKey: string;
+  type: ProjectionColumnType;
+  total: number;
+  subcategoryBreakdown: Array<{ subcategory: string; total: number }>;
+};
+
+export type WeeklyProjectionSummary = {
+  hasHousehold: boolean;
+  hasConfiguration: boolean;
+  columns: WeeklyProjectionColumnSummary[];
+  unclassified: Array<{ category: string; total: number; movementCount: number }>;
+};
+
+export const categoryTypeValues = ['income', 'expense', 'both'] as const;
+export const projectionColumnTypeValues = ['income', 'expense'] as const;
+
+export const normalizedKeySchema = z.string().trim().min(1).max(64).regex(/^[a-z0-9_]+$/, 'Usa solo letras, números y guiones bajos.');
+
+export function normalizeFinancialKey(input: string | null | undefined) {
+  return (input ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+}
+
+function normalizeAndValidateRequiredKey(value: string, label: string) {
+  const key = normalizeFinancialKey(value);
+  const parsed = normalizedKeySchema.safeParse(key);
+  if (!parsed.success) {
+    throw new Error(`${label} debe tener letras o números y usar caracteres seguros.`);
+  }
+  return key;
+}
+
+function normalizeAndValidateOptionalKey(value: string | null | undefined, label: string) {
+  const raw = value?.trim() ?? '';
+  if (!raw) return null;
+  return normalizeAndValidateRequiredKey(raw, label);
+}
+
+export const financialCategoryCreateSchema = z.object({
+  name: z.string().trim().min(1, 'El nombre de la categoría es obligatorio.').max(80),
+  type: z.enum(categoryTypeValues),
+  noProjectable: z.boolean().default(false),
+  householdId: z.string().min(1).optional()
+});
+
+export const financialCategoryUpdateSchema = financialCategoryCreateSchema.extend({
+  categoryId: z.string().min(1),
+  isActive: z.boolean().optional()
+});
+
+export const financialCategoryToggleSchema = z.object({ categoryId: z.string().min(1), isActive: z.boolean() });
+export const financialCategoryDeleteSchema = z.object({ categoryId: z.string().min(1) });
+
+export const financialSubcategoryCreateSchema = z.object({
+  financialCategoryId: z.string().min(1),
+  name: z.string().trim().min(1, 'El nombre de la subcategoría es obligatorio.').max(80),
+  householdId: z.string().min(1).optional()
+});
+
+export const financialSubcategoryUpdateSchema = financialSubcategoryCreateSchema.extend({
+  subcategoryId: z.string().min(1),
+  isActive: z.boolean().optional()
+});
+
+export const financialSubcategoryToggleSchema = z.object({ subcategoryId: z.string().min(1), isActive: z.boolean() });
+export const financialSubcategoryDeleteSchema = z.object({ subcategoryId: z.string().min(1) });
+
+export const projectionColumnCreateSchema = z.object({
+  name: z.string().trim().min(1, 'El nombre de la columna es obligatorio.').max(80),
+  type: z.enum(projectionColumnTypeValues),
+  description: z.string().trim().max(240).nullable().optional(),
+  displayOrder: z.coerce.number().int().min(0).default(0),
+  householdId: z.string().min(1).optional()
+});
+
+export const projectionColumnUpdateSchema = projectionColumnCreateSchema.extend({
+  columnId: z.string().min(1),
+  isActive: z.boolean().optional()
+});
+
+export const projectionColumnToggleSchema = z.object({ columnId: z.string().min(1), isActive: z.boolean() });
+export const projectionColumnDeleteSchema = z.object({ columnId: z.string().min(1) });
+
+export const projectionColumnCategoryAssignSchema = z.object({
+  projectionColumnId: z.string().min(1),
+  financialCategoryId: z.string().min(1)
+});
+
+export const projectionColumnCategoryRemoveSchema = projectionColumnCategoryAssignSchema;
+
+export const categoryAuditReclassifySchema = z.object({
+  movementId: z.string().min(1),
+  category: z.string().trim().min(1),
+  subcategory: z.string().trim().nullable().optional()
+});
+
+type FinancialSubcategoryRow = {
+  id: string;
+  household_id: string;
+  financial_category_id: string;
+  name: string;
+  key: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type FinancialCategoryRow = {
+  id: string;
+  household_id: string;
+  name: string;
+  key: string;
+  type: FinancialCategoryType;
+  no_projectable?: boolean | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type ProjectionColumnRow = {
+  id: string;
+  household_id: string;
+  name: string;
+  key: string;
+  type: ProjectionColumnType;
+  description?: string | null;
+  display_order?: number | string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+type ProjectionAssignmentRow = { projection_column_id: string; financial_category_id: string };
+type ProjectionTransactionRow = { group_id: string; type: string; category: string; subcategory?: string | null; amount: string | number; happened_at?: string | null };
+
+function mapFinancialSubcategory(row: FinancialSubcategoryRow): FinancialSubcategory {
+  return {
+    id: row.id,
+    householdId: row.household_id,
+    financialCategoryId: row.financial_category_id,
+    name: row.name,
+    key: row.key,
+    isActive: row.is_active ?? true,
+    canDelete: true,
+    deleteBlockedReason: null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function mapFinancialCategory(row: FinancialCategoryRow, subcategories: FinancialSubcategory[] = []): FinancialCategory {
+  return {
+    id: row.id,
+    householdId: row.household_id,
+    name: row.name,
+    key: row.key,
+    type: row.type,
+    isActive: row.is_active ?? true,
+    noProjectable: row.no_projectable ?? false,
+    canDelete: true,
+    deleteBlockedReason: null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    subcategories
+  };
+}
+
+function mapProjectionColumn(row: ProjectionColumnRow, categories: ProjectionColumn['categories'] = []): ProjectionColumn {
+  return {
+    id: row.id,
+    householdId: row.household_id,
+    name: row.name,
+    key: row.key,
+    type: row.type,
+    description: row.description ?? null,
+    displayOrder: Number(row.display_order ?? 0),
+    isActive: row.is_active ?? true,
+    canDelete: true,
+    deleteBlockedReason: null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    categoryIds: categories.map((category) => category.id),
+    categories
+  };
+}
+
+
+export async function getFinancialCategoryCatalog(householdId?: string | null, client: SupabaseClientLike = supabaseAdmin): Promise<FinancialCategoryCatalogItem[]> {
+  const resolvedHouseholdId = householdId ?? await getDefaultHouseholdId(client);
+  if (!resolvedHouseholdId) return [];
+
+  const [categoriesResult, subcategoriesResult] = await Promise.all([
+    client
+      .from('financial_categories')
+      .select('id,household_id,name,key,type,no_projectable,is_active,created_at,updated_at')
+      .eq('household_id', resolvedHouseholdId)
+      .eq('is_active', true)
+      .order('name', { ascending: true }),
+    client
+      .from('financial_subcategories')
+      .select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at')
+      .eq('household_id', resolvedHouseholdId)
+      .eq('is_active', true)
+      .order('name', { ascending: true })
+  ]);
+
+  if (categoriesResult.error) throw new Error(`No fue posible leer categorías activas: ${categoriesResult.error.message}`);
+  if (subcategoriesResult.error) throw new Error(`No fue posible leer subcategorías activas: ${subcategoriesResult.error.message}`);
+
+  const subcategoriesByCategory = ((subcategoriesResult.data ?? []) as FinancialSubcategoryRow[])
+    .reduce<Record<string, FinancialCategoryCatalogSubcategory[]>>((acc, row) => {
+      acc[row.financial_category_id] = [...(acc[row.financial_category_id] ?? []), { id: row.id, name: row.name, key: row.key }];
+      return acc;
+    }, {});
+
+  return ((categoriesResult.data ?? []) as FinancialCategoryRow[]).map((row) => ({
+    id: row.id,
+    name: row.name,
+    key: row.key,
+    type: row.type,
+    noProjectable: row.no_projectable ?? false,
+    subcategories: subcategoriesByCategory[row.id] ?? []
+  }));
+}
+
+export async function validateCategorySelection(
+  householdId: string,
+  categoryKey: string,
+  subcategoryKey?: string | null,
+  client: SupabaseClientLike = supabaseAdmin
+) {
+  const normalizedCategoryKey = normalizeAndValidateRequiredKey(categoryKey, 'La categoría');
+  const normalizedSubcategoryKey = normalizeAndValidateOptionalKey(subcategoryKey, 'La subcategoría');
+  const catalog = await getFinancialCategoryCatalog(householdId, client);
+  const category = catalog.find((item) => item.key === normalizedCategoryKey);
+
+  if (!category) {
+    throw new Error('La categoría seleccionada no existe o está inactiva en este hogar. Créala o actívala en Configuración.');
+  }
+
+  if (!normalizedSubcategoryKey) {
+    return { categoryKey: category.key, subcategoryKey: null, category };
+  }
+
+  const subcategory = category.subcategories.find((item) => item.key === normalizedSubcategoryKey);
+  if (!subcategory) {
+    throw new Error('La subcategoría seleccionada no existe, está inactiva o no pertenece a la categoría elegida.');
+  }
+
+  return { categoryKey: category.key, subcategoryKey: subcategory.key, category, subcategory };
+}
+
+async function resolveInputHouseholdId(inputHouseholdId: string | undefined, client: SupabaseClientLike) {
+  const householdId = inputHouseholdId ?? await getDefaultHouseholdId(client);
+  if (!householdId) throw new Error('No existe un hogar configurado para Configuración.');
+  return householdId;
+}
+
+async function assertUniqueKey(table: string, householdId: string, key: string, client: SupabaseClientLike, ignoreId?: string, extra?: { field: string; value: string }) {
+  let query = client.from(table).select('id').eq('household_id', householdId).eq('key', key);
+  if (extra) query = query.eq(extra.field, extra.value);
+  const { data, error } = await query;
+  if (error) throw new Error(`No fue posible validar clave única: ${error.message}`);
+  const duplicate = ((data ?? []) as Array<{ id: string }>).find((row) => row.id !== ignoreId);
+  if (duplicate) throw new Error('Ya existe un registro activo con esa clave en este hogar.');
+}
+
+
+function createEmptyCategoryAuditData(): CategoryAuditData {
+  return {
+    groups: [],
+    noProjectableGroups: [],
+    summary: {
+      problemCategoryCount: 0,
+      problemMovementCount: 0,
+      problemTotal: 0,
+      noProjectableMovementCount: 0
+    }
+  };
+}
+
+function isSystemProjectionCategory(category: string) {
+  return category === 'entrada_cuenta' || category === 'salida_cuenta' || category.startsWith('sistema_');
+}
+
+function getActiveProjectionCategoryIds(projectionColumns: ProjectionColumn[]) {
+  const ids = new Set<string>();
+  for (const column of projectionColumns) {
+    if (!column.isActive) continue;
+    for (const category of column.categories) ids.add(category.id);
+  }
+  return ids;
+}
+
+function resolveAuditStatus(category: FinancialCategory | undefined, activeProjectionCategoryIds: Set<string>): CategoryAuditStatus {
+  if (!category) return 'missing_category';
+  if (category.noProjectable) return 'no_projectable';
+  if (!category.isActive) return 'inactive_category';
+  if (!activeProjectionCategoryIds.has(category.id)) return 'unassigned_projection';
+  return 'unassigned_projection';
+}
+
+function upsertAuditGroup(groups: Map<string, CategoryAuditGroup>, movement: CategoryAuditMovement, categoryName: string | null) {
+  const existing = groups.get(movement.category) ?? {
+    category: movement.category,
+    categoryName,
+    status: movement.status,
+    total: 0,
+    movementCount: 0,
+    movements: []
+  };
+  existing.total += movement.amount;
+  existing.movementCount += 1;
+  existing.movements.push(movement);
+  groups.set(movement.category, existing);
+}
+
+async function buildCategoryAuditData(
+  householdId: string,
+  categories: FinancialCategory[],
+  projectionColumns: ProjectionColumn[],
+  client: SupabaseClientLike
+): Promise<CategoryAuditData> {
+  const { data: groupsData, error: groupsError } = await client.from('transaction_groups').select('id,note,created_at').eq('household_id', householdId);
+  if (groupsError) throw new Error(`No fue posible leer grupos de movimientos para auditoría: ${groupsError.message}`);
+  const groupRows = (groupsData ?? []) as Array<{ id: string; note?: string | null; created_at?: string | null }>;
+  const groupIds = groupRows.map((group) => group.id);
+  if (!groupIds.length) return createEmptyCategoryAuditData();
+
+  const [{ data: txData, error: txError }, { data: accountData, error: accountError }] = await Promise.all([
+    client.from('transactions').select('id,group_id,account_id,type,category,subcategory,amount,happened_at').in('group_id', groupIds),
+    client.from('accounts').select('id,name,household_id').eq('household_id', householdId)
+  ]);
+  if (txError) throw new Error(`No fue posible leer movimientos para auditoría: ${txError.message}`);
+  if (accountError) throw new Error(`No fue posible leer cuentas para auditoría: ${accountError.message}`);
+
+  const categoryByKey = new Map(categories.map((category) => [category.key, category]));
+  const activeProjectionCategoryIds = getActiveProjectionCategoryIds(projectionColumns);
+  const accountById = new Map(((accountData ?? []) as Array<{ id: string; name: string }>).map((account) => [account.id, account.name]));
+  const txByGroup = ((txData ?? []) as Array<{ id: string; group_id: string; account_id: string | null; type: string; category: string; subcategory?: string | null; amount: string | number; happened_at?: string | null }>).reduce<Record<string, Array<{ id: string; group_id: string; account_id: string | null; type: string; category: string; subcategory?: string | null; amount: string | number; happened_at?: string | null }>>>((acc, row) => {
+    acc[row.group_id] = [...(acc[row.group_id] ?? []), row];
+    return acc;
+  }, {});
+
+  const problemGroups = new Map<string, CategoryAuditGroup>();
+  const noProjectableGroups = new Map<string, CategoryAuditGroup>();
+
+  for (const group of groupRows) {
+    const lines = txByGroup[group.id] ?? [];
+    if (!lines.length) continue;
+    const primaryLine = lines.find((line) => Boolean(line.category) && !isSystemProjectionCategory(line.category));
+    if (!primaryLine) continue;
+    const category = categoryByKey.get(primaryLine.category);
+    const status = resolveAuditStatus(category, activeProjectionCategoryIds);
+    if (status !== 'no_projectable' && category?.isActive && activeProjectionCategoryIds.has(category.id)) continue;
+
+    const descriptor = resolveStoredMovementDescriptor(lines.map((line) => ({ type: line.type, category: line.category, account_id: line.account_id, amount: String(line.amount) })));
+    const accountName = lines.map((line) => line.account_id).find((accountId): accountId is string => Boolean(accountId)) ?? null;
+    const movement: CategoryAuditMovement = {
+      id: group.id,
+      date: primaryLine.happened_at ?? group.created_at ?? '',
+      description: group.note || primaryLine.category,
+      accountName: accountName ? accountById.get(accountName) ?? null : null,
+      type: inferMovementType(lines),
+      amount: descriptor?.amount ?? Number(primaryLine.amount),
+      category: primaryLine.category,
+      subcategory: primaryLine.subcategory ?? null,
+      status
+    };
+
+    if (status === 'no_projectable') upsertAuditGroup(noProjectableGroups, movement, category?.name ?? null);
+    else upsertAuditGroup(problemGroups, movement, category?.name ?? null);
+  }
+
+  const groups = [...problemGroups.values()].sort((a, b) => b.total - a.total);
+  const noProjectable = [...noProjectableGroups.values()].sort((a, b) => b.total - a.total);
+  return {
+    groups,
+    noProjectableGroups: noProjectable,
+    summary: {
+      problemCategoryCount: groups.length,
+      problemMovementCount: groups.reduce((sum, group) => sum + group.movementCount, 0),
+      problemTotal: groups.reduce((sum, group) => sum + group.total, 0),
+      noProjectableMovementCount: noProjectable.reduce((sum, group) => sum + group.movementCount, 0)
+    }
+  };
+}
+
+async function assertCategoryHasNoProjectionAssignments(householdId: string, categoryId: string, client: SupabaseClientLike) {
+  const activeColumnIds = await getActiveColumnIdsForCategory(householdId, categoryId, client);
+  if (activeColumnIds.length) throw new Error('Quita primero esta categoría de las columnas de Proyección.');
+}
+
+
+async function applyConfigurationDeleteAvailability(
+  householdId: string,
+  categories: FinancialCategory[],
+  projectionColumns: ProjectionColumn[],
+  assignments: ProjectionAssignmentRow[],
+  client: SupabaseClientLike
+) {
+  const groupIds = await getHouseholdTransactionGroupIds(householdId, client);
+  const { data: txData, error: txError } = groupIds.length
+    ? await client.from('transactions').select('id,group_id,category,subcategory').in('group_id', groupIds)
+    : { data: [] as Array<{ category: string; subcategory?: string | null }>, error: null };
+  if (txError) throw new Error(`No fue posible validar dependencias de movimientos: ${txError.message}`);
+
+  const transactionRows = (txData ?? []) as Array<{ category: string; subcategory?: string | null }>;
+  const categoryMovementCounts = transactionRows.reduce<Record<string, number>>((acc, row) => {
+    acc[row.category] = (acc[row.category] ?? 0) + 1;
+    return acc;
+  }, {});
+  const subcategoryMovementCounts = transactionRows.reduce<Record<string, number>>((acc, row) => {
+    if (!row.subcategory) return acc;
+    const key = `${row.category}::${row.subcategory}`;
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  const assignedCategoryIds = new Set(assignments.map((assignment) => assignment.financial_category_id));
+  const assignedColumnIds = assignments.reduce<Record<string, number>>((acc, assignment) => {
+    acc[assignment.projection_column_id] = (acc[assignment.projection_column_id] ?? 0) + 1;
+    return acc;
+  }, {});
+
+  const categoriesWithAvailability = categories.map((category) => {
+    const hasMovements = (categoryMovementCounts[category.key] ?? 0) > 0;
+    const hasSubcategories = category.subcategories.length > 0;
+    const hasAssignments = assignedCategoryIds.has(category.id);
+    const canDelete = !hasMovements && !hasSubcategories && !hasAssignments;
+    return {
+      ...category,
+      canDelete,
+      deleteBlockedReason: canDelete ? null : 'No se puede eliminar esta categoría porque todavía tiene movimientos, subcategorías o columnas asociadas. Puedes desactivarla.',
+      subcategories: category.subcategories.map((subcategory) => {
+        const movementCount = subcategoryMovementCounts[`${category.key}::${subcategory.key}`] ?? 0;
+        const subcategoryCanDelete = movementCount === 0;
+        return {
+          ...subcategory,
+          canDelete: subcategoryCanDelete,
+          deleteBlockedReason: subcategoryCanDelete ? null : 'No se puede eliminar esta subcategoría porque todavía tiene movimientos asociados. Puedes desactivarla.'
+        };
+      })
+    };
+  });
+
+  const projectionColumnsWithAvailability = projectionColumns.map((column) => {
+    const canDelete = (assignedColumnIds[column.id] ?? 0) === 0;
+    return {
+      ...column,
+      canDelete,
+      deleteBlockedReason: canDelete ? null : 'No se puede eliminar esta columna porque todavía tiene categorías asignadas. Quita primero las categorías.'
+    };
+  });
+
+  return { categories: categoriesWithAvailability, projectionColumns: projectionColumnsWithAvailability };
+}
+
+export async function getConfigurationData(client: SupabaseClientLike = supabaseAdmin): Promise<ConfigurationData> {
+  const householdId = await getDefaultHouseholdId(client);
+  if (!householdId) return { hasHousehold: false, householdId: null, categories: [], projectionColumns: [], categoryAudit: createEmptyCategoryAuditData() };
+
+  const [categoriesResult, subcategoriesResult, columnsResult, assignmentsResult] = await Promise.all([
+    client.from('financial_categories').select('id,household_id,name,key,type,no_projectable,is_active,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
+    client.from('financial_subcategories').select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
+    client.from('projection_columns').select('id,household_id,name,key,type,description,display_order,is_active,created_at,updated_at').eq('household_id', householdId).order('display_order', { ascending: true }),
+    client.from('projection_column_categories').select('projection_column_id,financial_category_id').eq('household_id', householdId)
+  ]);
+
+  for (const result of [categoriesResult, subcategoriesResult, columnsResult, assignmentsResult]) {
+    if (result.error) throw new Error(`No fue posible leer configuración: ${result.error.message}`);
+  }
+
+  const subcategoriesByCategory = ((subcategoriesResult.data ?? []) as FinancialSubcategoryRow[]).reduce<Record<string, FinancialSubcategory[]>>((acc, row) => {
+    const mapped = mapFinancialSubcategory(row);
+    acc[mapped.financialCategoryId] = [...(acc[mapped.financialCategoryId] ?? []), mapped];
+    return acc;
+  }, {});
+  const categories = ((categoriesResult.data ?? []) as FinancialCategoryRow[]).map((row) => mapFinancialCategory(row, subcategoriesByCategory[row.id] ?? []));
+  const categoryById = new Map(categories.map((category) => [category.id, category]));
+  const assignmentsByColumn = ((assignmentsResult.data ?? []) as ProjectionAssignmentRow[]).reduce<Record<string, string[]>>((acc, row) => {
+    acc[row.projection_column_id] = [...(acc[row.projection_column_id] ?? []), row.financial_category_id];
+    return acc;
+  }, {});
+  const projectionColumns = ((columnsResult.data ?? []) as ProjectionColumnRow[]).map((row) => mapProjectionColumn(row, (assignmentsByColumn[row.id] ?? []).flatMap((categoryId) => {
+    const category = categoryById.get(categoryId);
+    return category ? [{ id: category.id, name: category.name, key: category.key, type: category.type, isActive: category.isActive, noProjectable: category.noProjectable }] : [];
+  })));
+
+  const deletableConfiguration = await applyConfigurationDeleteAvailability(householdId, categories, projectionColumns, (assignmentsResult.data ?? []) as ProjectionAssignmentRow[], client);
+  const categoryAudit = await buildCategoryAuditData(householdId, deletableConfiguration.categories, deletableConfiguration.projectionColumns, client);
+
+  return { hasHousehold: true, householdId, categories: deletableConfiguration.categories, projectionColumns: deletableConfiguration.projectionColumns, categoryAudit };
+}
+
+
+async function getHouseholdTransactionGroupIds(householdId: string, client: SupabaseClientLike) {
+  const { data, error } = await client.from('transaction_groups').select('id').eq('household_id', householdId);
+  if (error) throw new Error(`No fue posible validar movimientos del hogar: ${error.message}`);
+  return ((data ?? []) as Array<{ id: string }>).map((group) => group.id);
+}
+
+async function countTransactionsByCategory(householdId: string, categoryKey: string, client: SupabaseClientLike) {
+  const groupIds = await getHouseholdTransactionGroupIds(householdId, client);
+  if (!groupIds.length) return 0;
+  const { data, error } = await client.from('transactions').select('id,group_id,category').in('group_id', groupIds).eq('category', categoryKey);
+  if (error) throw new Error(`No fue posible validar movimientos de la categoría: ${error.message}`);
+  return ((data ?? []) as Array<{ id: string }>).length;
+}
+
+async function countTransactionsBySubcategory(householdId: string, categoryKey: string, subcategoryKey: string, client: SupabaseClientLike) {
+  const groupIds = await getHouseholdTransactionGroupIds(householdId, client);
+  if (!groupIds.length) return 0;
+  const { data, error } = await client
+    .from('transactions')
+    .select('id,group_id,category,subcategory')
+    .in('group_id', groupIds)
+    .eq('category', categoryKey)
+    .eq('subcategory', subcategoryKey);
+  if (error) throw new Error(`No fue posible validar movimientos de la subcategoría: ${error.message}`);
+  return ((data ?? []) as Array<{ id: string }>).length;
+}
+
+async function getOwnedCategoryRow(householdId: string, categoryId: string, client: SupabaseClientLike) {
+  const { data, error } = await client
+    .from('financial_categories')
+    .select('id,household_id,name,key,type,no_projectable,is_active,created_at,updated_at')
+    .eq('id', categoryId)
+    .eq('household_id', householdId)
+    .maybeSingle();
+  if (error) throw new Error(`No fue posible leer la categoría: ${error.message}`);
+  if (!data?.id) throw new Error('No se encontró la categoría en este hogar.');
+  return data as FinancialCategoryRow;
+}
+
+async function getOwnedSubcategoryWithCategory(householdId: string, subcategoryId: string, client: SupabaseClientLike) {
+  const { data: subcategory, error } = await client
+    .from('financial_subcategories')
+    .select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at')
+    .eq('id', subcategoryId)
+    .eq('household_id', householdId)
+    .maybeSingle();
+  if (error) throw new Error(`No fue posible leer la subcategoría: ${error.message}`);
+  if (!subcategory?.id) throw new Error('No se encontró la subcategoría en este hogar.');
+  const category = await getOwnedCategoryRow(householdId, (subcategory as FinancialSubcategoryRow).financial_category_id, client);
+  return { subcategory: subcategory as FinancialSubcategoryRow, category };
+}
+
+async function assertCategoryHasNoDeleteDependencies(householdId: string, category: FinancialCategoryRow, client: SupabaseClientLike) {
+  const [movementCount, subcategoriesResult, assignmentsResult] = await Promise.all([
+    countTransactionsByCategory(householdId, category.key, client),
+    client.from('financial_subcategories').select('id').eq('household_id', householdId).eq('financial_category_id', category.id),
+    client.from('projection_column_categories').select('id').eq('household_id', householdId).eq('financial_category_id', category.id)
+  ]);
+  if (subcategoriesResult.error) throw new Error(`No fue posible validar subcategorías de la categoría: ${subcategoriesResult.error.message}`);
+  if (assignmentsResult.error) throw new Error(`No fue posible validar columnas asociadas a la categoría: ${assignmentsResult.error.message}`);
+  const hasSubcategories = ((subcategoriesResult.data ?? []) as Array<{ id: string }>).length > 0;
+  const hasAssignments = ((assignmentsResult.data ?? []) as Array<{ id: string }>).length > 0;
+  if (movementCount > 0 || hasSubcategories || hasAssignments) {
+    throw new Error('No se puede eliminar esta categoría porque todavía tiene movimientos, subcategorías o columnas asociadas. Puedes desactivarla.');
+  }
+}
+
+async function assertSubcategoryHasNoDeleteDependencies(householdId: string, categoryKey: string, subcategoryKey: string, client: SupabaseClientLike) {
+  const movementCount = await countTransactionsBySubcategory(householdId, categoryKey, subcategoryKey, client);
+  if (movementCount > 0) {
+    throw new Error('No se puede eliminar esta subcategoría porque todavía tiene movimientos asociados. Puedes desactivarla.');
+  }
+}
+
+async function assertProjectionColumnHasNoDeleteDependencies(householdId: string, columnId: string, client: SupabaseClientLike) {
+  const { data: column, error: columnError } = await client.from('projection_columns').select('id').eq('id', columnId).eq('household_id', householdId).maybeSingle();
+  if (columnError) throw new Error(`No fue posible leer la columna de Proyección: ${columnError.message}`);
+  if (!column?.id) throw new Error('No se encontró la columna de Proyección en este hogar.');
+  const { data, error } = await client.from('projection_column_categories').select('id').eq('household_id', householdId).eq('projection_column_id', columnId);
+  if (error) throw new Error(`No fue posible validar categorías asignadas a la columna: ${error.message}`);
+  if (((data ?? []) as Array<{ id: string }>).length > 0) {
+    throw new Error('No se puede eliminar esta columna porque todavía tiene categorías asignadas. Quita primero las categorías.');
+  }
+}
+
+export async function createFinancialCategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialCategoryCreateSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const key = normalizeAndValidateRequiredKey(input.name, 'La categoría');
+  await assertUniqueKey('financial_categories', householdId, key, client);
+  const now = new Date().toISOString();
+  const { data, error } = await client.from('financial_categories').insert({ household_id: householdId, name: input.name.trim(), key, type: input.type, no_projectable: input.noProjectable, is_active: true, updated_at: now }).select('id,household_id,name,key,type,no_projectable,is_active,created_at,updated_at').single();
+  if (error || !data) throw new Error(error?.message ?? 'No fue posible crear la categoría.');
+  return mapFinancialCategory(data);
+}
+
+export async function updateFinancialCategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialCategoryUpdateSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const key = normalizeAndValidateRequiredKey(input.name, 'La categoría');
+  await assertUniqueKey('financial_categories', householdId, key, client, input.categoryId);
+  if (input.noProjectable) await assertCategoryHasNoProjectionAssignments(householdId, input.categoryId, client);
+  const { data, error } = await client.from('financial_categories').update({ name: input.name.trim(), key, type: input.type, no_projectable: input.noProjectable, is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.categoryId).eq('household_id', householdId).select('id,household_id,name,key,type,no_projectable,is_active,created_at,updated_at').maybeSingle();
+  if (error) throw new Error(`No fue posible editar la categoría: ${error.message}`);
+  if (!data) throw new Error('No se encontró la categoría en este hogar.');
+  return mapFinancialCategory(data);
+}
+
+export async function toggleFinancialCategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialCategoryToggleSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  const { error } = await client.from('financial_categories').update({ is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.categoryId).eq('household_id', householdId);
+  if (error) throw new Error(`No fue posible cambiar estado de la categoría: ${error.message}`);
+}
+
+export async function deleteFinancialCategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialCategoryDeleteSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  const category = await getOwnedCategoryRow(householdId, input.categoryId, client);
+  await assertCategoryHasNoDeleteDependencies(householdId, category, client);
+  const { error } = await client.from('financial_categories').delete().eq('id', input.categoryId).eq('household_id', householdId);
+  if (error) throw new Error(`No fue posible eliminar la categoría: ${error.message}`);
+}
+
+export async function createFinancialSubcategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialSubcategoryCreateSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const key = normalizeAndValidateRequiredKey(input.name, 'La subcategoría');
+  await assertUniqueKey('financial_subcategories', householdId, key, client, undefined, { field: 'financial_category_id', value: input.financialCategoryId });
+  const { data, error } = await client.from('financial_subcategories').insert({ household_id: householdId, financial_category_id: input.financialCategoryId, name: input.name.trim(), key, is_active: true, updated_at: new Date().toISOString() }).select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at').single();
+  if (error || !data) throw new Error(error?.message ?? 'No fue posible crear la subcategoría.');
+  return mapFinancialSubcategory(data);
+}
+
+export async function updateFinancialSubcategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialSubcategoryUpdateSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const key = normalizeAndValidateRequiredKey(input.name, 'La subcategoría');
+  await assertUniqueKey('financial_subcategories', householdId, key, client, input.subcategoryId, { field: 'financial_category_id', value: input.financialCategoryId });
+  const { data, error } = await client.from('financial_subcategories').update({ financial_category_id: input.financialCategoryId, name: input.name.trim(), key, is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.subcategoryId).eq('household_id', householdId).select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at').maybeSingle();
+  if (error) throw new Error(`No fue posible editar la subcategoría: ${error.message}`);
+  if (!data) throw new Error('No se encontró la subcategoría en este hogar.');
+  return mapFinancialSubcategory(data);
+}
+
+export async function toggleFinancialSubcategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialSubcategoryToggleSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  const { error } = await client.from('financial_subcategories').update({ is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.subcategoryId).eq('household_id', householdId);
+  if (error) throw new Error(`No fue posible cambiar estado de la subcategoría: ${error.message}`);
+}
+
+export async function deleteFinancialSubcategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = financialSubcategoryDeleteSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  const { subcategory, category } = await getOwnedSubcategoryWithCategory(householdId, input.subcategoryId, client);
+  await assertSubcategoryHasNoDeleteDependencies(householdId, category.key, subcategory.key, client);
+  const { error } = await client.from('financial_subcategories').delete().eq('id', input.subcategoryId).eq('household_id', householdId);
+  if (error) throw new Error(`No fue posible eliminar la subcategoría: ${error.message}`);
+}
+
+export async function createProjectionColumn(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = projectionColumnCreateSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const key = normalizeAndValidateRequiredKey(input.name, 'La columna');
+  await assertUniqueKey('projection_columns', householdId, key, client);
+  const { data, error } = await client.from('projection_columns').insert({ household_id: householdId, name: input.name.trim(), key, type: input.type, description: input.description?.trim() || null, display_order: input.displayOrder, is_active: true, updated_at: new Date().toISOString() }).select('id,household_id,name,key,type,description,display_order,is_active,created_at,updated_at').single();
+  if (error || !data) throw new Error(error?.message ?? 'No fue posible crear la columna de Proyección.');
+  return mapProjectionColumn(data);
+}
+
+export async function updateProjectionColumn(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = projectionColumnUpdateSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const key = normalizeAndValidateRequiredKey(input.name, 'La columna');
+  await assertUniqueKey('projection_columns', householdId, key, client, input.columnId);
+  const { data, error } = await client.from('projection_columns').update({ name: input.name.trim(), key, type: input.type, description: input.description?.trim() || null, display_order: input.displayOrder, is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.columnId).eq('household_id', householdId).select('id,household_id,name,key,type,description,display_order,is_active,created_at,updated_at').maybeSingle();
+  if (error) throw new Error(`No fue posible editar la columna: ${error.message}`);
+  if (!data) throw new Error('No se encontró la columna en este hogar.');
+  return mapProjectionColumn(data);
+}
+
+export async function toggleProjectionColumn(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = projectionColumnToggleSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  if (input.isActive) {
+    const { data: assignments, error: assignmentsError } = await client.from('projection_column_categories').select('financial_category_id').eq('household_id', householdId).eq('projection_column_id', input.columnId);
+    if (assignmentsError) throw new Error(`No fue posible validar asignaciones de la columna: ${assignmentsError.message}`);
+    for (const assignment of ((assignments ?? []) as Array<{ financial_category_id: string }>)) {
+      await assertCategoryIsProjectable(householdId, assignment.financial_category_id, client);
+      const activeColumnIds = await getActiveColumnIdsForCategory(householdId, assignment.financial_category_id, client);
+      if (activeColumnIds.some((id) => id !== input.columnId)) {
+        throw new Error('No puedes activar esta columna porque una de sus categorías ya alimenta otra columna activa.');
+      }
+    }
+  }
+  const { error } = await client.from('projection_columns').update({ is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.columnId).eq('household_id', householdId);
+  if (error) throw new Error(`No fue posible cambiar estado de la columna: ${error.message}`);
+}
+
+export async function deleteProjectionColumn(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = projectionColumnDeleteSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  await assertProjectionColumnHasNoDeleteDependencies(householdId, input.columnId, client);
+  const { error } = await client.from('projection_columns').delete().eq('id', input.columnId).eq('household_id', householdId);
+  if (error) throw new Error(`No fue posible eliminar la columna de Proyección: ${error.message}`);
+}
+
+async function getActiveColumnIdsForCategory(householdId: string, categoryId: string, client: SupabaseClientLike) {
+  const { data: assignments, error: assignmentsError } = await client.from('projection_column_categories').select('projection_column_id,financial_category_id').eq('household_id', householdId).eq('financial_category_id', categoryId);
+  if (assignmentsError) throw new Error(`No fue posible validar asignaciones: ${assignmentsError.message}`);
+  const columnIds = ((assignments ?? []) as Array<{ projection_column_id: string }>).map((row) => row.projection_column_id);
+  if (!columnIds.length) return [];
+  const { data: columns, error: columnsError } = await client.from('projection_columns').select('id,is_active').eq('household_id', householdId).in('id', columnIds);
+  if (columnsError) throw new Error(`No fue posible validar columnas activas: ${columnsError.message}`);
+  return ((columns ?? []) as Array<{ id: string; is_active: boolean }>).filter((column) => column.is_active).map((column) => column.id);
+}
+
+
+async function assertCategoryIsProjectable(householdId: string, categoryId: string, client: SupabaseClientLike) {
+  const { data, error } = await client.from('financial_categories').select('id,no_projectable').eq('household_id', householdId).eq('id', categoryId).maybeSingle();
+  if (error) throw new Error(`No fue posible validar categoría: ${error.message}`);
+  if (!data?.id) throw new Error('No se encontró la categoría en este hogar.');
+  if ((data as { no_projectable?: boolean | null }).no_projectable) throw new Error('Las categorías excluidas de Proyección no pueden asignarse a columnas.');
+}
+
+export async function assignCategoryToProjectionColumn(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = projectionColumnCategoryAssignSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  await assertCategoryIsProjectable(householdId, input.financialCategoryId, client);
+  const activeColumnIds = await getActiveColumnIdsForCategory(householdId, input.financialCategoryId, client);
+  if (activeColumnIds.some((id) => id !== input.projectionColumnId)) {
+    throw new Error('Esta categoría principal ya alimenta otra columna activa. Desactiva o remueve la asignación anterior para evitar duplicar importes.');
+  }
+  const { data: existing, error: existingError } = await client.from('projection_column_categories').select('id').eq('household_id', householdId).eq('projection_column_id', input.projectionColumnId).eq('financial_category_id', input.financialCategoryId).maybeSingle();
+  if (existingError) throw new Error(`No fue posible validar duplicados: ${existingError.message}`);
+  if (existing?.id) return existing;
+  const { data, error } = await client.from('projection_column_categories').insert({ household_id: householdId, projection_column_id: input.projectionColumnId, financial_category_id: input.financialCategoryId }).select('id,household_id,projection_column_id,financial_category_id,created_at').single();
+  if (error || !data) throw new Error(error?.message ?? 'No fue posible asignar la categoría a la columna.');
+  return data;
+}
+
+export async function removeCategoryFromProjectionColumn(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = projectionColumnCategoryRemoveSchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  const { error } = await client.from('projection_column_categories').delete().eq('household_id', householdId).eq('projection_column_id', input.projectionColumnId).eq('financial_category_id', input.financialCategoryId);
+  if (error) throw new Error(`No fue posible quitar la categoría de la columna: ${error.message}`);
+}
+
+
+export async function reclassifyCategoryAuditMovement(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = categoryAuditReclassifySchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  const validated = await validateCategorySelection(householdId, input.category, input.subcategory ?? null, client);
+
+  const { data: group, error: groupError } = await client
+    .from('transaction_groups')
+    .select('id,household_id')
+    .eq('id', input.movementId)
+    .eq('household_id', householdId)
+    .maybeSingle();
+  if (groupError) throw new Error(`No fue posible leer el movimiento para reclasificar: ${groupError.message}`);
+  if (!group?.id) throw new Error('No se encontró el movimiento en este hogar.');
+
+  const { data: lines, error: txError } = await client
+    .from('transactions')
+    .select('id,group_id,category,subcategory,amount,type,account_id')
+    .eq('group_id', input.movementId);
+  if (txError) throw new Error(`No fue posible leer transacciones del movimiento: ${txError.message}`);
+
+  const editableLines = ((lines ?? []) as Array<{ id: string; category: string }>).filter((line) => !isSystemProjectionCategory(line.category));
+  if (!editableLines.length) throw new Error('Este movimiento no tiene una categoría reclasificable.');
+
+  await Promise.all(editableLines.map(async (line) => {
+    const { error } = await client
+      .from('transactions')
+      .update({ category: validated.categoryKey, subcategory: validated.subcategoryKey })
+      .eq('id', line.id)
+      .eq('group_id', input.movementId);
+    if (error) throw new Error(`No fue posible reclasificar el movimiento: ${error.message}`);
+  }));
+
+  return { category: validated.categoryKey, subcategory: validated.subcategoryKey };
+}
+
+export async function buildWeeklyProjectionSummary(client: SupabaseClientLike = supabaseAdmin): Promise<WeeklyProjectionSummary> {
+  const configuration = await getConfigurationData(client);
+  if (!configuration.hasHousehold || !configuration.householdId) return { hasHousehold: false, hasConfiguration: false, columns: [], unclassified: [] };
+  const activeColumns = configuration.projectionColumns.filter((column) => column.isActive);
+  const activeAssignments = new Map<string, ProjectionColumn>();
+  for (const column of activeColumns) {
+    for (const category of column.categories) {
+      if (category.isActive && !category.noProjectable) activeAssignments.set(category.id, column);
+    }
+  }
+  const categoryByKey = new Map(configuration.categories.map((category) => [category.key, category]));
+  const { data: groups } = await client.from('transaction_groups').select('id').eq('household_id', configuration.householdId);
+  const groupIds = ((groups ?? []) as Array<{ id: string }>).map((group) => group.id);
+  const { data: rows } = groupIds.length
+    ? await client.from('transactions').select('group_id,type,category,subcategory,amount,happened_at').in('group_id', groupIds)
+    : { data: [] as ProjectionTransactionRow[] };
+  const columnTotals = new Map<string, WeeklyProjectionColumnSummary>();
+  const unclassified = new Map<string, { category: string; total: number; movementCount: number }>();
+  for (const tx of (rows ?? []) as ProjectionTransactionRow[]) {
+    if (tx.category === 'entrada_cuenta' || tx.category === 'salida_cuenta') continue;
+    const category = categoryByKey.get(tx.category);
+    if (category?.noProjectable) continue;
+    const column = category && category.isActive ? activeAssignments.get(category.id) : undefined;
+    const signedAmount = tx.type === 'credit' ? Number(tx.amount) : Number(tx.amount);
+    if (!column) {
+      const existing = unclassified.get(tx.category) ?? { category: tx.category, total: 0, movementCount: 0 };
+      existing.total += signedAmount;
+      existing.movementCount += 1;
+      unclassified.set(tx.category, existing);
+      continue;
+    }
+    const summary = columnTotals.get(column.id) ?? { columnId: column.id, columnName: column.name, columnKey: column.key, type: column.type, total: 0, subcategoryBreakdown: [] };
+    summary.total += signedAmount;
+    const subcategory = normalizeAndValidateOptionalKey(tx.subcategory, 'La subcategoría');
+    if (subcategory) {
+      const existing = summary.subcategoryBreakdown.find((item) => item.subcategory === subcategory);
+      if (existing) existing.total += signedAmount;
+      else summary.subcategoryBreakdown.push({ subcategory, total: signedAmount });
+    }
+    columnTotals.set(column.id, summary);
+  }
+  return {
+    hasHousehold: true,
+    hasConfiguration: configuration.categories.length > 0 && configuration.projectionColumns.length > 0,
+    columns: activeColumns.map((column) => columnTotals.get(column.id) ?? { columnId: column.id, columnName: column.name, columnKey: column.key, type: column.type, total: 0, subcategoryBreakdown: [] }),
+    unclassified: [...unclassified.values()]
+  };
 }

@@ -44,6 +44,7 @@ describe('movimientos actions revalidation', () => {
     expect(revalidatePathMock).toHaveBeenCalledWith('/dashboard');
     expect(revalidatePathMock).toHaveBeenCalledWith('/movimientos');
     expect(revalidatePathMock).toHaveBeenCalledWith('/cuentas');
+    expect(revalidatePathMock).toHaveBeenCalledWith('/proyeccion');
     expect(result).toEqual({ success: true, message: 'Movimiento actualizado correctamente.' });
   });
 

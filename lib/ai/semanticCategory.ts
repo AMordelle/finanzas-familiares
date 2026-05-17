@@ -16,6 +16,8 @@ export const APPROVED_CATEGORY_CATALOG = [
   'trabajo',
   'impuestos_tramites',
   'otros_gastos',
+  'gastos_variables',
+  'gastos_fijos',
   'ingreso_fijo',
   'ingreso_extra',
   'reembolso',
@@ -95,7 +97,7 @@ export function localCategoryInference(intent: FinancialIntent, normalizedText: 
   if (intent === 'income') {
     if (/(reembolso|devolucion)/.test(normalizedText)) return 'reembolso';
     if (/(nomina|sueldo|quincena|semanal|salario)/.test(normalizedText)) return 'ingreso_fijo';
-    if (/(tiempo extra|bono|venta de|vendi|me pagaron por vender)/.test(normalizedText)) return 'ingreso_extra';
+    if (/(tiempo extra|bono|venta de|vendi|me pagaron por vender|prime\s*iptv|primeiptv)/.test(normalizedText)) return 'ingreso_extra';
     return 'ingreso_extra';
   }
 
@@ -106,7 +108,8 @@ export function localCategoryInference(intent: FinancialIntent, normalizedText: 
   if (intent === 'receivable_created') return 'prestamo_otorgado';
   if (intent === 'receivable_payment') return 'pago_recibido';
 
-  if (/(cena|comida|restaurante|tacos|desayuno|supermercado|despensa|abarrotes|almuerzo|cafe|pizza|hamburguesa|oxxo|botana|cerveza)/.test(normalizedText)) return 'comida';
+  if (/(cena|comida|restaurante|tacos|desayuno|supermercado|despensa|abarrotes|almuerzo|cafe|pizza|hamburguesa|botana|cerveza)/.test(normalizedText)) return 'comida';
+  if (/\boxxo\b|yepas|antojitos|gasolina|farmacia/.test(normalizedText)) return 'gastos_variables';
   if (/(taxi|uber|gasolina|camioneta|mensualidad.*camioneta)/.test(normalizedText)) return 'transporte';
   if (/(renta|hipoteca|predial|mantenimiento edificio|mantenimiento casa)/.test(normalizedText)) return 'vivienda';
   if (/\b(internet|wifi|telefono|recarga|luz|agua|gas)\b/.test(normalizedText)) return 'servicios';
@@ -124,7 +127,7 @@ function allowedCategoriesForIntent(intent: FinancialIntent) {
   if (intent === 'income') return ['ingreso_fijo', 'ingreso_extra', 'reembolso', 'otros_gastos'];
   return [
     'comida', 'transporte', 'vivienda', 'servicios', 'salud', 'educación', 'entretenimiento', 'ropa', 'hogar',
-    'regalos', 'cuidado_personal', 'mascotas', 'trabajo', 'impuestos_tramites', 'otros_gastos'
+    'regalos', 'cuidado_personal', 'mascotas', 'trabajo', 'impuestos_tramites', 'otros_gastos', 'gastos_variables', 'gastos_fijos'
   ];
 }
 

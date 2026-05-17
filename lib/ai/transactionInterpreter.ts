@@ -57,6 +57,7 @@ export const transactionIntentSchema = z.object({
   interestCost: z.number().min(0).nullable().optional().default(null),
   description: z.string().min(1).nullable().optional().default(null),
   category: z.string().min(1).nullable().optional().default('otros_gastos'),
+  subcategory: z.string().min(1).nullable().optional().default(null),
   sourceAccountId: z.string().nullable().optional().default(null),
   sourceAccountName: z.string().nullable().optional().default(null),
   sourceAccountType: accountTypeSchema.nullable().optional().default(null),
@@ -1460,6 +1461,7 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     interestCost: isMsiPurchase ? interestCost : null,
     description: draftForConstraints.description,
     category: draftForConstraints.category,
+    subcategory: inferSubcategory(normalizedText),
     sourceAccountId: draftForConstraints.sourceAccountId,
     sourceAccountName: draftForConstraints.sourceAccountName,
     sourceAccountType: draftForConstraints.sourceAccountType,
@@ -1486,6 +1488,18 @@ export async function interpretTransaction(text: string, accounts: InterpreterAc
     ...consistentResult,
     validationCorrections: aiMetadata.validationCorrections
   };
+}
+
+
+function inferSubcategory(normalizedText: string) {
+  if (/(prime\s*iptv|primeiptv)/.test(normalizedText)) return 'prime_iptv';
+  if (/\boxxo\b/.test(normalizedText)) return 'oxxo';
+  if (/(farmacia|medicina)/.test(normalizedText)) return 'farmacia';
+  if (/gasolina/.test(normalizedText)) return 'gasolina';
+  if (/(comida rapida|hamburguesa|pizza|tacos)/.test(normalizedText)) return 'comida_rapida';
+  if (/(venta de equipo|vendi.*equipo)/.test(normalizedText)) return 'venta_de_equipo';
+  if (/propina/.test(normalizedText)) return 'propinas';
+  return null;
 }
 
 function findAccountByName(accounts: EnrichedAccount[], value: string) {

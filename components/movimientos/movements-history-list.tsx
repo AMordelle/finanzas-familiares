@@ -4,14 +4,15 @@ import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import type { AccountOption, MovementHistoryItem } from '@/lib/db/queries';
+import type { AccountOption, FinancialCategoryCatalogItem, MovementHistoryItem } from '@/lib/db/queries';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
 import { deleteMovementAction, updateMovementAction } from '@/app/movimientos/actions';
-import { applyQuickFilter, buildDynamicSummary, filterMovements, inferCategories, type MovementFilters } from '@/lib/movements/filters';
+import { applyQuickFilter, buildDynamicSummary, filterMovements, inferCategories, type MovementFilters, type QuickFilter } from '@/lib/movements/filters';
 
 type Props = {
   movements: MovementHistoryItem[];
   accounts: AccountOption[];
+  categoryCatalog: FinancialCategoryCatalogItem[];
 };
 
 type MovementVisual = {
@@ -76,7 +77,7 @@ function getAmountText(amount: number, impact: MovementVisual['impact']) {
   return `${formatCurrencyMXN(amount)} ⇄`;
 }
 
-export function MovementsHistoryList({ movements, accounts }: Props) {
+export function MovementsHistoryList({ movements, accounts, categoryCatalog }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -165,7 +166,7 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
             )}
           </div>
         )}
-        <div className="mt-2 flex flex-wrap gap-2">{['gastos_hormiga','gastos_fuertes','deuda','sin_clasificar','negocio_operacion'].map((q)=><Button key={q} variant="outline" onClick={()=>setFilters((p)=>applyQuickFilter(q as any,p))}>{q}</Button>)}<Button variant="outline" onClick={()=>setFilters(defaultFilters)}>Limpiar filtros</Button></div>
+        <div className="mt-2 flex flex-wrap gap-2">{(['gastos_hormiga','gastos_fuertes','deuda','sin_clasificar','negocio_operacion'] as QuickFilter[]).map((q)=><Button key={q} variant="outline" onClick={()=>setFilters((p)=>applyQuickFilter(q,p))}>{q}</Button>)}<Button variant="outline" onClick={()=>setFilters(defaultFilters)}>Limpiar filtros</Button></div>
         <div className="mt-2 space-y-1 text-xs text-slate-700">
           <p className="font-medium">{hasActiveFilters ? 'Resumen del filtro aplicado' : 'Resumen del historial visible'}</p>
           <p>Total de movimientos: {summary.count}</p>
@@ -226,6 +227,10 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
                         <span className="font-semibold">Categoría:</span>{' '}
                         <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">{movement.categoria}</span>
                       </p>
+                      <p>
+                        <span className="font-semibold">Subcategoría:</span>{' '}
+                        <span className="inline-flex rounded-full bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-600">{movement.subcategoria ?? 'Sin subcategoría'}</span>
+                      </p>
                     </div>
 
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -269,6 +274,7 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
                       <EditMovementForm
                         movement={movement}
                         accounts={accounts}
+                        categoryCatalog={categoryCatalog}
                         disabled={isPending}
                         onCancel={() => setEditingId(null)}
                         onSubmit={(payload) => {
@@ -301,18 +307,26 @@ export function MovementsHistoryList({ movements, accounts }: Props) {
 function EditMovementForm({
   movement,
   accounts,
+  categoryCatalog,
   disabled,
   onCancel,
   onSubmit
 }: {
   movement: MovementHistoryItem;
   accounts: AccountOption[];
+  categoryCatalog: FinancialCategoryCatalogItem[];
   disabled: boolean;
   onCancel: () => void;
-  onSubmit: (payload: { movementId: string; description: string; amount: number; sourceAccountId: string | null; destinationAccountId: string | null }) => void;
+  onSubmit: (payload: { movementId: string; description: string; amount: number; sourceAccountId: string | null; destinationAccountId: string | null; category: string; subcategory: string | null }) => void;
 }) {
   const [description, setDescription] = useState(movement.descripcion);
   const [amount, setAmount] = useState(String(movement.monto));
+  const initialCategory = categoryCatalog.some((item) => item.key === movement.categoria) ? movement.categoria : '';
+  const [category, setCategory] = useState(initialCategory);
+  const selectedCategory = categoryCatalog.find((item) => item.key === category);
+  const selectedSubcategories = selectedCategory?.subcategories ?? [];
+  const initialSubcategory = selectedSubcategories.some((item) => item.key === movement.subcategoria) ? movement.subcategoria ?? '' : '';
+  const [subcategory, setSubcategory] = useState(initialSubcategory);
 
   const sourceAccountId = accounts.find((account) => account.name === movement.cuentaOrigen)?.id ?? '';
   const destinationAccountId = accounts.find((account) => account.name === movement.cuentaDestino)?.id ?? '';
@@ -330,7 +344,9 @@ function EditMovementForm({
           description,
           amount: Number(amount),
           sourceAccountId: source || null,
-          destinationAccountId: destination || null
+          destinationAccountId: destination || null,
+          category,
+          subcategory: subcategory || null
         });
       }}
     >
@@ -342,6 +358,21 @@ function EditMovementForm({
       <label className="block text-sm text-slate-700">
         Monto
         <input className="mt-1 w-full rounded-md border border-slate-300 p-2" type="number" step="0.01" min="0" value={amount} onChange={(event) => setAmount(event.target.value)} disabled={disabled} />
+      </label>
+      <label className="block text-sm text-slate-700">
+        Categoría principal
+        <select className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2" value={category} onChange={(event) => { setCategory(event.target.value); setSubcategory(''); }} disabled={disabled || categoryCatalog.length === 0} required>
+          <option value="">Selecciona una categoría</option>
+          {categoryCatalog.map((item) => <option key={item.id} value={item.key}>{item.name}</option>)}
+        </select>
+      </label>
+      {!initialCategory && movement.categoria && <p className="text-xs text-amber-700">La categoría actual no existe en tu catálogo activo. Selecciona una categoría válida para guardar.</p>}
+      <label className="block text-sm text-slate-700">
+        Subcategoría opcional
+        <select className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2" value={subcategory} onChange={(event) => setSubcategory(event.target.value)} disabled={disabled || !category}>
+          <option value="">Sin subcategoría</option>
+          {selectedSubcategories.map((item) => <option key={item.id} value={item.key}>{item.name}</option>)}
+        </select>
       </label>
       <label className="block text-sm text-slate-700">
         Cuenta origen
@@ -359,7 +390,7 @@ function EditMovementForm({
       </label>
 
       <div className="flex gap-2">
-        <Button type="submit" disabled={disabled}>{disabled ? 'Guardando...' : 'Guardar cambios'}</Button>
+        <Button type="submit" disabled={disabled || !category}>{disabled ? 'Guardando...' : 'Guardar cambios'}</Button>
         <Button type="button" variant="outline" onClick={onCancel} disabled={disabled}>Cancelar</Button>
       </div>
     </form>
