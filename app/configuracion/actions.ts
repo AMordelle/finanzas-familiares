@@ -6,6 +6,9 @@ import {
   createFinancialCategory,
   createFinancialSubcategory,
   createProjectionColumn,
+  deleteFinancialCategory,
+  deleteFinancialSubcategory,
+  deleteProjectionColumn,
   removeCategoryFromProjectionColumn,
   reclassifyCategoryAuditMovement,
   toggleFinancialCategory,
@@ -48,6 +51,12 @@ export async function toggleFinancialCategoryAction(payload: unknown) {
   return { success: true, message: 'Estado de categoría actualizado.' };
 }
 
+export async function deleteFinancialCategoryAction(payload: unknown) {
+  await deleteFinancialCategory(payload);
+  revalidateConfigurationPaths();
+  return { success: true, message: 'Categoría eliminada correctamente.' };
+}
+
 export async function createFinancialSubcategoryAction(payload: unknown) {
   const data = await createFinancialSubcategory(payload);
   revalidateConfigurationPaths();
@@ -66,6 +75,12 @@ export async function toggleFinancialSubcategoryAction(payload: unknown) {
   return { success: true, message: 'Estado de subcategoría actualizado.' };
 }
 
+export async function deleteFinancialSubcategoryAction(payload: unknown) {
+  await deleteFinancialSubcategory(payload);
+  revalidateConfigurationPaths();
+  return { success: true, message: 'Subcategoría eliminada correctamente.' };
+}
+
 export async function createProjectionColumnAction(payload: unknown) {
   const data = await createProjectionColumn(payload);
   revalidateConfigurationPaths();
@@ -82,6 +97,12 @@ export async function toggleProjectionColumnAction(payload: unknown) {
   await toggleProjectionColumn(payload);
   revalidateConfigurationPaths();
   return { success: true, message: 'Estado de columna actualizado.' };
+}
+
+export async function deleteProjectionColumnAction(payload: unknown) {
+  await deleteProjectionColumn(payload);
+  revalidateConfigurationPaths();
+  return { success: true, message: 'Columna de Proyección eliminada correctamente.' };
 }
 
 export async function assignCategoryToProjectionColumnAction(payload: unknown) {

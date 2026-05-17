@@ -11,6 +11,9 @@ import {
   createFinancialCategoryAction,
   createFinancialSubcategoryAction,
   createProjectionColumnAction,
+  deleteFinancialCategoryAction,
+  deleteFinancialSubcategoryAction,
+  deleteProjectionColumnAction,
   reclassifyCategoryAuditMovementAction,
   removeCategoryFromProjectionColumnAction,
   toggleFinancialCategoryAction,
@@ -206,6 +209,10 @@ function CategoryCard({ category, isPending, isEditing, editingSubcategoryId, su
               Excluir de Proyección
               <span className="block pl-5 text-slate-500">Usa esta opción para movimientos que no deben alimentar columnas de Proyección, como transferencias internas, pagos de tarjeta o recuperación de préstamos.</span>
             </label>
+            <div className="md:col-span-3">
+              <Button type="button" variant="outline" disabled={isPending || !category.canDelete} onClick={() => { if (window.confirm('¿Eliminar esta categoría?')) run(() => deleteFinancialCategoryAction({ categoryId: category.id })); }}>Eliminar categoría</Button>
+              {category.deleteBlockedReason && <p className="mt-1 text-xs text-amber-700">{category.deleteBlockedReason}</p>}
+            </div>
           </form>
         )}
         <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); run(async () => { const result = await createFinancialSubcategoryAction({ financialCategoryId: category.id, name: subcategoryDraft }); onSubcategoryDraftChange(''); return result; }); }}><input className="min-w-0 flex-1 rounded-md border p-2 text-sm" placeholder="Nueva subcategoría" value={subcategoryDraft} onChange={(event) => onSubcategoryDraftChange(event.target.value)} /><Button disabled={isPending || !subcategoryDraft.trim()}>Agregar</Button></form>
@@ -219,7 +226,29 @@ function CategoryCard({ category, isPending, isEditing, editingSubcategoryId, su
 
 function SubcategoryRow({ subcategory, isEditing, isPending, onToggleEdit, run }: { subcategory: FinancialCategory['subcategories'][number]; isEditing: boolean; isPending: boolean; onToggleEdit: () => void; run: (action: () => Promise<{ message?: string } | unknown>) => void }) {
   const [name, setName] = useState(subcategory.name);
-  return <div className="rounded-lg bg-slate-50 p-2 text-sm"><div className="flex items-center justify-between gap-2"><span>{subcategory.name} <span className="text-xs text-slate-500">· {subcategory.key} · {subcategory.isActive ? 'Activa' : 'Inactiva'}</span></span><div className="flex gap-1"><Button type="button" variant="outline" className="h-7 px-2 text-xs" onClick={onToggleEdit} disabled={isPending}>Editar</Button><Button type="button" variant="outline" className="h-7 px-2 text-xs" onClick={() => run(() => toggleFinancialSubcategoryAction({ subcategoryId: subcategory.id, isActive: !subcategory.isActive }))} disabled={isPending}>{subcategory.isActive ? 'Desactivar' : 'Activar'}</Button></div></div>{isEditing && <form className="mt-2 flex gap-2" onSubmit={(event) => { event.preventDefault(); run(() => updateFinancialSubcategoryAction({ subcategoryId: subcategory.id, financialCategoryId: subcategory.financialCategoryId, name, isActive: subcategory.isActive })); }}><input className="min-w-0 flex-1 rounded-md border p-2" value={name} onChange={(event) => setName(event.target.value)} /><Button disabled={isPending}>Guardar</Button></form>}</div>;
+  return (
+    <div className="rounded-lg bg-slate-50 p-2 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span>{subcategory.name} <span className="text-xs text-slate-500">· {subcategory.key} · {subcategory.isActive ? 'Activa' : 'Inactiva'}</span></span>
+        <div className="flex gap-1">
+          <Button type="button" variant="outline" className="h-7 px-2 text-xs" onClick={onToggleEdit} disabled={isPending}>Editar</Button>
+          <Button type="button" variant="outline" className="h-7 px-2 text-xs" onClick={() => run(() => toggleFinancialSubcategoryAction({ subcategoryId: subcategory.id, isActive: !subcategory.isActive }))} disabled={isPending}>{subcategory.isActive ? 'Desactivar' : 'Activar'}</Button>
+        </div>
+      </div>
+      {isEditing && (
+        <div className="mt-2 space-y-2">
+          <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); run(() => updateFinancialSubcategoryAction({ subcategoryId: subcategory.id, financialCategoryId: subcategory.financialCategoryId, name, isActive: subcategory.isActive })); }}>
+            <input className="min-w-0 flex-1 rounded-md border p-2" value={name} onChange={(event) => setName(event.target.value)} />
+            <Button disabled={isPending}>Guardar</Button>
+          </form>
+          <div>
+            <Button type="button" variant="outline" className="h-8 px-2 text-xs" disabled={isPending || !subcategory.canDelete} onClick={() => { if (window.confirm('¿Eliminar esta subcategoría?')) run(() => deleteFinancialSubcategoryAction({ subcategoryId: subcategory.id })); }}>Eliminar subcategoría</Button>
+            {subcategory.deleteBlockedReason && <p className="mt-1 text-xs text-amber-700">{subcategory.deleteBlockedReason}</p>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ProjectionColumnCard({ column, categories, selectedCategoryId, isPending, isEditing, onToggleEdit, onSelectedCategoryChange, run }: { column: ProjectionColumn; categories: FinancialCategory[]; selectedCategoryId: string; isPending: boolean; isEditing: boolean; onToggleEdit: () => void; onSelectedCategoryChange: (value: string) => void; run: (action: () => Promise<{ message?: string } | unknown>) => void }) {
@@ -227,7 +256,40 @@ function ProjectionColumnCard({ column, categories, selectedCategoryId, isPendin
   const [type, setType] = useState<ColumnType>(column.type);
   const [description, setDescription] = useState(column.description ?? '');
   const [displayOrder, setDisplayOrder] = useState(String(column.displayOrder));
-  return <details className="rounded-xl border border-slate-200 p-3" open={isEditing}><summary className="cursor-pointer font-medium">{column.name} <span className="text-xs text-slate-500">· {column.key} · {columnTypeLabels[column.type]} · orden {column.displayOrder} · {column.isActive ? 'Activa' : 'Inactiva'}</span></summary><div className="mt-3 space-y-3"><div className="flex flex-wrap gap-2"><Button type="button" variant="outline" onClick={onToggleEdit} disabled={isPending}>Editar</Button><Button type="button" variant="outline" onClick={() => run(() => toggleProjectionColumnAction({ columnId: column.id, isActive: !column.isActive }))} disabled={isPending}>{column.isActive ? 'Desactivar' : 'Activar'}</Button></div>{isEditing && <form className="grid gap-2 md:grid-cols-[1fr_130px_100px_auto]" onSubmit={(event) => { event.preventDefault(); run(() => updateProjectionColumnAction({ columnId: column.id, name, type, description, displayOrder: Number(displayOrder), isActive: column.isActive })); }}><input className="rounded-md border p-2 text-sm" value={name} onChange={(event) => setName(event.target.value)} /><select className="rounded-md border bg-white p-2 text-sm" value={type} onChange={(event) => setType(event.target.value as ColumnType)}><option value="income">Ingreso</option><option value="expense">Gasto</option></select><input className="rounded-md border p-2 text-sm" type="number" min="0" value={displayOrder} onChange={(event) => setDisplayOrder(event.target.value)} /><Button disabled={isPending}>Guardar</Button><input className="rounded-md border p-2 text-sm md:col-span-4" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Descripción" /></form>}<div><p className="text-sm font-medium">Categorías asignadas</p><div className="mt-2 flex flex-wrap gap-2">{column.categories.length ? column.categories.map((category) => <span key={category.id} className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs">{category.name}<button type="button" className="font-bold text-red-600" onClick={() => run(() => removeCategoryFromProjectionColumnAction({ projectionColumnId: column.id, financialCategoryId: category.id }))} disabled={isPending}>×</button></span>) : <span className="text-sm text-slate-500">Sin categorías asignadas</span>}</div></div><form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); if (!selectedCategoryId) return; run(() => assignCategoryToProjectionColumnAction({ projectionColumnId: column.id, financialCategoryId: selectedCategoryId })); }}><select className="min-w-0 flex-1 rounded-md border bg-white p-2 text-sm" value={selectedCategoryId} onChange={(event) => onSelectedCategoryChange(event.target.value)}><option value="">Asignar categoría principal...</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select><Button disabled={isPending || !selectedCategoryId}>Asignar</Button></form></div></details>;
+  return (
+    <details className="rounded-xl border border-slate-200 p-3" open={isEditing}>
+      <summary className="cursor-pointer font-medium">{column.name} <span className="text-xs text-slate-500">· {column.key} · {columnTypeLabels[column.type]} · orden {column.displayOrder} · {column.isActive ? 'Activa' : 'Inactiva'}</span></summary>
+      <div className="mt-3 space-y-3">
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" onClick={onToggleEdit} disabled={isPending}>Editar</Button>
+          <Button type="button" variant="outline" onClick={() => run(() => toggleProjectionColumnAction({ columnId: column.id, isActive: !column.isActive }))} disabled={isPending}>{column.isActive ? 'Desactivar' : 'Activar'}</Button>
+        </div>
+        {isEditing && (
+          <div className="space-y-2">
+            <form className="grid gap-2 md:grid-cols-[1fr_130px_100px_auto]" onSubmit={(event) => { event.preventDefault(); run(() => updateProjectionColumnAction({ columnId: column.id, name, type, description, displayOrder: Number(displayOrder), isActive: column.isActive })); }}>
+              <input className="rounded-md border p-2 text-sm" value={name} onChange={(event) => setName(event.target.value)} />
+              <select className="rounded-md border bg-white p-2 text-sm" value={type} onChange={(event) => setType(event.target.value as ColumnType)}><option value="income">Ingreso</option><option value="expense">Gasto</option></select>
+              <input className="rounded-md border p-2 text-sm" type="number" min="0" value={displayOrder} onChange={(event) => setDisplayOrder(event.target.value)} />
+              <Button disabled={isPending}>Guardar</Button>
+              <input className="rounded-md border p-2 text-sm md:col-span-4" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Descripción" />
+            </form>
+            <div>
+              <Button type="button" variant="outline" disabled={isPending || !column.canDelete} onClick={() => { if (window.confirm('¿Eliminar esta columna de Proyección?')) run(() => deleteProjectionColumnAction({ columnId: column.id })); }}>Eliminar columna</Button>
+              {column.deleteBlockedReason && <p className="mt-1 text-xs text-amber-700">{column.deleteBlockedReason}</p>}
+            </div>
+          </div>
+        )}
+        <div>
+          <p className="text-sm font-medium">Categorías asignadas</p>
+          <div className="mt-2 flex flex-wrap gap-2">{column.categories.length ? column.categories.map((category) => <span key={category.id} className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs">{category.name}<button type="button" className="font-bold text-red-600" onClick={() => run(() => removeCategoryFromProjectionColumnAction({ projectionColumnId: column.id, financialCategoryId: category.id }))} disabled={isPending}>×</button></span>) : <span className="text-sm text-slate-500">Sin categorías asignadas</span>}</div>
+        </div>
+        <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); if (!selectedCategoryId) return; run(() => assignCategoryToProjectionColumnAction({ projectionColumnId: column.id, financialCategoryId: selectedCategoryId })); }}>
+          <select className="min-w-0 flex-1 rounded-md border bg-white p-2 text-sm" value={selectedCategoryId} onChange={(event) => onSelectedCategoryChange(event.target.value)}><option value="">Asignar categoría principal...</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>
+          <Button disabled={isPending || !selectedCategoryId}>Asignar</Button>
+        </form>
+      </div>
+    </details>
+  );
 }
 
 function CategoryAuditSection({ audit, categories, isPending, run }: { audit: ConfigurationData['categoryAudit']; categories: FinancialCategory[]; isPending: boolean; run: (action: () => Promise<{ message?: string } | unknown>) => void }) {

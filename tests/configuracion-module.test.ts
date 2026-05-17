@@ -229,6 +229,9 @@ describe('módulo Configuración financiera', () => {
       createFinancialCategoryAction: vi.fn(),
       createFinancialSubcategoryAction: vi.fn(),
       createProjectionColumnAction: vi.fn(),
+      deleteFinancialCategoryAction: vi.fn(),
+      deleteFinancialSubcategoryAction: vi.fn(),
+      deleteProjectionColumnAction: vi.fn(),
       reclassifyCategoryAuditMovementAction: vi.fn(),
       removeCategoryFromProjectionColumnAction: vi.fn(),
       toggleFinancialCategoryAction: vi.fn(),
@@ -243,7 +246,7 @@ describe('módulo Configuración financiera', () => {
     const html = renderToStaticMarkup(React.createElement(ConfigurationManager, { data: {
       hasHousehold: true,
       householdId: 'house-1',
-      categories: [{ id: 'cat-1', householdId: 'house-1', name: 'Gastos variables', key: 'gastos_variables', type: 'expense', isActive: true, noProjectable: false, createdAt: 'x', updatedAt: 'x', subcategories: [{ id: 'sub-1', householdId: 'house-1', financialCategoryId: 'cat-1', name: 'Oxxo', key: 'oxxo', isActive: true, createdAt: 'x', updatedAt: 'x' }] }],
+      categories: [{ id: 'cat-1', householdId: 'house-1', name: 'Gastos variables', key: 'gastos_variables', type: 'expense', isActive: true, noProjectable: false, canDelete: true, deleteBlockedReason: null, createdAt: 'x', updatedAt: 'x', subcategories: [{ id: 'sub-1', householdId: 'house-1', financialCategoryId: 'cat-1', name: 'Oxxo', key: 'oxxo', isActive: true, canDelete: true, deleteBlockedReason: null, createdAt: 'x', updatedAt: 'x' }] }],
       projectionColumns: [],
       categoryAudit: {
         groups: [{ category: 'legacy_oxxo', categoryName: null, status: 'missing_category', total: 120, movementCount: 1, movements: [{ id: 'group-1', date: '2026-05-01T12:00:00.000Z', description: 'Oxxo viejo', accountName: 'BBVA', type: 'Gasto', amount: 120, category: 'legacy_oxxo', subcategory: null, status: 'missing_category' }] }],
@@ -256,6 +259,75 @@ describe('módulo Configuración financiera', () => {
     expect(html).toContain('Categoría: legacy_oxxo');
     expect(html).toContain('Oxxo viejo');
     expect(html).toContain('Sin categoría configurada');
+  });
+
+
+  it('elimina categoría sin movimientos, subcategorías ni asignaciones', async () => {
+    const q = await import('@/lib/db/queries');
+    const category = await q.createFinancialCategory({ name: 'Vieja sin uso', type: 'expense' });
+    await q.deleteFinancialCategory({ categoryId: category.id }, fake as any);
+    expect(fake.db.financial_categories.some((row) => row.id === category.id)).toBe(false);
+  });
+
+  it('rechaza eliminar categoría con movimientos, con subcategorías o asignada a columna', async () => {
+    const q = await import('@/lib/db/queries');
+    const withMovements = await q.createFinancialCategory({ name: 'Con movimientos', type: 'expense' });
+    fake.db.transaction_groups.push({ id: 'group-cat-movement', household_id: 'house-1', note: 'Uso', created_at: '2026-05-01T12:00:00.000Z' });
+    fake.db.transactions.push({ id: 'tx-cat-movement', group_id: 'group-cat-movement', account_id: null, type: 'debit', category: withMovements.key, subcategory: null, amount: '10.00', happened_at: '2026-05-01T12:00:00.000Z' });
+    await expect(q.deleteFinancialCategory({ categoryId: withMovements.id }, fake as any)).rejects.toThrow('todavía tiene movimientos, subcategorías o columnas asociadas');
+
+    const withSubcategory = await q.createFinancialCategory({ name: 'Con subcategoría', type: 'expense' });
+    await q.createFinancialSubcategory({ financialCategoryId: withSubcategory.id, name: 'Detalle' });
+    await expect(q.deleteFinancialCategory({ categoryId: withSubcategory.id }, fake as any)).rejects.toThrow('todavía tiene movimientos, subcategorías o columnas asociadas');
+
+    const assigned = await q.createFinancialCategory({ name: 'Asignada', type: 'expense' });
+    const column = await q.createProjectionColumn({ name: 'Columna asignada', type: 'expense', displayOrder: 1 });
+    await q.assignCategoryToProjectionColumn({ projectionColumnId: column.id, financialCategoryId: assigned.id });
+    await expect(q.deleteFinancialCategory({ categoryId: assigned.id }, fake as any)).rejects.toThrow('todavía tiene movimientos, subcategorías o columnas asociadas');
+  });
+
+  it('elimina subcategoría sin movimientos y rechaza subcategoría usada', async () => {
+    const q = await import('@/lib/db/queries');
+    const category = await q.createFinancialCategory({ name: 'Gastos hogar', type: 'expense' });
+    const unused = await q.createFinancialSubcategory({ financialCategoryId: category.id, name: 'Sin uso' });
+    await q.deleteFinancialSubcategory({ subcategoryId: unused.id }, fake as any);
+    expect(fake.db.financial_subcategories.some((row) => row.id === unused.id)).toBe(false);
+
+    const used = await q.createFinancialSubcategory({ financialCategoryId: category.id, name: 'Usada' });
+    fake.db.transaction_groups.push({ id: 'group-subcat', household_id: 'house-1', note: 'Subcat', created_at: '2026-05-01T12:00:00.000Z' });
+    fake.db.transactions.push({ id: 'tx-subcat', group_id: 'group-subcat', account_id: null, type: 'debit', category: category.key, subcategory: used.key, amount: '20.00', happened_at: '2026-05-01T12:00:00.000Z' });
+    await expect(q.deleteFinancialSubcategory({ subcategoryId: used.id }, fake as any)).rejects.toThrow('subcategoría porque todavía tiene movimientos asociados');
+  });
+
+  it('elimina columna sin categorías y rechaza columna con categorías asignadas', async () => {
+    const q = await import('@/lib/db/queries');
+    const emptyColumn = await q.createProjectionColumn({ name: 'Temporal', type: 'expense', displayOrder: 1 });
+    await q.deleteProjectionColumn({ columnId: emptyColumn.id }, fake as any);
+    expect(fake.db.projection_columns.some((row) => row.id === emptyColumn.id)).toBe(false);
+
+    const category = await q.createFinancialCategory({ name: 'Servicios columna', type: 'expense' });
+    const assignedColumn = await q.createProjectionColumn({ name: 'Con asignaciones', type: 'expense', displayOrder: 2 });
+    await q.assignCategoryToProjectionColumn({ projectionColumnId: assignedColumn.id, financialCategoryId: category.id });
+    await expect(q.deleteProjectionColumn({ columnId: assignedColumn.id }, fake as any)).rejects.toThrow('todavía tiene categorías asignadas');
+  });
+
+  it('eliminación respeta household y no modifica movimientos, saldos ni cuentas', async () => {
+    const q = await import('@/lib/db/queries');
+    const category = await q.createFinancialCategory({ name: 'Limpieza segura', type: 'expense' });
+    const otherHouseCategory = { id: 'cat-other-house', household_id: 'house-2', name: 'Otra casa', key: 'otra_casa', type: 'expense', no_projectable: false, is_active: true, created_at: 'x', updated_at: 'x' };
+    fake.db.financial_categories.push(otherHouseCategory);
+    fake.db.accounts.push({ id: 'acc-safe', household_id: 'house-1', name: 'BBVA', type: 'operational_cash', balance: '1234', is_active: true });
+    fake.db.transaction_groups.push({ id: 'group-safe', household_id: 'house-1', note: 'Sin tocar', created_at: '2026-05-01T12:00:00.000Z' });
+    fake.db.transactions.push({ id: 'tx-safe', group_id: 'group-safe', account_id: 'acc-safe', type: 'debit', category: 'otra_categoria', subcategory: null, amount: '99.00', happened_at: '2026-05-01T12:00:00.000Z' });
+    const txBefore = JSON.stringify(fake.db.transactions);
+    const accountsBefore = JSON.stringify(fake.db.accounts);
+
+    await expect(q.deleteFinancialCategory({ categoryId: otherHouseCategory.id }, fake as any)).rejects.toThrow('No se encontró la categoría');
+    await q.deleteFinancialCategory({ categoryId: category.id }, fake as any);
+
+    expect(JSON.stringify(fake.db.transactions)).toBe(txBefore);
+    expect(JSON.stringify(fake.db.accounts)).toBe(accountsBefore);
+    expect(fake.db.financial_categories.some((row) => row.id === otherHouseCategory.id)).toBe(true);
   });
 
 });
