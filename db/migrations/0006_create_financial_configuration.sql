@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS financial_categories (
   name text NOT NULL,
   key text NOT NULL,
   type text NOT NULL CHECK (type IN ('income', 'expense', 'both')),
+  no_projectable boolean NOT NULL DEFAULT false,
   is_active boolean NOT NULL DEFAULT true,
   created_at timestamp NOT NULL DEFAULT now(),
   updated_at timestamp NOT NULL DEFAULT now(),
@@ -51,9 +52,34 @@ CREATE TABLE IF NOT EXISTS projection_column_categories (
 );
 
 CREATE INDEX IF NOT EXISTS financial_categories_household_active_idx ON financial_categories (household_id, is_active);
+CREATE INDEX IF NOT EXISTS financial_categories_household_no_projectable_idx ON financial_categories (household_id, no_projectable);
 CREATE INDEX IF NOT EXISTS financial_subcategories_household_category_idx ON financial_subcategories (household_id, financial_category_id, is_active);
 CREATE INDEX IF NOT EXISTS projection_columns_household_active_order_idx ON projection_columns (household_id, is_active, display_order);
 CREATE INDEX IF NOT EXISTS projection_column_categories_household_category_idx ON projection_column_categories (household_id, financial_category_id);
+
+
+CREATE OR REPLACE FUNCTION prevent_no_projectable_projection_assignment()
+RETURNS trigger AS $$
+DECLARE
+  blocked boolean;
+BEGIN
+  SELECT COALESCE(category.no_projectable, false) INTO blocked
+  FROM financial_categories category
+  WHERE category.id = NEW.financial_category_id
+    AND category.household_id = NEW.household_id;
+
+  IF blocked THEN
+    RAISE EXCEPTION 'Las categorías excluidas de Proyección no pueden asignarse a columnas activas.';
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS projection_column_categories_no_projectable_trigger ON projection_column_categories;
+CREATE TRIGGER projection_column_categories_no_projectable_trigger
+BEFORE INSERT OR UPDATE ON projection_column_categories
+FOR EACH ROW EXECUTE FUNCTION prevent_no_projectable_projection_assignment();
 
 CREATE OR REPLACE FUNCTION prevent_category_multiple_active_projection_columns()
 RETURNS trigger AS $$

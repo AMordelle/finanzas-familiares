@@ -96,6 +96,7 @@ export const financialCategories = pgTable('financial_categories', {
   name: text('name').notNull(),
   key: text('key').notNull(),
   type: text('type').notNull(),
+  noProjectable: boolean('no_projectable').notNull().default(false),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull()

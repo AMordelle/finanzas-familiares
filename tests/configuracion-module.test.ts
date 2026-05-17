@@ -1,3 +1,5 @@
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 class FakeQueryBuilder {
@@ -141,4 +143,119 @@ describe('módulo Configuración financiera', () => {
     const projection = await q.buildWeeklyProjectionSummary(fake as any);
     expect(projection.unclassified).toEqual([{ category: 'gastos_variables', total: 80, movementCount: 1 }]);
   });
+
+  it('detecta auditoría de categorías faltantes, inactivas y sin columna con aislamiento por hogar', async () => {
+    const q = await import('@/lib/db/queries');
+    const activeUnassigned = await q.createFinancialCategory({ name: 'Gastos variables', type: 'expense' });
+    const inactive = await q.createFinancialCategory({ name: 'Archivada', type: 'expense' });
+    await q.toggleFinancialCategory({ categoryId: inactive.id, isActive: false });
+    const assigned = await q.createFinancialCategory({ name: 'Renta', type: 'expense' });
+    const column = await q.createProjectionColumn({ name: 'Fijos', type: 'expense', displayOrder: 1 });
+    await q.assignCategoryToProjectionColumn({ projectionColumnId: column.id, financialCategoryId: assigned.id });
+
+    fake.db.transaction_groups.push(
+      { id: 'group-legacy', household_id: 'house-1', note: 'Legacy', created_at: '2026-05-01T12:00:00.000Z' },
+      { id: 'group-unassigned', household_id: 'house-1', note: 'Farmacia', created_at: '2026-05-02T12:00:00.000Z' },
+      { id: 'group-inactive', household_id: 'house-1', note: 'Archivo', created_at: '2026-05-03T12:00:00.000Z' },
+      { id: 'group-assigned', household_id: 'house-1', note: 'Renta', created_at: '2026-05-04T12:00:00.000Z' },
+      { id: 'group-other-house', household_id: 'house-2', note: 'Otro hogar', created_at: '2026-05-05T12:00:00.000Z' }
+    );
+    fake.db.transactions.push(
+      { id: 'tx-legacy', group_id: 'group-legacy', account_id: null, type: 'debit', category: 'tdc_s', subcategory: null, amount: '100.00', happened_at: '2026-05-01T12:00:00.000Z' },
+      { id: 'tx-unassigned', group_id: 'group-unassigned', account_id: null, type: 'debit', category: activeUnassigned.key, subcategory: null, amount: '80.00', happened_at: '2026-05-02T12:00:00.000Z' },
+      { id: 'tx-inactive', group_id: 'group-inactive', account_id: null, type: 'debit', category: inactive.key, subcategory: null, amount: '60.00', happened_at: '2026-05-03T12:00:00.000Z' },
+      { id: 'tx-assigned', group_id: 'group-assigned', account_id: null, type: 'debit', category: assigned.key, subcategory: null, amount: '500.00', happened_at: '2026-05-04T12:00:00.000Z' },
+      { id: 'tx-other-house', group_id: 'group-other-house', account_id: null, type: 'debit', category: 'legacy_other', subcategory: null, amount: '999.00', happened_at: '2026-05-05T12:00:00.000Z' }
+    );
+
+    const data = await q.getConfigurationData(fake as any);
+    expect(data.categoryAudit.summary).toMatchObject({ problemCategoryCount: 3, problemMovementCount: 3, problemTotal: 240 });
+    expect(data.categoryAudit.groups.map((group) => [group.category, group.status])).toEqual(expect.arrayContaining([
+      ['tdc_s', 'missing_category'],
+      ['gastos_variables', 'unassigned_projection'],
+      ['archivada', 'inactive_category']
+    ]));
+    expect(data.categoryAudit.groups.some((group) => group.category === 'renta' || group.category === 'legacy_other')).toBe(false);
+  });
+
+  it('excluye categorías no proyectables de Proyección y rechaza asignarlas a columnas', async () => {
+    const q = await import('@/lib/db/queries');
+    const transfer = await q.createFinancialCategory({ name: 'Transferencia interna', type: 'both', noProjectable: true });
+    const column = await q.createProjectionColumn({ name: 'Operación', type: 'expense', displayOrder: 1 });
+    await expect(q.assignCategoryToProjectionColumn({ projectionColumnId: column.id, financialCategoryId: transfer.id })).rejects.toThrow('excluidas de Proyección');
+
+    fake.db.transaction_groups.push({ id: 'group-transfer', household_id: 'house-1', note: 'Mover dinero', created_at: '2026-05-01T12:00:00.000Z' });
+    fake.db.transactions.push({ id: 'tx-transfer', group_id: 'group-transfer', account_id: null, type: 'debit', category: transfer.key, subcategory: null, amount: '300.00', happened_at: '2026-05-01T12:00:00.000Z' });
+
+    const projection = await q.buildWeeklyProjectionSummary(fake as any);
+    expect(projection.unclassified).toEqual([]);
+    const data = await q.getConfigurationData(fake as any);
+    expect(data.categoryAudit.groups).toEqual([]);
+    expect(data.categoryAudit.noProjectableGroups[0]).toMatchObject({ category: 'transferencia_interna', movementCount: 1, total: 300 });
+  });
+
+  it('rechaza marcar como no proyectable una categoría ya asignada a una columna activa', async () => {
+    const q = await import('@/lib/db/queries');
+    const category = await q.createFinancialCategory({ name: 'Ingresos extra', type: 'income' });
+    const column = await q.createProjectionColumn({ name: 'Extras', type: 'income', displayOrder: 1 });
+    await q.assignCategoryToProjectionColumn({ projectionColumnId: column.id, financialCategoryId: category.id });
+    await expect(q.updateFinancialCategory({ categoryId: category.id, name: 'Ingresos extra', type: 'income', noProjectable: true, isActive: true })).rejects.toThrow('Quita primero esta categoría');
+  });
+
+  it('reclasifica un movimiento desde auditoría validando subcategoría sin modificar saldos ni montos', async () => {
+    const q = await import('@/lib/db/queries');
+    fake.db.accounts.push({ id: 'acc-1', household_id: 'house-1', name: 'BBVA', type: 'operational_cash', balance: '1000', is_active: true });
+    const category = await q.createFinancialCategory({ name: 'Gastos variables', type: 'expense' });
+    const subcategory = await q.createFinancialSubcategory({ financialCategoryId: category.id, name: 'Oxxo' });
+    const other = await q.createFinancialCategory({ name: 'Servicios', type: 'expense' });
+    await q.createFinancialSubcategory({ financialCategoryId: other.id, name: 'Luz' });
+    fake.db.transaction_groups.push({ id: 'group-audit', household_id: 'house-1', note: 'Oxxo viejo', created_at: '2026-05-01T12:00:00.000Z' });
+    fake.db.transactions.push(
+      { id: 'tx-audit-primary', group_id: 'group-audit', account_id: null, type: 'debit', category: 'legacy_oxxo', subcategory: null, amount: '120.00', happened_at: '2026-05-01T12:00:00.000Z' },
+      { id: 'tx-audit-account', group_id: 'group-audit', account_id: 'acc-1', type: 'credit', category: 'salida_cuenta', subcategory: null, amount: '120.00', happened_at: '2026-05-01T12:00:00.000Z' }
+    );
+    const balanceBefore = fake.db.accounts[0].balance;
+    await expect(q.reclassifyCategoryAuditMovement({ movementId: 'group-audit', category: category.key, subcategory: 'luz' }, fake as any)).rejects.toThrow('subcategoría seleccionada');
+    await q.reclassifyCategoryAuditMovement({ movementId: 'group-audit', category: category.key, subcategory: subcategory.key }, fake as any);
+
+    expect(fake.db.accounts[0].balance).toBe(balanceBefore);
+    expect(fake.db.transactions.find((tx) => tx.id === 'tx-audit-primary')).toMatchObject({ category: 'gastos_variables', subcategory: 'oxxo', amount: '120.00' });
+    expect(fake.db.transactions.find((tx) => tx.id === 'tx-audit-account')).toMatchObject({ category: 'salida_cuenta', subcategory: null, amount: '120.00' });
+  });
+
+  it('la UI muestra agrupación y detalle de movimientos afectados', async () => {
+    vi.doMock('@/app/configuracion/actions', () => ({
+      assignCategoryToProjectionColumnAction: vi.fn(),
+      createFinancialCategoryAction: vi.fn(),
+      createFinancialSubcategoryAction: vi.fn(),
+      createProjectionColumnAction: vi.fn(),
+      reclassifyCategoryAuditMovementAction: vi.fn(),
+      removeCategoryFromProjectionColumnAction: vi.fn(),
+      toggleFinancialCategoryAction: vi.fn(),
+      toggleFinancialSubcategoryAction: vi.fn(),
+      toggleProjectionColumnAction: vi.fn(),
+      updateFinancialCategoryAction: vi.fn(),
+      updateFinancialSubcategoryAction: vi.fn(),
+      updateProjectionColumnAction: vi.fn()
+    }));
+    vi.doMock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+    const { ConfigurationManager } = await import('@/components/configuracion/configuration-manager');
+    const html = renderToStaticMarkup(React.createElement(ConfigurationManager, { data: {
+      hasHousehold: true,
+      householdId: 'house-1',
+      categories: [{ id: 'cat-1', householdId: 'house-1', name: 'Gastos variables', key: 'gastos_variables', type: 'expense', isActive: true, noProjectable: false, createdAt: 'x', updatedAt: 'x', subcategories: [{ id: 'sub-1', householdId: 'house-1', financialCategoryId: 'cat-1', name: 'Oxxo', key: 'oxxo', isActive: true, createdAt: 'x', updatedAt: 'x' }] }],
+      projectionColumns: [],
+      categoryAudit: {
+        groups: [{ category: 'legacy_oxxo', categoryName: null, status: 'missing_category', total: 120, movementCount: 1, movements: [{ id: 'group-1', date: '2026-05-01T12:00:00.000Z', description: 'Oxxo viejo', accountName: 'BBVA', type: 'Gasto', amount: 120, category: 'legacy_oxxo', subcategory: null, status: 'missing_category' }] }],
+        noProjectableGroups: [],
+        summary: { problemCategoryCount: 1, problemMovementCount: 1, problemTotal: 120, noProjectableMovementCount: 0 }
+      }
+    } }));
+
+    expect(html).toContain('Auditoría de categorías');
+    expect(html).toContain('Categoría: legacy_oxxo');
+    expect(html).toContain('Oxxo viejo');
+    expect(html).toContain('Sin categoría configurada');
+  });
+
 });

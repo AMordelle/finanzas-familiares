@@ -17,9 +17,9 @@ vi.mock('@/app/registro/actions', () => ({
 
 
 const categoryCatalog = [
-  { id: 'cat-comida', name: 'Comida', key: 'comida', type: 'expense' as const, subcategories: [{ id: 'sub-oxxo', name: 'Oxxo', key: 'oxxo' }] },
-  { id: 'cat-ingreso-extra', name: 'Ingreso extra', key: 'ingreso_extra', type: 'income' as const, subcategories: [{ id: 'sub-prime', name: 'PrimeIPTV', key: 'prime_iptv' }] },
-  { id: 'cat-transporte', name: 'Transporte', key: 'transporte', type: 'expense' as const, subcategories: [] }
+  { id: 'cat-comida', name: 'Comida', key: 'comida', type: 'expense' as const, noProjectable: false, subcategories: [{ id: 'sub-oxxo', name: 'Oxxo', key: 'oxxo' }] },
+  { id: 'cat-ingreso-extra', name: 'Ingreso extra', key: 'ingreso_extra', type: 'income' as const, noProjectable: false, subcategories: [{ id: 'sub-prime', name: 'PrimeIPTV', key: 'prime_iptv' }] },
+  { id: 'cat-transporte', name: 'Transporte', key: 'transporte', type: 'expense' as const, noProjectable: false, subcategories: [] }
 ];
 
 function buildIntent(partial: Partial<TransactionIntent>): TransactionIntent {

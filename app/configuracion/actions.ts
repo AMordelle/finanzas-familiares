@@ -7,6 +7,7 @@ import {
   createFinancialSubcategory,
   createProjectionColumn,
   removeCategoryFromProjectionColumn,
+  reclassifyCategoryAuditMovement,
   toggleFinancialCategory,
   toggleFinancialSubcategory,
   toggleProjectionColumn,
@@ -20,6 +21,13 @@ function revalidateConfigurationPaths() {
   revalidatePath('/movimientos');
   revalidatePath('/registro');
   revalidatePath('/dashboard');
+  revalidatePath('/proyeccion');
+}
+
+function revalidateAuditPaths() {
+  revalidatePath('/configuracion');
+  revalidatePath('/movimientos');
+  revalidatePath('/proyeccion');
 }
 
 export async function createFinancialCategoryAction(payload: unknown) {
@@ -86,4 +94,10 @@ export async function removeCategoryFromProjectionColumnAction(payload: unknown)
   await removeCategoryFromProjectionColumn(payload);
   revalidateConfigurationPaths();
   return { success: true, message: 'Categoría removida de columna.' };
+}
+
+export async function reclassifyCategoryAuditMovementAction(payload: unknown) {
+  const data = await reclassifyCategoryAuditMovement(payload);
+  revalidateAuditPaths();
+  return { success: true, message: 'Movimiento reclasificado correctamente.', data };
 }

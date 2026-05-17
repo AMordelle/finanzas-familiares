@@ -154,6 +154,7 @@ export type FinancialCategoryCatalogItem = {
   name: string;
   key: string;
   type: 'income' | 'expense' | 'both';
+  noProjectable: boolean;
   subcategories: FinancialCategoryCatalogSubcategory[];
 };
 
@@ -3281,6 +3282,7 @@ export type FinancialCategory = {
   key: string;
   type: FinancialCategoryType;
   isActive: boolean;
+  noProjectable: boolean;
   createdAt: string;
   updatedAt: string;
   subcategories: FinancialSubcategory[];
@@ -3298,7 +3300,7 @@ export type ProjectionColumn = {
   createdAt: string;
   updatedAt: string;
   categoryIds: string[];
-  categories: Array<{ id: string; name: string; key: string; type: FinancialCategoryType; isActive: boolean }>;
+  categories: Array<{ id: string; name: string; key: string; type: FinancialCategoryType; isActive: boolean; noProjectable: boolean }>;
 };
 
 export type ConfigurationData = {
@@ -3306,6 +3308,42 @@ export type ConfigurationData = {
   householdId: string | null;
   categories: FinancialCategory[];
   projectionColumns: ProjectionColumn[];
+  categoryAudit: CategoryAuditData;
+};
+
+
+export type CategoryAuditStatus = 'missing_category' | 'inactive_category' | 'unassigned_projection' | 'no_projectable';
+
+export type CategoryAuditMovement = {
+  id: string;
+  date: string;
+  description: string;
+  accountName: string | null;
+  type: string;
+  amount: number;
+  category: string;
+  subcategory: string | null;
+  status: CategoryAuditStatus;
+};
+
+export type CategoryAuditGroup = {
+  category: string;
+  categoryName: string | null;
+  status: CategoryAuditStatus;
+  total: number;
+  movementCount: number;
+  movements: CategoryAuditMovement[];
+};
+
+export type CategoryAuditData = {
+  groups: CategoryAuditGroup[];
+  noProjectableGroups: CategoryAuditGroup[];
+  summary: {
+    problemCategoryCount: number;
+    problemMovementCount: number;
+    problemTotal: number;
+    noProjectableMovementCount: number;
+  };
 };
 
 export type WeeklyProjectionColumnSummary = {
@@ -3358,6 +3396,7 @@ function normalizeAndValidateOptionalKey(value: string | null | undefined, label
 export const financialCategoryCreateSchema = z.object({
   name: z.string().trim().min(1, 'El nombre de la categoría es obligatorio.').max(80),
   type: z.enum(categoryTypeValues),
+  noProjectable: z.boolean().default(false),
   householdId: z.string().min(1).optional()
 });
 
@@ -3403,6 +3442,12 @@ export const projectionColumnCategoryAssignSchema = z.object({
 
 export const projectionColumnCategoryRemoveSchema = projectionColumnCategoryAssignSchema;
 
+export const categoryAuditReclassifySchema = z.object({
+  movementId: z.string().min(1),
+  category: z.string().trim().min(1),
+  subcategory: z.string().trim().nullable().optional()
+});
+
 type FinancialSubcategoryRow = {
   id: string;
   household_id: string;
@@ -3420,6 +3465,7 @@ type FinancialCategoryRow = {
   name: string;
   key: string;
   type: FinancialCategoryType;
+  no_projectable?: boolean | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -3462,6 +3508,7 @@ function mapFinancialCategory(row: FinancialCategoryRow, subcategories: Financia
     key: row.key,
     type: row.type,
     isActive: row.is_active ?? true,
+    noProjectable: row.no_projectable ?? false,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     subcategories
@@ -3493,7 +3540,7 @@ export async function getFinancialCategoryCatalog(householdId?: string | null, c
   const [categoriesResult, subcategoriesResult] = await Promise.all([
     client
       .from('financial_categories')
-      .select('id,household_id,name,key,type,is_active,created_at,updated_at')
+      .select('id,household_id,name,key,type,no_projectable,is_active,created_at,updated_at')
       .eq('household_id', resolvedHouseholdId)
       .eq('is_active', true)
       .order('name', { ascending: true }),
@@ -3519,6 +3566,7 @@ export async function getFinancialCategoryCatalog(householdId?: string | null, c
     name: row.name,
     key: row.key,
     type: row.type,
+    noProjectable: row.no_projectable ?? false,
     subcategories: subcategoriesByCategory[row.id] ?? []
   }));
 }
@@ -3565,12 +3613,138 @@ async function assertUniqueKey(table: string, householdId: string, key: string, 
   if (duplicate) throw new Error('Ya existe un registro activo con esa clave en este hogar.');
 }
 
+
+function createEmptyCategoryAuditData(): CategoryAuditData {
+  return {
+    groups: [],
+    noProjectableGroups: [],
+    summary: {
+      problemCategoryCount: 0,
+      problemMovementCount: 0,
+      problemTotal: 0,
+      noProjectableMovementCount: 0
+    }
+  };
+}
+
+function isSystemProjectionCategory(category: string) {
+  return category === 'entrada_cuenta' || category === 'salida_cuenta' || category.startsWith('sistema_');
+}
+
+function getActiveProjectionCategoryIds(projectionColumns: ProjectionColumn[]) {
+  const ids = new Set<string>();
+  for (const column of projectionColumns) {
+    if (!column.isActive) continue;
+    for (const category of column.categories) ids.add(category.id);
+  }
+  return ids;
+}
+
+function resolveAuditStatus(category: FinancialCategory | undefined, activeProjectionCategoryIds: Set<string>): CategoryAuditStatus {
+  if (!category) return 'missing_category';
+  if (category.noProjectable) return 'no_projectable';
+  if (!category.isActive) return 'inactive_category';
+  if (!activeProjectionCategoryIds.has(category.id)) return 'unassigned_projection';
+  return 'unassigned_projection';
+}
+
+function upsertAuditGroup(groups: Map<string, CategoryAuditGroup>, movement: CategoryAuditMovement, categoryName: string | null) {
+  const existing = groups.get(movement.category) ?? {
+    category: movement.category,
+    categoryName,
+    status: movement.status,
+    total: 0,
+    movementCount: 0,
+    movements: []
+  };
+  existing.total += movement.amount;
+  existing.movementCount += 1;
+  existing.movements.push(movement);
+  groups.set(movement.category, existing);
+}
+
+async function buildCategoryAuditData(
+  householdId: string,
+  categories: FinancialCategory[],
+  projectionColumns: ProjectionColumn[],
+  client: SupabaseClientLike
+): Promise<CategoryAuditData> {
+  const { data: groupsData, error: groupsError } = await client.from('transaction_groups').select('id,note,created_at').eq('household_id', householdId);
+  if (groupsError) throw new Error(`No fue posible leer grupos de movimientos para auditoría: ${groupsError.message}`);
+  const groupRows = (groupsData ?? []) as Array<{ id: string; note?: string | null; created_at?: string | null }>;
+  const groupIds = groupRows.map((group) => group.id);
+  if (!groupIds.length) return createEmptyCategoryAuditData();
+
+  const [{ data: txData, error: txError }, { data: accountData, error: accountError }] = await Promise.all([
+    client.from('transactions').select('id,group_id,account_id,type,category,subcategory,amount,happened_at').in('group_id', groupIds),
+    client.from('accounts').select('id,name,household_id').eq('household_id', householdId)
+  ]);
+  if (txError) throw new Error(`No fue posible leer movimientos para auditoría: ${txError.message}`);
+  if (accountError) throw new Error(`No fue posible leer cuentas para auditoría: ${accountError.message}`);
+
+  const categoryByKey = new Map(categories.map((category) => [category.key, category]));
+  const activeProjectionCategoryIds = getActiveProjectionCategoryIds(projectionColumns);
+  const accountById = new Map(((accountData ?? []) as Array<{ id: string; name: string }>).map((account) => [account.id, account.name]));
+  const txByGroup = ((txData ?? []) as Array<{ id: string; group_id: string; account_id: string | null; type: string; category: string; subcategory?: string | null; amount: string | number; happened_at?: string | null }>).reduce<Record<string, Array<{ id: string; group_id: string; account_id: string | null; type: string; category: string; subcategory?: string | null; amount: string | number; happened_at?: string | null }>>>((acc, row) => {
+    acc[row.group_id] = [...(acc[row.group_id] ?? []), row];
+    return acc;
+  }, {});
+
+  const problemGroups = new Map<string, CategoryAuditGroup>();
+  const noProjectableGroups = new Map<string, CategoryAuditGroup>();
+
+  for (const group of groupRows) {
+    const lines = txByGroup[group.id] ?? [];
+    if (!lines.length) continue;
+    const primaryLine = lines.find((line) => Boolean(line.category) && !isSystemProjectionCategory(line.category));
+    if (!primaryLine) continue;
+    const category = categoryByKey.get(primaryLine.category);
+    const status = resolveAuditStatus(category, activeProjectionCategoryIds);
+    if (status !== 'no_projectable' && category?.isActive && activeProjectionCategoryIds.has(category.id)) continue;
+
+    const descriptor = resolveStoredMovementDescriptor(lines.map((line) => ({ type: line.type, category: line.category, account_id: line.account_id, amount: String(line.amount) })));
+    const accountName = lines.map((line) => line.account_id).find((accountId): accountId is string => Boolean(accountId)) ?? null;
+    const movement: CategoryAuditMovement = {
+      id: group.id,
+      date: primaryLine.happened_at ?? group.created_at ?? '',
+      description: group.note || primaryLine.category,
+      accountName: accountName ? accountById.get(accountName) ?? null : null,
+      type: inferMovementType(lines),
+      amount: descriptor?.amount ?? Number(primaryLine.amount),
+      category: primaryLine.category,
+      subcategory: primaryLine.subcategory ?? null,
+      status
+    };
+
+    if (status === 'no_projectable') upsertAuditGroup(noProjectableGroups, movement, category?.name ?? null);
+    else upsertAuditGroup(problemGroups, movement, category?.name ?? null);
+  }
+
+  const groups = [...problemGroups.values()].sort((a, b) => b.total - a.total);
+  const noProjectable = [...noProjectableGroups.values()].sort((a, b) => b.total - a.total);
+  return {
+    groups,
+    noProjectableGroups: noProjectable,
+    summary: {
+      problemCategoryCount: groups.length,
+      problemMovementCount: groups.reduce((sum, group) => sum + group.movementCount, 0),
+      problemTotal: groups.reduce((sum, group) => sum + group.total, 0),
+      noProjectableMovementCount: noProjectable.reduce((sum, group) => sum + group.movementCount, 0)
+    }
+  };
+}
+
+async function assertCategoryHasNoProjectionAssignments(householdId: string, categoryId: string, client: SupabaseClientLike) {
+  const activeColumnIds = await getActiveColumnIdsForCategory(householdId, categoryId, client);
+  if (activeColumnIds.length) throw new Error('Quita primero esta categoría de las columnas de Proyección.');
+}
+
 export async function getConfigurationData(client: SupabaseClientLike = supabaseAdmin): Promise<ConfigurationData> {
   const householdId = await getDefaultHouseholdId(client);
-  if (!householdId) return { hasHousehold: false, householdId: null, categories: [], projectionColumns: [] };
+  if (!householdId) return { hasHousehold: false, householdId: null, categories: [], projectionColumns: [], categoryAudit: createEmptyCategoryAuditData() };
 
   const [categoriesResult, subcategoriesResult, columnsResult, assignmentsResult] = await Promise.all([
-    client.from('financial_categories').select('id,household_id,name,key,type,is_active,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
+    client.from('financial_categories').select('id,household_id,name,key,type,no_projectable,is_active,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
     client.from('financial_subcategories').select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
     client.from('projection_columns').select('id,household_id,name,key,type,description,display_order,is_active,created_at,updated_at').eq('household_id', householdId).order('display_order', { ascending: true }),
     client.from('projection_column_categories').select('projection_column_id,financial_category_id').eq('household_id', householdId)
@@ -3593,10 +3767,12 @@ export async function getConfigurationData(client: SupabaseClientLike = supabase
   }, {});
   const projectionColumns = ((columnsResult.data ?? []) as ProjectionColumnRow[]).map((row) => mapProjectionColumn(row, (assignmentsByColumn[row.id] ?? []).flatMap((categoryId) => {
     const category = categoryById.get(categoryId);
-    return category ? [{ id: category.id, name: category.name, key: category.key, type: category.type, isActive: category.isActive }] : [];
+    return category ? [{ id: category.id, name: category.name, key: category.key, type: category.type, isActive: category.isActive, noProjectable: category.noProjectable }] : [];
   })));
 
-  return { hasHousehold: true, householdId, categories, projectionColumns };
+  const categoryAudit = await buildCategoryAuditData(householdId, categories, projectionColumns, client);
+
+  return { hasHousehold: true, householdId, categories, projectionColumns, categoryAudit };
 }
 
 export async function createFinancialCategory(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
@@ -3605,7 +3781,7 @@ export async function createFinancialCategory(rawInput: unknown, client: Supabas
   const key = normalizeAndValidateRequiredKey(input.name, 'La categoría');
   await assertUniqueKey('financial_categories', householdId, key, client);
   const now = new Date().toISOString();
-  const { data, error } = await client.from('financial_categories').insert({ household_id: householdId, name: input.name.trim(), key, type: input.type, is_active: true, updated_at: now }).select('id,household_id,name,key,type,is_active,created_at,updated_at').single();
+  const { data, error } = await client.from('financial_categories').insert({ household_id: householdId, name: input.name.trim(), key, type: input.type, no_projectable: input.noProjectable, is_active: true, updated_at: now }).select('id,household_id,name,key,type,no_projectable,is_active,created_at,updated_at').single();
   if (error || !data) throw new Error(error?.message ?? 'No fue posible crear la categoría.');
   return mapFinancialCategory(data);
 }
@@ -3615,7 +3791,8 @@ export async function updateFinancialCategory(rawInput: unknown, client: Supabas
   const householdId = await resolveInputHouseholdId(input.householdId, client);
   const key = normalizeAndValidateRequiredKey(input.name, 'La categoría');
   await assertUniqueKey('financial_categories', householdId, key, client, input.categoryId);
-  const { data, error } = await client.from('financial_categories').update({ name: input.name.trim(), key, type: input.type, is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.categoryId).eq('household_id', householdId).select('id,household_id,name,key,type,is_active,created_at,updated_at').maybeSingle();
+  if (input.noProjectable) await assertCategoryHasNoProjectionAssignments(householdId, input.categoryId, client);
+  const { data, error } = await client.from('financial_categories').update({ name: input.name.trim(), key, type: input.type, no_projectable: input.noProjectable, is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.categoryId).eq('household_id', householdId).select('id,household_id,name,key,type,no_projectable,is_active,created_at,updated_at').maybeSingle();
   if (error) throw new Error(`No fue posible editar la categoría: ${error.message}`);
   if (!data) throw new Error('No se encontró la categoría en este hogar.');
   return mapFinancialCategory(data);
@@ -3684,6 +3861,7 @@ export async function toggleProjectionColumn(rawInput: unknown, client: Supabase
     const { data: assignments, error: assignmentsError } = await client.from('projection_column_categories').select('financial_category_id').eq('household_id', householdId).eq('projection_column_id', input.columnId);
     if (assignmentsError) throw new Error(`No fue posible validar asignaciones de la columna: ${assignmentsError.message}`);
     for (const assignment of ((assignments ?? []) as Array<{ financial_category_id: string }>)) {
+      await assertCategoryIsProjectable(householdId, assignment.financial_category_id, client);
       const activeColumnIds = await getActiveColumnIdsForCategory(householdId, assignment.financial_category_id, client);
       if (activeColumnIds.some((id) => id !== input.columnId)) {
         throw new Error('No puedes activar esta columna porque una de sus categorías ya alimenta otra columna activa.');
@@ -3704,9 +3882,18 @@ async function getActiveColumnIdsForCategory(householdId: string, categoryId: st
   return ((columns ?? []) as Array<{ id: string; is_active: boolean }>).filter((column) => column.is_active).map((column) => column.id);
 }
 
+
+async function assertCategoryIsProjectable(householdId: string, categoryId: string, client: SupabaseClientLike) {
+  const { data, error } = await client.from('financial_categories').select('id,no_projectable').eq('household_id', householdId).eq('id', categoryId).maybeSingle();
+  if (error) throw new Error(`No fue posible validar categoría: ${error.message}`);
+  if (!data?.id) throw new Error('No se encontró la categoría en este hogar.');
+  if ((data as { no_projectable?: boolean | null }).no_projectable) throw new Error('Las categorías excluidas de Proyección no pueden asignarse a columnas.');
+}
+
 export async function assignCategoryToProjectionColumn(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
   const input = projectionColumnCategoryAssignSchema.parse(rawInput);
   const householdId = await resolveInputHouseholdId(undefined, client);
+  await assertCategoryIsProjectable(householdId, input.financialCategoryId, client);
   const activeColumnIds = await getActiveColumnIdsForCategory(householdId, input.financialCategoryId, client);
   if (activeColumnIds.some((id) => id !== input.projectionColumnId)) {
     throw new Error('Esta categoría principal ya alimenta otra columna activa. Desactiva o remueve la asignación anterior para evitar duplicar importes.');
@@ -3726,13 +3913,51 @@ export async function removeCategoryFromProjectionColumn(rawInput: unknown, clie
   if (error) throw new Error(`No fue posible quitar la categoría de la columna: ${error.message}`);
 }
 
+
+export async function reclassifyCategoryAuditMovement(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = categoryAuditReclassifySchema.parse(rawInput);
+  const householdId = await resolveInputHouseholdId(undefined, client);
+  const validated = await validateCategorySelection(householdId, input.category, input.subcategory ?? null, client);
+
+  const { data: group, error: groupError } = await client
+    .from('transaction_groups')
+    .select('id,household_id')
+    .eq('id', input.movementId)
+    .eq('household_id', householdId)
+    .maybeSingle();
+  if (groupError) throw new Error(`No fue posible leer el movimiento para reclasificar: ${groupError.message}`);
+  if (!group?.id) throw new Error('No se encontró el movimiento en este hogar.');
+
+  const { data: lines, error: txError } = await client
+    .from('transactions')
+    .select('id,group_id,category,subcategory,amount,type,account_id')
+    .eq('group_id', input.movementId);
+  if (txError) throw new Error(`No fue posible leer transacciones del movimiento: ${txError.message}`);
+
+  const editableLines = ((lines ?? []) as Array<{ id: string; category: string }>).filter((line) => !isSystemProjectionCategory(line.category));
+  if (!editableLines.length) throw new Error('Este movimiento no tiene una categoría reclasificable.');
+
+  await Promise.all(editableLines.map(async (line) => {
+    const { error } = await client
+      .from('transactions')
+      .update({ category: validated.categoryKey, subcategory: validated.subcategoryKey })
+      .eq('id', line.id)
+      .eq('group_id', input.movementId);
+    if (error) throw new Error(`No fue posible reclasificar el movimiento: ${error.message}`);
+  }));
+
+  return { category: validated.categoryKey, subcategory: validated.subcategoryKey };
+}
+
 export async function buildWeeklyProjectionSummary(client: SupabaseClientLike = supabaseAdmin): Promise<WeeklyProjectionSummary> {
   const configuration = await getConfigurationData(client);
   if (!configuration.hasHousehold || !configuration.householdId) return { hasHousehold: false, hasConfiguration: false, columns: [], unclassified: [] };
   const activeColumns = configuration.projectionColumns.filter((column) => column.isActive);
   const activeAssignments = new Map<string, ProjectionColumn>();
   for (const column of activeColumns) {
-    for (const categoryId of column.categoryIds) activeAssignments.set(categoryId, column);
+    for (const category of column.categories) {
+      if (category.isActive && !category.noProjectable) activeAssignments.set(category.id, column);
+    }
   }
   const categoryByKey = new Map(configuration.categories.map((category) => [category.key, category]));
   const { data: groups } = await client.from('transaction_groups').select('id').eq('household_id', configuration.householdId);
@@ -3745,7 +3970,8 @@ export async function buildWeeklyProjectionSummary(client: SupabaseClientLike = 
   for (const tx of (rows ?? []) as ProjectionTransactionRow[]) {
     if (tx.category === 'entrada_cuenta' || tx.category === 'salida_cuenta') continue;
     const category = categoryByKey.get(tx.category);
-    const column = category ? activeAssignments.get(category.id) : undefined;
+    if (category?.noProjectable) continue;
+    const column = category && category.isActive ? activeAssignments.get(category.id) : undefined;
     const signedAmount = tx.type === 'credit' ? Number(tx.amount) : Number(tx.amount);
     if (!column) {
       const existing = unclassified.get(tx.category) ?? { category: tx.category, total: 0, movementCount: 0 };
