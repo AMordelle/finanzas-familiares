@@ -117,6 +117,9 @@ describe('módulo Configuración financiera', () => {
   it('edita movimiento con categoría/subcategoría sin modificar saldos y proyecta por categoría principal sin duplicar subcategorías', async () => {
     const q = await import('@/lib/db/queries');
     fake.db.accounts.push({ id: 'acc-1', household_id: 'house-1', name: 'BBVA', type: 'operational_cash', balance: '1000', is_active: true });
+    const incomeCategory = await q.createFinancialCategory({ name: 'Nómina', type: 'income' });
+    const incomeColumn = await q.createProjectionColumn({ name: 'Nómina', type: 'income', displayOrder: 0 });
+    await q.assignCategoryToProjectionColumn({ projectionColumnId: incomeColumn.id, financialCategoryId: incomeCategory.id });
     const category = await q.createFinancialCategory({ name: 'Gastos variables', type: 'expense' });
     await q.createFinancialSubcategory({ financialCategoryId: category.id, name: 'Oxxo' });
     const column = await q.createProjectionColumn({ name: 'Gastos variables', type: 'expense', displayOrder: 1 });
@@ -128,11 +131,14 @@ describe('módulo Configuración financiera', () => {
     );
     const balanceBefore = fake.db.accounts[0].balance;
     await q.updateMovement({ movementId: 'group-1', description: 'Oxxo editado', amount: 120, sourceAccountId: 'acc-1', destinationAccountId: null, category: 'Gastos variables', subcategory: 'Oxxo' });
+    fake.db.transaction_groups.push({ id: 'group-income-valid-week', household_id: 'house-1', note: 'Nómina', created_at: '2026-05-01T13:00:00.000Z' });
+    fake.db.transactions.push({ id: 'tx-income-valid-week', group_id: 'group-income-valid-week', account_id: null, type: 'credit', category: incomeCategory.key, subcategory: null, amount: '500.00', happened_at: '2026-05-01T13:00:00.000Z' });
     expect(Number(fake.db.accounts[0].balance)).toBe(Number(balanceBefore));
 
     const projection = await q.buildWeeklyProjectionSummary(fake as any);
-    expect(projection.columns[0]).toMatchObject({ columnKey: 'gastos_variables', total: 120 });
-    expect(projection.columns[0]?.subcategoryBreakdown).toEqual([{ subcategory: 'oxxo', total: 120 }]);
+    const expenseProjection = projection.columns.find((item) => item.columnKey === 'gastos_variables');
+    expect(expenseProjection).toMatchObject({ columnKey: 'gastos_variables', total: 120 });
+    expect(expenseProjection?.subcategoryBreakdown).toEqual([{ subcategory: 'oxxo', total: 120 }]);
   });
 
   it('muestra movimientos sin columna como sin clasificar', async () => {
@@ -141,7 +147,81 @@ describe('módulo Configuración financiera', () => {
     fake.db.transaction_groups.push({ id: 'group-2', household_id: 'house-1', note: 'Farmacia', created_at: '2026-05-01T12:00:00.000Z' });
     fake.db.transactions.push({ id: 'tx-3', group_id: 'group-2', account_id: null, type: 'debit', category: 'gastos_variables', subcategory: 'farmacia', amount: '80.00', happened_at: '2026-05-01T12:00:00.000Z' });
     const projection = await q.buildWeeklyProjectionSummary(fake as any);
-    expect(projection.unclassified).toEqual([{ category: 'gastos_variables', total: 80, movementCount: 1 }]);
+    expect(projection.unclassified.map(({ category, total, movementCount }) => ({ category, total, movementCount }))).toEqual([{ category: 'gastos_variables', total: 80, movementCount: 1 }]);
+  });
+
+
+  it('construye Proyección con columnas activas, semanas válidas, semana actual, 12 semanas y detalles auditables', async () => {
+    const q = await import('@/lib/db/queries');
+    fake.db.accounts.push({ id: 'acc-operativa', household_id: 'house-1', name: 'BBVA', type: 'operational_cash', balance: '2000', is_active: true });
+
+    const nomina = await q.createFinancialCategory({ name: 'Nómina', type: 'income' });
+    const eventos = await q.createFinancialCategory({ name: 'Eventos', type: 'income' });
+    const gastos = await q.createFinancialCategory({ name: 'Gastos variables', type: 'expense' });
+    const msi = await q.createFinancialCategory({ name: 'MCI MSI', type: 'expense' });
+    const sinColumna = await q.createFinancialCategory({ name: 'Sin columna', type: 'expense' });
+    const noProjectable = await q.createFinancialCategory({ name: 'Transferencias', type: 'expense', noProjectable: true });
+    await q.createFinancialSubcategory({ financialCategoryId: gastos.id, name: 'Oxxo' });
+
+    const nominaColumn = await q.createProjectionColumn({ name: 'Nómina', type: 'income', displayOrder: 1 });
+    const eventosColumn = await q.createProjectionColumn({ name: 'Eventos', type: 'income', displayOrder: 2 });
+    const gastosColumn = await q.createProjectionColumn({ name: 'Gastos variables', type: 'expense', displayOrder: 3 });
+    const msiColumn = await q.createProjectionColumn({ name: 'MCI/MSI', type: 'expense', displayOrder: 4 });
+    const inactiveColumn = await q.createProjectionColumn({ name: 'Inactiva', type: 'expense', displayOrder: 5 });
+    await q.toggleProjectionColumn({ columnId: inactiveColumn.id, isActive: false });
+    await q.assignCategoryToProjectionColumn({ projectionColumnId: nominaColumn.id, financialCategoryId: nomina.id });
+    await q.assignCategoryToProjectionColumn({ projectionColumnId: eventosColumn.id, financialCategoryId: eventos.id });
+    await q.assignCategoryToProjectionColumn({ projectionColumnId: gastosColumn.id, financialCategoryId: gastos.id });
+    await q.assignCategoryToProjectionColumn({ projectionColumnId: msiColumn.id, financialCategoryId: msi.id });
+
+    fake.db.transaction_groups.push(
+      { id: 'week-valid-1', household_id: 'house-1', note: 'Semana válida 1', created_at: '2026-04-28T12:00:00.000Z' },
+      { id: 'week-valid-2', household_id: 'house-1', note: 'Semana válida 2', created_at: '2026-05-05T12:00:00.000Z' },
+      { id: 'week-excluded', household_id: 'house-1', note: 'Solo ingreso', created_at: '2026-05-12T12:00:00.000Z' },
+      { id: 'week-current', household_id: 'house-1', note: 'Actual parcial', created_at: '2026-05-18T12:00:00.000Z' }
+    );
+    fake.db.transactions.push(
+      { id: 'tx-income-1', group_id: 'week-valid-1', account_id: 'acc-operativa', type: 'credit', category: nomina.key, subcategory: null, amount: '1000.00', happened_at: '2026-04-28T12:00:00.000Z' },
+      { id: 'tx-event-1', group_id: 'week-valid-1', account_id: null, type: 'credit', category: eventos.key, subcategory: null, amount: '50.00', happened_at: '2026-04-28T12:00:00.000Z' },
+      { id: 'tx-expense-1', group_id: 'week-valid-1', account_id: 'acc-operativa', type: 'debit', category: gastos.key, subcategory: 'oxxo', amount: '400.00', happened_at: '2026-04-29T12:00:00.000Z' },
+      { id: 'tx-msi-1', group_id: 'week-valid-1', account_id: null, type: 'debit', category: msi.key, subcategory: null, amount: '100.00', happened_at: '2026-04-30T12:00:00.000Z' },
+      { id: 'tx-income-2', group_id: 'week-valid-2', account_id: 'acc-operativa', type: 'credit', category: nomina.key, subcategory: null, amount: '1200.00', happened_at: '2026-05-05T12:00:00.000Z' },
+      { id: 'tx-expense-2', group_id: 'week-valid-2', account_id: 'acc-operativa', type: 'debit', category: gastos.key, subcategory: 'oxxo', amount: '600.00', happened_at: '2026-05-06T12:00:00.000Z' },
+      { id: 'tx-unclassified', group_id: 'week-valid-2', account_id: null, type: 'debit', category: sinColumna.key, subcategory: null, amount: '70.00', happened_at: '2026-05-06T12:00:00.000Z' },
+      { id: 'tx-ignored', group_id: 'week-valid-2', account_id: null, type: 'debit', category: noProjectable.key, subcategory: null, amount: '999.00', happened_at: '2026-05-06T12:00:00.000Z' },
+      { id: 'tx-income-excluded', group_id: 'week-excluded', account_id: null, type: 'credit', category: nomina.key, subcategory: null, amount: '3000.00', happened_at: '2026-05-12T12:00:00.000Z' },
+      { id: 'tx-current-income', group_id: 'week-current', account_id: null, type: 'credit', category: nomina.key, subcategory: null, amount: '5000.00', happened_at: '2026-05-18T12:00:00.000Z' }
+    );
+    const txBefore = JSON.stringify(fake.db.transactions);
+    const accountsBefore = JSON.stringify(fake.db.accounts);
+
+    const projection = await q.buildWeeklyProjectionSummary(fake as any);
+    expect(projection.columns.map((column) => column.columnName)).toEqual(['Nómina', 'Eventos', 'Gastos variables', 'MCI/MSI']);
+    expect(projection.historicalWeeksUsed).toBe(2);
+    expect(projection.excludedWeeks).toHaveLength(1);
+    expect(projection.tableRows.filter((row) => row.block === 'current')).toHaveLength(1);
+    expect(projection.tableRows.filter((row) => row.block === 'projection')).toHaveLength(12);
+    expect(projection.averageWeeklyIncome).toBe(1125);
+    expect(projection.averageWeeklyExpense).toBe(550);
+    expect(projection.columns.find((column) => column.columnName === 'Gastos variables')?.averageWeekly).toBe(500);
+    expect(projection.columns.find((column) => column.columnName === 'Eventos')?.averageWeekly).toBe(25);
+    expect(projection.tableRows.find((row) => row.id === 'projection-1')?.cells[eventosColumn.id]?.amount).toBe(0);
+    expect(projection.tableRows.find((row) => row.id === 'projection-1')?.cells[gastosColumn.id]?.historicalValues).toEqual([{ label: 'Histórico real 1', amount: 400 }, { label: 'Histórico real 2', amount: 600 }]);
+    expect(projection.tableRows.find((row) => row.block === 'historical')?.cells[gastosColumn.id]?.movements[0]).toMatchObject({ description: 'Semana válida 1', accountName: 'BBVA', amount: 400 });
+    expect(projection.unclassified.map(({ category, total, movementCount }) => ({ category, total, movementCount }))).toEqual([{ category: sinColumna.key, total: 70, movementCount: 1 }]);
+    expect(projection.unclassified.some((item) => item.category === noProjectable.key)).toBe(false);
+    expect(JSON.stringify(fake.db.transactions)).toBe(txBefore);
+    expect(JSON.stringify(fake.db.accounts)).toBe(accountsBefore);
+
+    const page = await import('@/app/proyeccion/page');
+    const html = renderToStaticMarkup(await page.default());
+    expect(html).toContain('Resumen general');
+    expect(html).toContain('Cómo se armó');
+    expect(html).toContain('Semana actual parcial');
+    expect(html).toContain('Proyección semana 12');
+    expect(html).toContain('Auditar');
+    expect(html).toContain('Sin clasificar');
+    expect(html).toContain('Cómo se armó este escenario');
   });
 
   it('detecta auditoría de categorías faltantes, inactivas y sin columna con aislamiento por hogar', async () => {

@@ -3352,20 +3352,84 @@ export type CategoryAuditData = {
   };
 };
 
+export type WeeklyProjectionMovementDetail = {
+  id: string;
+  groupId: string;
+  date: string;
+  description: string;
+  accountName: string | null;
+  amount: number;
+  category: string;
+  categoryName: string;
+  subcategory: string | null;
+};
+
+export type WeeklyProjectionCategoryDetail = {
+  category: string;
+  categoryName: string;
+  subcategories: Array<{ subcategory: string; total: number; movements: WeeklyProjectionMovementDetail[] }>;
+  total: number;
+  averageWeekly: number;
+  movementCount: number;
+};
+
 export type WeeklyProjectionColumnSummary = {
   columnId: string;
   columnName: string;
   columnKey: string;
   type: ProjectionColumnType;
   total: number;
+  averageWeekly: number;
+  weeksUsed: number;
+  categories: Array<{ id: string; key: string; name: string }>;
+  categoryBreakdown: WeeklyProjectionCategoryDetail[];
   subcategoryBreakdown: Array<{ subcategory: string; total: number }>;
+};
+
+export type WeeklyProjectionCell = {
+  amount: number;
+  movements: WeeklyProjectionMovementDetail[];
+  categoryBreakdown: WeeklyProjectionCategoryDetail[];
+  projectedFromAverage?: boolean;
+  averageUsed?: number;
+  historicalValues?: Array<{ label: string; amount: number }>;
+};
+
+export type WeeklyProjectionRow = {
+  id: string;
+  block: 'historical' | 'current' | 'projection';
+  label: string;
+  startDate: string;
+  endDate: string;
+  isValidHistorical: boolean;
+  cells: Record<string, WeeklyProjectionCell>;
+  totalIncome: number;
+  totalExpense: number;
+  balance: number;
+  operationalMoney: number;
 };
 
 export type WeeklyProjectionSummary = {
   hasHousehold: boolean;
   hasConfiguration: boolean;
+  operationalMoney: number;
+  historicalWeeksUsed: number;
+  averageWeeklyIncome: number;
+  averageWeeklyExpense: number;
+  averageWeeklyBalance: number;
+  projectedOperationalMoney12Weeks: number;
+  projectedChange: number;
   columns: WeeklyProjectionColumnSummary[];
-  unclassified: Array<{ category: string; total: number; movementCount: number }>;
+  tableRows: WeeklyProjectionRow[];
+  excludedWeeks: WeeklyProjectionRow[];
+  unclassified: Array<{ category: string; categoryName?: string | null; total: number; movementCount: number; movements?: WeeklyProjectionMovementDetail[] }>;
+  scenarioNotes: {
+    activeColumns: number;
+    validHistoricalWeeks: number;
+    currentWeekExcluded: boolean;
+    unclassifiedCategories: number;
+    ignoredNoProjectableCategories: number;
+  };
 };
 
 export const categoryTypeValues = ['income', 'expense', 'both'] as const;
@@ -3494,7 +3558,7 @@ type ProjectionColumnRow = {
 };
 
 type ProjectionAssignmentRow = { projection_column_id: string; financial_category_id: string };
-type ProjectionTransactionRow = { group_id: string; type: string; category: string; subcategory?: string | null; amount: string | number; happened_at?: string | null };
+type ProjectionTransactionRow = { id?: string; group_id: string; account_id?: string | null; type: string; category: string; subcategory?: string | null; amount: string | number; happened_at?: string | null };
 
 function mapFinancialSubcategory(row: FinancialSubcategoryRow): FinancialSubcategory {
   return {
@@ -4141,10 +4205,116 @@ export async function reclassifyCategoryAuditMovement(rawInput: unknown, client:
   return { category: validated.categoryKey, subcategory: validated.subcategoryKey };
 }
 
+function getIsoDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function startOfLocalWeek(date: Date) {
+  const copy = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = copy.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  copy.setUTCDate(copy.getUTCDate() + diff);
+  copy.setUTCHours(0, 0, 0, 0);
+  return copy;
+}
+
+function addDays(date: Date, days: number) {
+  const copy = new Date(date);
+  copy.setUTCDate(copy.getUTCDate() + days);
+  return copy;
+}
+
+function projectionWeekKey(date: Date) {
+  return getIsoDate(startOfLocalWeek(date));
+}
+
+function emptyProjectionCell(): WeeklyProjectionCell {
+  return { amount: 0, movements: [], categoryBreakdown: [] };
+}
+
+function isEventProjectionColumn(column: ProjectionColumn) {
+  const text = `${column.key} ${column.name}`.toLowerCase();
+  return text.includes('evento') || text.includes('event');
+}
+
+function buildProjectionCategoryBreakdown(
+  movements: WeeklyProjectionMovementDetail[],
+  categoryByKey: Map<string, FinancialCategory>,
+  weeksUsed: number
+): WeeklyProjectionCategoryDetail[] {
+  const byCategory = new Map<string, WeeklyProjectionCategoryDetail>();
+  for (const movement of movements) {
+    const category = categoryByKey.get(movement.category);
+    const categoryName = category?.name ?? movement.categoryName ?? movement.category;
+    const existing = byCategory.get(movement.category) ?? {
+      category: movement.category,
+      categoryName,
+      subcategories: [],
+      total: 0,
+      averageWeekly: 0,
+      movementCount: 0
+    };
+    const subcategory = movement.subcategory || 'Sin subcategoría';
+    const sub = existing.subcategories.find((item) => item.subcategory === subcategory);
+    if (sub) {
+      sub.total += movement.amount;
+      sub.movements.push(movement);
+    } else {
+      existing.subcategories.push({ subcategory, total: movement.amount, movements: [movement] });
+    }
+    existing.total += movement.amount;
+    existing.movementCount += 1;
+    existing.averageWeekly = weeksUsed > 0 ? existing.total / weeksUsed : 0;
+    byCategory.set(movement.category, existing);
+  }
+  return [...byCategory.values()].sort((a, b) => a.categoryName.localeCompare(b.categoryName));
+}
+
+function createProjectionRow(id: string, block: WeeklyProjectionRow['block'], label: string, start: Date, columns: ProjectionColumn[]): WeeklyProjectionRow {
+  const cells = Object.fromEntries(columns.map((column) => [column.id, emptyProjectionCell()])) as Record<string, WeeklyProjectionCell>;
+  return {
+    id,
+    block,
+    label,
+    startDate: getIsoDate(start),
+    endDate: getIsoDate(addDays(start, 6)),
+    isValidHistorical: false,
+    cells,
+    totalIncome: 0,
+    totalExpense: 0,
+    balance: 0,
+    operationalMoney: 0
+  };
+}
+
+function recalculateProjectionRow(row: WeeklyProjectionRow, columns: ProjectionColumn[]) {
+  row.totalIncome = columns.filter((column) => column.type === 'income').reduce((sum, column) => sum + (row.cells[column.id]?.amount ?? 0), 0);
+  row.totalExpense = columns.filter((column) => column.type === 'expense').reduce((sum, column) => sum + (row.cells[column.id]?.amount ?? 0), 0);
+  row.balance = row.totalIncome - row.totalExpense;
+  row.isValidHistorical = row.totalIncome > 0 && row.totalExpense > 0;
+}
+
 export async function buildWeeklyProjectionSummary(client: SupabaseClientLike = supabaseAdmin): Promise<WeeklyProjectionSummary> {
   const configuration = await getConfigurationData(client);
-  if (!configuration.hasHousehold || !configuration.householdId) return { hasHousehold: false, hasConfiguration: false, columns: [], unclassified: [] };
-  const activeColumns = configuration.projectionColumns.filter((column) => column.isActive);
+  const emptySummary: WeeklyProjectionSummary = {
+    hasHousehold: false,
+    hasConfiguration: false,
+    operationalMoney: 0,
+    historicalWeeksUsed: 0,
+    averageWeeklyIncome: 0,
+    averageWeeklyExpense: 0,
+    averageWeeklyBalance: 0,
+    projectedOperationalMoney12Weeks: 0,
+    projectedChange: 0,
+    columns: [],
+    tableRows: [],
+    excludedWeeks: [],
+    unclassified: [],
+    scenarioNotes: { activeColumns: 0, validHistoricalWeeks: 0, currentWeekExcluded: true, unclassifiedCategories: 0, ignoredNoProjectableCategories: 0 }
+  };
+  if (!configuration.hasHousehold || !configuration.householdId) return emptySummary;
+
+  const activeColumns = configuration.projectionColumns.filter((column) => column.isActive).sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name));
   const activeAssignments = new Map<string, ProjectionColumn>();
   for (const column of activeColumns) {
     for (const category of column.categories) {
@@ -4152,40 +4322,188 @@ export async function buildWeeklyProjectionSummary(client: SupabaseClientLike = 
     }
   }
   const categoryByKey = new Map(configuration.categories.map((category) => [category.key, category]));
-  const { data: groups } = await client.from('transaction_groups').select('id').eq('household_id', configuration.householdId);
-  const groupIds = ((groups ?? []) as Array<{ id: string }>).map((group) => group.id);
+  const noProjectableKeys = new Set(configuration.categories.filter((category) => category.noProjectable).map((category) => category.key));
+
+  const [groupsResult, accountsResult] = await Promise.all([
+    client.from('transaction_groups').select('id,note,created_at').eq('household_id', configuration.householdId),
+    client.from('accounts').select('id,name,type,balance,is_active').eq('household_id', configuration.householdId)
+  ]);
+  const groups = (groupsResult.data ?? []) as Array<{ id: string; note?: string | null; created_at?: string | null }>;
+  const groupById = new Map(groups.map((group) => [group.id, group]));
+  const groupIds = groups.map((group) => group.id);
+  const accounts = (accountsResult.data ?? []) as Array<{ id: string; name?: string | null; type?: string | null; balance?: string | number; is_active?: boolean | null }>;
+  const accountById = new Map(accounts.map((account) => [account.id, account]));
+  const operationalMoney = accounts
+    .filter((account) => account.is_active !== false && ['operativa', 'operational_cash'].includes(account.type ?? ''))
+    .reduce((sum, account) => sum + toFiniteNumber(account.balance, 0), 0);
+
   const { data: rows } = groupIds.length
-    ? await client.from('transactions').select('group_id,type,category,subcategory,amount,happened_at').in('group_id', groupIds)
+    ? await client.from('transactions').select('id,group_id,account_id,type,category,subcategory,amount,happened_at').in('group_id', groupIds)
     : { data: [] as ProjectionTransactionRow[] };
-  const columnTotals = new Map<string, WeeklyProjectionColumnSummary>();
-  const unclassified = new Map<string, { category: string; total: number; movementCount: number }>();
+
+  const currentWeekStart = startOfLocalWeek(new Date());
+  const nextWeekStart = addDays(currentWeekStart, 7);
+  const historicalRowsByWeek = new Map<string, WeeklyProjectionRow>();
+  const currentRow = createProjectionRow('current', 'current', 'Semana actual parcial', currentWeekStart, activeColumns);
+  const unclassified = new Map<string, { category: string; categoryName: string | null; total: number; movementCount: number; movements: WeeklyProjectionMovementDetail[] }>();
+  const columnHistoricalMovements = new Map<string, WeeklyProjectionMovementDetail[]>();
+  const futureEventMovements = new Map<string, WeeklyProjectionMovementDetail[]>();
+
   for (const tx of (rows ?? []) as ProjectionTransactionRow[]) {
     if (tx.category === 'entrada_cuenta' || tx.category === 'salida_cuenta') continue;
     const category = categoryByKey.get(tx.category);
-    if (category?.noProjectable) continue;
+    if (category?.noProjectable || noProjectableKeys.has(tx.category)) continue;
     const column = category && category.isActive ? activeAssignments.get(category.id) : undefined;
-    const signedAmount = tx.type === 'credit' ? Number(tx.amount) : Number(tx.amount);
+    const happenedAt = tx.happened_at ? new Date(tx.happened_at) : new Date();
+    if (Number.isNaN(happenedAt.getTime())) continue;
+    const amount = toFiniteNumber(tx.amount, 0);
+    const account = tx.account_id ? accountById.get(tx.account_id) : undefined;
+    const group = groupById.get(tx.group_id);
+    const movement: WeeklyProjectionMovementDetail = {
+      id: tx.id ?? `${tx.group_id}-${tx.category}-${tx.happened_at ?? ''}`,
+      groupId: tx.group_id,
+      date: getIsoDate(happenedAt),
+      description: group?.note || tx.subcategory || tx.category,
+      accountName: account?.name ?? null,
+      amount,
+      category: tx.category,
+      categoryName: category?.name ?? tx.category,
+      subcategory: tx.subcategory ?? null
+    };
+
     if (!column) {
-      const existing = unclassified.get(tx.category) ?? { category: tx.category, total: 0, movementCount: 0 };
-      existing.total += signedAmount;
-      existing.movementCount += 1;
-      unclassified.set(tx.category, existing);
+      if (category?.isActive) {
+        const existing = unclassified.get(tx.category) ?? { category: tx.category, categoryName: category?.name ?? tx.category, total: 0, movementCount: 0, movements: [] };
+        existing.total += amount;
+        existing.movementCount += 1;
+        existing.movements.push(movement);
+        unclassified.set(tx.category, existing);
+      }
       continue;
     }
-    const summary = columnTotals.get(column.id) ?? { columnId: column.id, columnName: column.name, columnKey: column.key, type: column.type, total: 0, subcategoryBreakdown: [] };
-    summary.total += signedAmount;
-    const subcategory = normalizeAndValidateOptionalKey(tx.subcategory, 'La subcategoría');
-    if (subcategory) {
-      const existing = summary.subcategoryBreakdown.find((item) => item.subcategory === subcategory);
-      if (existing) existing.total += signedAmount;
-      else summary.subcategoryBreakdown.push({ subcategory, total: signedAmount });
+
+    if (happenedAt < currentWeekStart) {
+      const key = projectionWeekKey(happenedAt);
+      const row = historicalRowsByWeek.get(key) ?? createProjectionRow(`historical-${key}`, 'historical', key, new Date(`${key}T00:00:00.000Z`), activeColumns);
+      const cell = row.cells[column.id] ?? emptyProjectionCell();
+      cell.amount += amount;
+      cell.movements.push(movement);
+      row.cells[column.id] = cell;
+      historicalRowsByWeek.set(key, row);
+    } else if (happenedAt < nextWeekStart) {
+      const cell = currentRow.cells[column.id] ?? emptyProjectionCell();
+      cell.amount += amount;
+      cell.movements.push(movement);
+      currentRow.cells[column.id] = cell;
+    } else if (isEventProjectionColumn(column) && happenedAt < addDays(nextWeekStart, 12 * 7)) {
+      const futureKey = `${projectionWeekKey(happenedAt)}:${column.id}`;
+      futureEventMovements.set(futureKey, [...(futureEventMovements.get(futureKey) ?? []), movement]);
     }
-    columnTotals.set(column.id, summary);
   }
+
+  for (const row of historicalRowsByWeek.values()) {
+    for (const cell of Object.values(row.cells)) cell.categoryBreakdown = buildProjectionCategoryBreakdown(cell.movements, categoryByKey, 1);
+    recalculateProjectionRow(row, activeColumns);
+  }
+  for (const cell of Object.values(currentRow.cells)) cell.categoryBreakdown = buildProjectionCategoryBreakdown(cell.movements, categoryByKey, 1);
+  recalculateProjectionRow(currentRow, activeColumns);
+
+  const sortedHistoricalRows = [...historicalRowsByWeek.values()].sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const validHistoricalRows = sortedHistoricalRows.filter((row) => row.isValidHistorical);
+  const excludedWeeks = sortedHistoricalRows.filter((row) => !row.isValidHistorical);
+  validHistoricalRows.forEach((row, index) => { row.label = `Histórico real ${index + 1}`; });
+  excludedWeeks.forEach((row, index) => { row.label = `Semana excluida ${index + 1}`; });
+
+  const historicalWeeksUsed = validHistoricalRows.length;
+  const columnAverages = new Map<string, number>();
+  for (const column of activeColumns) {
+    const total = validHistoricalRows.reduce((sum, row) => sum + (row.cells[column.id]?.amount ?? 0), 0);
+    columnAverages.set(column.id, historicalWeeksUsed > 0 ? total / historicalWeeksUsed : 0);
+    columnHistoricalMovements.set(column.id, validHistoricalRows.flatMap((row) => row.cells[column.id]?.movements ?? []));
+  }
+
+  const projectionRows: WeeklyProjectionRow[] = [];
+  let runningOperationalMoney = operationalMoney;
+  for (let index = 0; index < 12; index += 1) {
+    const start = addDays(nextWeekStart, index * 7);
+    const row = createProjectionRow(`projection-${index + 1}`, 'projection', `Proyección semana ${index + 1}`, start, activeColumns);
+    for (const column of activeColumns) {
+      const values = validHistoricalRows.map((historicalRow, historicalIndex) => ({ label: `Histórico real ${historicalIndex + 1}`, amount: historicalRow.cells[column.id]?.amount ?? 0 }));
+      const futureMovements = futureEventMovements.get(`${row.startDate}:${column.id}`) ?? [];
+      const average = isEventProjectionColumn(column) ? futureMovements.reduce((sum, movement) => sum + movement.amount, 0) : (columnAverages.get(column.id) ?? 0);
+      row.cells[column.id] = {
+        amount: average,
+        movements: futureMovements,
+        categoryBreakdown: futureMovements.length > 0
+          ? buildProjectionCategoryBreakdown(futureMovements, categoryByKey, 1)
+          : buildProjectionCategoryBreakdown(columnHistoricalMovements.get(column.id) ?? [], categoryByKey, Math.max(historicalWeeksUsed, 1)),
+        projectedFromAverage: true,
+        averageUsed: average,
+        historicalValues: values
+      };
+    }
+    recalculateProjectionRow(row, activeColumns);
+    runningOperationalMoney += row.balance;
+    row.operationalMoney = runningOperationalMoney;
+    projectionRows.push(row);
+  }
+
+  let historicalRunningMoney = operationalMoney - validHistoricalRows.reduce((sum, row) => sum + row.balance, 0);
+  for (const row of validHistoricalRows) {
+    historicalRunningMoney += row.balance;
+    row.operationalMoney = historicalRunningMoney;
+  }
+  currentRow.operationalMoney = operationalMoney;
+
+  const totalHistoricalIncome = validHistoricalRows.reduce((sum, row) => sum + row.totalIncome, 0);
+  const totalHistoricalExpense = validHistoricalRows.reduce((sum, row) => sum + row.totalExpense, 0);
+  const averageWeeklyIncome = historicalWeeksUsed > 0 ? totalHistoricalIncome / historicalWeeksUsed : 0;
+  const averageWeeklyExpense = historicalWeeksUsed > 0 ? totalHistoricalExpense / historicalWeeksUsed : 0;
+  const averageWeeklyBalance = averageWeeklyIncome - averageWeeklyExpense;
+  const projectedOperationalMoney12Weeks = projectionRows.at(-1)?.operationalMoney ?? operationalMoney;
+
+  const columnSummaries: WeeklyProjectionColumnSummary[] = activeColumns.map((column) => {
+    const movements = columnHistoricalMovements.get(column.id) ?? [];
+    const total = validHistoricalRows.reduce((sum, row) => sum + (row.cells[column.id]?.amount ?? 0), 0);
+    const categoryBreakdown = buildProjectionCategoryBreakdown(movements, categoryByKey, Math.max(historicalWeeksUsed, 1));
+    const subcategoryTotals = new Map<string, number>();
+    for (const category of categoryBreakdown) {
+      for (const subcategory of category.subcategories) subcategoryTotals.set(subcategory.subcategory, (subcategoryTotals.get(subcategory.subcategory) ?? 0) + subcategory.total);
+    }
+    return {
+      columnId: column.id,
+      columnName: column.name,
+      columnKey: column.key,
+      type: column.type,
+      total,
+      averageWeekly: columnAverages.get(column.id) ?? 0,
+      weeksUsed: historicalWeeksUsed,
+      categories: column.categories.filter((category) => category.isActive && !category.noProjectable).map((category) => ({ id: category.id, key: category.key, name: category.name })),
+      categoryBreakdown,
+      subcategoryBreakdown: [...subcategoryTotals.entries()].map(([subcategory, subtotal]) => ({ subcategory, total: subtotal }))
+    };
+  });
+
   return {
     hasHousehold: true,
     hasConfiguration: configuration.categories.length > 0 && configuration.projectionColumns.length > 0,
-    columns: activeColumns.map((column) => columnTotals.get(column.id) ?? { columnId: column.id, columnName: column.name, columnKey: column.key, type: column.type, total: 0, subcategoryBreakdown: [] }),
-    unclassified: [...unclassified.values()]
+    operationalMoney,
+    historicalWeeksUsed,
+    averageWeeklyIncome,
+    averageWeeklyExpense,
+    averageWeeklyBalance,
+    projectedOperationalMoney12Weeks,
+    projectedChange: projectedOperationalMoney12Weeks - operationalMoney,
+    columns: columnSummaries,
+    tableRows: [...validHistoricalRows, currentRow, ...projectionRows],
+    excludedWeeks,
+    unclassified: [...unclassified.values()],
+    scenarioNotes: {
+      activeColumns: activeColumns.length,
+      validHistoricalWeeks: historicalWeeksUsed,
+      currentWeekExcluded: true,
+      unclassifiedCategories: unclassified.size,
+      ignoredNoProjectableCategories: noProjectableKeys.size
+    }
   };
 }
