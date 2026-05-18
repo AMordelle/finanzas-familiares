@@ -4314,7 +4314,10 @@ export async function buildWeeklyProjectionSummary(client: SupabaseClientLike = 
   };
   if (!configuration.hasHousehold || !configuration.householdId) return emptySummary;
 
-  const activeColumns = configuration.projectionColumns.filter((column) => column.isActive).sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name));
+  const activeColumns = configuration.projectionColumns.filter((column) => column.isActive).sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'income' ? -1 : 1;
+    return a.displayOrder - b.displayOrder || a.name.localeCompare(b.name);
+  });
   const activeAssignments = new Map<string, ProjectionColumn>();
   for (const column of activeColumns) {
     for (const category of column.categories) {

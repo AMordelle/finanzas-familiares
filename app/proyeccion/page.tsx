@@ -55,15 +55,15 @@ function CategoryBreakdownList({ column }: { column: WeeklyProjectionColumnSumma
     <div className="space-y-2">
       {column.categoryBreakdown.map((category) => (
         <div key={category.category} className="rounded-lg bg-slate-50 p-2">
-          <p className="font-medium text-slate-700">{category.categoryName}: {formatCurrencyMXN(category.total)} · promedio {formatCurrencyMXN(category.averageWeekly)}</p>
-          {category.subcategories.map((subcategory) => (
-            <div key={`${category.category}-${subcategory.subcategory}`} className="ml-3 mt-1">
-              <p className="text-slate-600">{subcategory.subcategory}: {formatCurrencyMXN(subcategory.total)}</p>
-              <ul className="ml-3 list-disc text-slate-500">
-                {subcategory.movements.slice(0, 8).map((movement) => <li key={movement.id}>{movement.description}: {formatCurrencyMXN(movement.amount)}</li>)}
-              </ul>
-            </div>
-          ))}
+          <p className="font-medium text-slate-700">{category.categoryName}: {formatCurrencyMXN(category.total)}</p>
+          <dl className="mt-2 space-y-1 text-slate-600">
+            {category.subcategories.map((subcategory) => (
+              <div key={`${category.category}-${subcategory.subcategory}`} className="flex items-center justify-between gap-3">
+                <dt className="truncate">{subcategory.subcategory}</dt>
+                <dd className="font-medium text-slate-700">{formatCurrencyMXN(subcategory.total)}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
       ))}
     </div>
@@ -83,12 +83,8 @@ export default async function ProyeccionPage() {
 
   const generalCards = [
     ['Dinero operativo actual', summary.operationalMoney],
-    ['Semanas históricas usadas', summary.historicalWeeksUsed],
     ['Promedio semanal de ingresos', summary.averageWeeklyIncome],
-    ['Promedio semanal de gastos', summary.averageWeeklyExpense],
-    ['Balance semanal promedio', summary.averageWeeklyBalance],
-    ['Proyección a 12 semanas', summary.projectedOperationalMoney12Weeks],
-    ['Cambio proyectado', summary.projectedChange]
+    ['Promedio semanal de gastos', summary.averageWeeklyExpense]
   ] as const;
 
   return (
@@ -99,11 +95,11 @@ export default async function ProyeccionPage() {
         {!summary.hasConfiguration && <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">Primero crea categorías y columnas para que Proyección pueda agrupar tus movimientos.</p>}
       </Card>
 
-      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4" aria-label="Resumen general">
+      <section className="grid gap-3 md:grid-cols-3" aria-label="Resumen general">
         {generalCards.map(([label, value]) => (
           <Card key={label}>
             <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
-            <p className="mt-2 text-2xl font-semibold">{label === 'Semanas históricas usadas' ? value : formatCurrencyMXN(value)}</p>
+            <p className="mt-2 text-2xl font-semibold">{formatCurrencyMXN(value)}</p>
           </Card>
         ))}
       </section>
@@ -120,7 +116,7 @@ export default async function ProyeccionPage() {
             </div>
             <p className="mt-3 text-sm text-slate-600">Categorías: {column.categories.length ? column.categories.map((category) => category.name).join(', ') : 'Sin categorías asignadas'}</p>
             <details className="mt-3 text-sm">
-              <summary className="cursor-pointer text-slate-700">Cómo se armó</summary>
+              <summary className="cursor-pointer text-slate-700">Resumen por subcategoría</summary>
               <div className="mt-2">
                 {column.categoryBreakdown.length ? <CategoryBreakdownList column={column} /> : <p className="text-slate-600">Sin movimientos históricos válidos para esta columna.</p>}
               </div>

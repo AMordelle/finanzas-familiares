@@ -163,10 +163,10 @@ describe('módulo Configuración financiera', () => {
     const noProjectable = await q.createFinancialCategory({ name: 'Transferencias', type: 'expense', noProjectable: true });
     await q.createFinancialSubcategory({ financialCategoryId: gastos.id, name: 'Oxxo' });
 
-    const nominaColumn = await q.createProjectionColumn({ name: 'Nómina', type: 'income', displayOrder: 1 });
-    const eventosColumn = await q.createProjectionColumn({ name: 'Eventos', type: 'income', displayOrder: 2 });
+    const nominaColumn = await q.createProjectionColumn({ name: 'Nómina', type: 'income', displayOrder: 2 });
+    const eventosColumn = await q.createProjectionColumn({ name: 'Eventos', type: 'income', displayOrder: 1 });
     const gastosColumn = await q.createProjectionColumn({ name: 'Gastos variables', type: 'expense', displayOrder: 3 });
-    const msiColumn = await q.createProjectionColumn({ name: 'MCI/MSI', type: 'expense', displayOrder: 4 });
+    const msiColumn = await q.createProjectionColumn({ name: 'MCI/MSI', type: 'expense', displayOrder: 1 });
     const inactiveColumn = await q.createProjectionColumn({ name: 'Inactiva', type: 'expense', displayOrder: 5 });
     await q.toggleProjectionColumn({ columnId: inactiveColumn.id, isActive: false });
     await q.assignCategoryToProjectionColumn({ projectionColumnId: nominaColumn.id, financialCategoryId: nomina.id });
@@ -196,7 +196,7 @@ describe('módulo Configuración financiera', () => {
     const accountsBefore = JSON.stringify(fake.db.accounts);
 
     const projection = await q.buildWeeklyProjectionSummary(fake as any);
-    expect(projection.columns.map((column) => column.columnName)).toEqual(['Nómina', 'Eventos', 'Gastos variables', 'MCI/MSI']);
+    expect(projection.columns.map((column) => column.columnName)).toEqual(['Eventos', 'Nómina', 'MCI/MSI', 'Gastos variables']);
     expect(projection.historicalWeeksUsed).toBe(2);
     expect(projection.excludedWeeks).toHaveLength(1);
     expect(projection.tableRows.filter((row) => row.block === 'current')).toHaveLength(1);
@@ -215,8 +215,22 @@ describe('módulo Configuración financiera', () => {
 
     const page = await import('@/app/proyeccion/page');
     const html = renderToStaticMarkup(await page.default());
-    expect(html).toContain('Resumen general');
-    expect(html).toContain('Cómo se armó');
+    const summarySection = html.slice(html.indexOf('aria-label="Resumen general"'), html.indexOf('aria-label="Tarjetas por columna"'));
+    expect(summarySection.match(/tracking-wide/g)).toHaveLength(3);
+    expect(summarySection).toContain('Dinero operativo actual');
+    expect(summarySection).toContain('Promedio semanal de ingresos');
+    expect(summarySection).toContain('Promedio semanal de gastos');
+    expect(summarySection).not.toContain('Semanas históricas usadas');
+    expect(summarySection).not.toContain('Balance semanal promedio');
+    expect(summarySection).not.toContain('Proyección a 12 semanas');
+    expect(summarySection).not.toContain('Cambio proyectado');
+    const cardsSection = html.slice(html.indexOf('aria-label="Tarjetas por columna"'), html.indexOf('Tabla semanal'));
+    expect(cardsSection.indexOf('Eventos')).toBeLessThan(cardsSection.indexOf('Nómina'));
+    expect(cardsSection.indexOf('Nómina')).toBeLessThan(cardsSection.indexOf('MCI/MSI'));
+    expect(cardsSection.indexOf('MCI/MSI')).toBeLessThan(cardsSection.indexOf('Gastos variables'));
+    expect(cardsSection).toContain('Resumen por subcategoría');
+    expect(cardsSection).toContain('oxxo');
+    expect(cardsSection).not.toContain('Semana válida 1');
     expect(html).toContain('Semana actual parcial');
     expect(html).toContain('Proyección semana 12');
     expect(html).toContain('Auditar');
