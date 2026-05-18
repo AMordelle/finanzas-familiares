@@ -215,7 +215,7 @@ describe('módulo Configuración financiera', () => {
 
     const page = await import('@/app/proyeccion/page');
     const html = renderToStaticMarkup(await page.default());
-    const summarySection = html.slice(html.indexOf('aria-label="Resumen general"'), html.indexOf('aria-label="Tarjetas por columna"'));
+    const summarySection = html.slice(html.indexOf('aria-label="Resumen general"'), html.indexOf('Resumen de columnas financieras'));
     expect(summarySection.match(/tracking-wide/g)).toHaveLength(3);
     expect(summarySection).toContain('Dinero operativo actual');
     expect(summarySection).toContain('Promedio semanal de ingresos');
@@ -224,13 +224,20 @@ describe('módulo Configuración financiera', () => {
     expect(summarySection).not.toContain('Balance semanal promedio');
     expect(summarySection).not.toContain('Proyección a 12 semanas');
     expect(summarySection).not.toContain('Cambio proyectado');
-    const cardsSection = html.slice(html.indexOf('aria-label="Tarjetas por columna"'), html.indexOf('Tabla semanal'));
-    expect(cardsSection.indexOf('Eventos')).toBeLessThan(cardsSection.indexOf('Nómina'));
-    expect(cardsSection.indexOf('Nómina')).toBeLessThan(cardsSection.indexOf('MCI/MSI'));
-    expect(cardsSection.indexOf('MCI/MSI')).toBeLessThan(cardsSection.indexOf('Gastos variables'));
-    expect(cardsSection).toContain('Resumen por subcategoría');
-    expect(cardsSection).toContain('oxxo');
-    expect(cardsSection).not.toContain('Semana válida 1');
+    expect(html).not.toContain('aria-label="Tarjetas por columna"');
+    const columnsSection = html.slice(html.indexOf('Resumen de columnas financieras'), html.indexOf('Tabla semanal'));
+    expect(columnsSection).toContain('Ingresos');
+    expect(columnsSection).toContain('Gastos');
+    expect(columnsSection).toContain('Columna financiera');
+    expect(columnsSection).toContain('Total histórico usado');
+    expect(columnsSection).toContain('Categorías incluidas');
+    expect(columnsSection).toContain('Acción');
+    expect(columnsSection).toContain('Ver');
+    expect(columnsSection.indexOf('Eventos')).toBeLessThan(columnsSection.indexOf('Nómina'));
+    expect(columnsSection.indexOf('Nómina')).toBeLessThan(columnsSection.indexOf('MCI/MSI'));
+    expect(columnsSection.indexOf('MCI/MSI')).toBeLessThan(columnsSection.indexOf('Gastos variables'));
+    expect(columnsSection).toContain('oxxo');
+    expect(columnsSection).not.toContain('Semana válida 1');
     expect(html).toContain('Semana actual parcial');
     expect(html).toContain('Proyección semana 12');
     expect(html).toContain('Auditar');

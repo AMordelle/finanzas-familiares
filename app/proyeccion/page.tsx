@@ -70,6 +70,57 @@ function CategoryBreakdownList({ column }: { column: WeeklyProjectionColumnSumma
   );
 }
 
+function ColumnSummaryTable({ title, columns }: { title: string; columns: WeeklyProjectionColumnSummary[] }) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</h4>
+        <span className="text-xs text-slate-400">{columns.length} columnas</span>
+      </div>
+      <div className="overflow-x-auto rounded-xl border border-slate-200">
+        <table className="min-w-full border-collapse text-sm">
+          <thead>
+            <tr className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+              <th className="px-3 py-2 font-medium">Tipo</th>
+              <th className="px-3 py-2 font-medium">Columna financiera</th>
+              <th className="px-3 py-2 font-medium">Promedio semanal</th>
+              <th className="px-3 py-2 font-medium">Total histórico usado</th>
+              <th className="px-3 py-2 font-medium">Semanas usadas</th>
+              <th className="px-3 py-2 font-medium">Categorías incluidas</th>
+              <th className="px-3 py-2 font-medium">Acción</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {columns.map((column) => (
+              <tr key={column.columnId} className="align-top">
+                <td className="whitespace-nowrap px-3 py-2 text-xs font-medium uppercase tracking-wide text-slate-500">{column.type === 'income' ? 'Ingreso' : 'Gasto'}</td>
+                <td className="whitespace-nowrap px-3 py-2 font-medium text-slate-800">{column.columnName}</td>
+                <td className="whitespace-nowrap px-3 py-2 font-semibold text-slate-800">{formatCurrencyMXN(column.averageWeekly)}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-slate-700">{formatCurrencyMXN(column.total)}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-slate-700">{column.weeksUsed}</td>
+                <td className="min-w-56 px-3 py-2 text-slate-600">{column.categories.length ? column.categories.map((category) => category.name).join(', ') : 'Sin categorías asignadas'}</td>
+                <td className="min-w-56 px-3 py-2">
+                  <details className="group text-xs text-slate-600">
+                    <summary className="cursor-pointer font-medium text-slate-700 group-open:mb-2">Ver</summary>
+                    <div className="rounded-lg bg-slate-50 p-2">
+                      <div className="mb-2 grid grid-cols-2 gap-2 text-[11px] text-slate-500">
+                        <span>Promedio: <strong className="text-slate-700">{formatCurrencyMXN(column.averageWeekly)}</strong></span>
+                        <span>Histórico: <strong className="text-slate-700">{formatCurrencyMXN(column.total)}</strong></span>
+                      </div>
+                      {column.categoryBreakdown.length ? <CategoryBreakdownList column={column} /> : <p>Sin movimientos históricos válidos.</p>}
+                    </div>
+                  </details>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
 export default async function ProyeccionPage() {
   const summary = await buildWeeklyProjectionSummary();
 
@@ -104,26 +155,18 @@ export default async function ProyeccionPage() {
         ))}
       </section>
 
-      <section className="grid gap-3 md:grid-cols-2" aria-label="Tarjetas por columna">
-        {summary.columns.map((column) => (
-          <Card key={column.columnId}>
-            <p className="text-xs uppercase tracking-wide text-slate-500">{column.type === 'income' ? 'Ingreso' : 'Gasto'}</p>
-            <h3 className="mt-1 font-semibold">{column.columnName}</h3>
-            <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
-              <div><p className="text-slate-500">Promedio semanal</p><p className="font-semibold">{formatCurrencyMXN(column.averageWeekly)}</p></div>
-              <div><p className="text-slate-500">Total histórico usado</p><p className="font-semibold">{formatCurrencyMXN(column.total)}</p></div>
-              <div><p className="text-slate-500">Semanas usadas</p><p className="font-semibold">{column.weeksUsed}</p></div>
-            </div>
-            <p className="mt-3 text-sm text-slate-600">Categorías: {column.categories.length ? column.categories.map((category) => category.name).join(', ') : 'Sin categorías asignadas'}</p>
-            <details className="mt-3 text-sm">
-              <summary className="cursor-pointer text-slate-700">Resumen por subcategoría</summary>
-              <div className="mt-2">
-                {column.categoryBreakdown.length ? <CategoryBreakdownList column={column} /> : <p className="text-slate-600">Sin movimientos históricos válidos para esta columna.</p>}
-              </div>
-            </details>
-          </Card>
-        ))}
-      </section>
+      <Card>
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h3 className="font-semibold">Resumen de columnas financieras</h3>
+            <p className="text-sm text-slate-600">Vista compacta de columnas configuradas, promedios y categorías incluidas.</p>
+          </div>
+        </div>
+        <div className="mt-4 space-y-4">
+          <ColumnSummaryTable title="Ingresos" columns={summary.columns.filter((column) => column.type === 'income')} />
+          <ColumnSummaryTable title="Gastos" columns={summary.columns.filter((column) => column.type === 'expense')} />
+        </div>
+      </Card>
 
       <Card>
         <h3 className="font-semibold">Tabla semanal · histórico real, semana actual y proyección</h3>
