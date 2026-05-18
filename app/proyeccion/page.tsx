@@ -1,86 +1,23 @@
 import React from 'react';
 import { AppShell } from '@/components/app-shell';
 import { Card } from '@/components/ui/card';
-import { buildWeeklyProjectionSummary, type WeeklyProjectionCell, type WeeklyProjectionColumnSummary } from '@/lib/db/queries';
+import { buildWeeklyProjectionSummary, type WeeklyProjectionCategoryDetail, type WeeklyProjectionCell, type WeeklyProjectionColumnSummary } from '@/lib/db/queries';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 function DateRange({ startDate, endDate }: { startDate: string; endDate: string }) {
   return <span className="text-xs text-slate-500">{startDate} → {endDate}</span>;
 }
 
-function ColumnCellDetail({ cell, column }: { cell: WeeklyProjectionCell; column: WeeklyProjectionColumnSummary }) {
-  if (cell.projectedFromAverage) {
-    return (
-      <details className="mt-1 text-left text-[11px] text-slate-600">
-        <summary className="cursor-pointer text-slate-700">Auditar</summary>
-        <div className="mt-2 min-w-64 space-y-2 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-          <p className="font-medium">{column.columnName}: promedio usado {formatCurrencyMXN(cell.averageUsed ?? 0)}</p>
-          <p>Este importe viene del promedio de las {cell.historicalValues?.length ?? 0} semanas históricas válidas.</p>
-          <ul className="space-y-1">
-            {(cell.historicalValues ?? []).map((value) => <li key={value.label}>{value.label}: {formatCurrencyMXN(value.amount)}</li>)}
-          </ul>
-          {cell.categoryBreakdown.length > 0 && <CategoryBreakdownList column={column} />}
-        </div>
-      </details>
-    );
-  }
-
-  return (
-    <details className="mt-1 text-left text-[11px] text-slate-600">
-      <summary className="cursor-pointer text-slate-700">Auditar</summary>
-      <div className="mt-2 min-w-72 space-y-2 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-        <p className="font-medium">{column.columnName}: total {formatCurrencyMXN(cell.amount)}</p>
-        {cell.categoryBreakdown.length === 0 ? <p>Sin movimientos en esta celda.</p> : cell.categoryBreakdown.map((category) => (
-          <div key={category.category}>
-            <p className="font-medium text-slate-700">{category.categoryName}: {formatCurrencyMXN(category.total)}</p>
-            {category.subcategories.map((subcategory) => (
-              <div key={`${category.category}-${subcategory.subcategory}`} className="ml-3">
-                <p>{subcategory.subcategory}: {formatCurrencyMXN(subcategory.total)}</p>
-                <ul className="ml-3 list-disc space-y-1">
-                  {subcategory.movements.map((movement) => (
-                    <li key={movement.id}>{movement.date} · {movement.description} · {movement.accountName ?? 'Sin cuenta'} · {formatCurrencyMXN(movement.amount)}</li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-function CategoryBreakdownList({ column }: { column: WeeklyProjectionColumnSummary }) {
-  return (
-    <div className="space-y-2">
-      {column.categoryBreakdown.map((category) => (
-        <div key={category.category} className="rounded-lg bg-slate-50 p-2">
-          <p className="font-medium text-slate-700">{category.categoryName}: {formatCurrencyMXN(category.total)}</p>
-          <dl className="mt-2 space-y-1 text-slate-600">
-            {category.subcategories.map((subcategory) => (
-              <div key={`${category.category}-${subcategory.subcategory}`} className="flex items-center justify-between gap-3">
-                <dt className="truncate">{subcategory.subcategory}</dt>
-                <dd className="font-medium text-slate-700">{formatCurrencyMXN(subcategory.total)}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-
-function CompactSubcategoryBreakdown({ column }: { column: WeeklyProjectionColumnSummary }) {
+function CompactBreakdown({ breakdown, emptyText = 'Sin desglose.' }: { breakdown: WeeklyProjectionCategoryDetail[]; emptyText?: string }) {
   const subcategoryTotals = new Map<string, number>();
-  for (const category of column.categoryBreakdown) {
+  for (const category of breakdown) {
     for (const subcategory of category.subcategories) {
       subcategoryTotals.set(subcategory.subcategory, (subcategoryTotals.get(subcategory.subcategory) ?? 0) + subcategory.total);
     }
   }
   const rows = [...subcategoryTotals.entries()].sort(([a], [b]) => a.localeCompare(b));
 
-  if (!rows.length) return <p className="text-xs text-slate-500">Sin movimientos históricos válidos.</p>;
+  if (!rows.length) return <p className="text-xs text-slate-500">{emptyText}</p>;
 
   return (
     <dl className="space-y-1 text-xs text-slate-600">
@@ -94,6 +31,21 @@ function CompactSubcategoryBreakdown({ column }: { column: WeeklyProjectionColum
   );
 }
 
+function ColumnCellDetail({ cell }: { cell: WeeklyProjectionCell }) {
+  return (
+    <details className="mt-0.5 text-left text-[11px] leading-tight text-slate-600">
+      <summary className="cursor-pointer text-slate-500 hover:text-slate-700">Auditar</summary>
+      <div className="mt-1 min-w-44 rounded-md border border-slate-100 bg-white px-2 py-1 shadow-sm">
+        <CompactBreakdown breakdown={cell.categoryBreakdown} />
+      </div>
+    </details>
+  );
+}
+
+function CompactSubcategoryBreakdown({ column }: { column: WeeklyProjectionColumnSummary }) {
+  return <CompactBreakdown breakdown={column.categoryBreakdown} emptyText="Sin movimientos históricos válidos." />;
+}
+
 function ColumnSummaryTable({ title, columns }: { title: string; columns: WeeklyProjectionColumnSummary[] }) {
   return (
     <div>
@@ -102,7 +54,7 @@ function ColumnSummaryTable({ title, columns }: { title: string; columns: Weekly
         <span className="text-xs text-slate-400">{columns.length} columnas</span>
       </div>
       <div className="overflow-x-auto rounded-xl border border-slate-200">
-        <table className="min-w-full border-collapse text-sm">
+        <table className="min-w-full border-collapse text-xs">
           <thead>
             <tr className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <th className="px-3 py-2 font-medium">Tipo</th>
@@ -192,33 +144,33 @@ export default async function ProyeccionPage() {
         <h3 className="font-semibold">Tabla semanal · histórico real, semana actual y proyección</h3>
         <p className="mt-2 text-sm text-slate-600">La semana actual parcial se muestra para seguimiento, pero no se usa en promedios.</p>
         <div className="mt-4 overflow-x-auto">
-          <table className="min-w-full border-collapse text-sm">
+          <table className="min-w-full border-collapse text-xs">
             <thead>
               <tr className="bg-slate-100 text-left text-slate-600">
-                <th className="sticky left-0 z-10 border border-slate-200 bg-slate-100 p-2">Bloque / semana</th>
-                {summary.columns.map((column) => <th key={column.columnId} className="border border-slate-200 p-2">{column.columnName}</th>)}
-                <th className="border border-slate-200 p-2">Total ingresos</th>
-                <th className="border border-slate-200 p-2">Total gastos</th>
-                <th className="border border-slate-200 p-2">Balance semanal</th>
-                <th className="border border-slate-200 p-2">Fondo / dinero operativo</th>
+                <th className="sticky left-0 z-10 border border-slate-200 bg-slate-100 px-2 py-1.5">Bloque / semana</th>
+                {summary.columns.map((column) => <th key={column.columnId} className="border border-slate-200 px-2 py-1.5">{column.columnName}</th>)}
+                <th className="border border-slate-200 px-2 py-1.5">Total ingresos</th>
+                <th className="border border-slate-200 px-2 py-1.5">Total gastos</th>
+                <th className="border border-slate-200 px-2 py-1.5">Balance semanal</th>
+                <th className="border border-slate-200 px-2 py-1.5">Fondo / dinero operativo</th>
               </tr>
             </thead>
             <tbody>
               {summary.tableRows.map((row) => (
                 <tr key={row.id} className={row.block === 'current' ? 'bg-amber-50' : row.block === 'projection' ? 'bg-sky-50/50' : 'bg-white'}>
-                  <th className="sticky left-0 z-10 border border-slate-200 bg-inherit p-2 text-left align-top">
-                    <span className="block font-medium">{row.block === 'historical' ? 'Histórico real' : row.block === 'current' ? 'Semana actual parcial' : 'Proyección'}</span>
-                    <span className="block">{row.label}</span>
+                  <th className="sticky left-0 z-10 border border-slate-200 bg-inherit px-2 py-1.5 text-left align-top">
+                    <span className="block whitespace-nowrap font-medium">{row.block === 'historical' ? 'Histórico real' : row.block === 'current' ? 'Semana actual parcial' : 'Proyección'}</span>
+                    <span className="block whitespace-nowrap text-slate-600">{row.label}</span>
                     <DateRange startDate={row.startDate} endDate={row.endDate} />
                   </th>
                   {summary.columns.map((column) => {
                     const cell = row.cells[column.columnId];
-                    return <td key={`${row.id}-${column.columnId}`} className="min-w-48 border border-slate-200 p-2 align-top"><span className="font-medium">{formatCurrencyMXN(cell?.amount ?? 0)}</span>{cell && <ColumnCellDetail cell={cell} column={column} />}</td>;
+                    return <td key={`${row.id}-${column.columnId}`} className="min-w-32 border border-slate-200 px-2 py-1.5 align-top"><span className="block whitespace-nowrap font-medium">{formatCurrencyMXN(cell?.amount ?? 0)}</span>{cell && <ColumnCellDetail cell={cell} />}</td>;
                   })}
-                  <td className="border border-slate-200 p-2 font-semibold">{formatCurrencyMXN(row.totalIncome)}</td>
-                  <td className="border border-slate-200 p-2 font-semibold">{formatCurrencyMXN(row.totalExpense)}</td>
-                  <td className="border border-slate-200 p-2 font-semibold">{formatCurrencyMXN(row.balance)}</td>
-                  <td className="border border-slate-200 p-2 font-semibold">{formatCurrencyMXN(row.operationalMoney)}</td>
+                  <td className="border border-slate-200 px-2 py-1.5 font-semibold">{formatCurrencyMXN(row.totalIncome)}</td>
+                  <td className="border border-slate-200 px-2 py-1.5 font-semibold">{formatCurrencyMXN(row.totalExpense)}</td>
+                  <td className="border border-slate-200 px-2 py-1.5 font-semibold">{formatCurrencyMXN(row.balance)}</td>
+                  <td className="border border-slate-200 px-2 py-1.5 font-semibold">{formatCurrencyMXN(row.operationalMoney)}</td>
                 </tr>
               ))}
             </tbody>

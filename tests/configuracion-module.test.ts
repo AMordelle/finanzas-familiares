@@ -244,6 +244,10 @@ describe('módulo Configuración financiera', () => {
     expect(html).toContain('Semana actual parcial');
     expect(html).toContain('Proyección semana 12');
     expect(html).toContain('Auditar');
+    expect(html).not.toContain('Semana válida 1');
+    expect(html).not.toContain('Sin cuenta');
+    expect(html).not.toContain('promedio usado');
+    expect(html).not.toContain('Este importe viene');
     expect(html).toContain('Sin clasificar');
     expect(html).toContain('Cómo se armó este escenario');
   });
