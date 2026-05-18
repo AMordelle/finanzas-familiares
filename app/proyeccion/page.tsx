@@ -70,6 +70,30 @@ function CategoryBreakdownList({ column }: { column: WeeklyProjectionColumnSumma
   );
 }
 
+
+function CompactSubcategoryBreakdown({ column }: { column: WeeklyProjectionColumnSummary }) {
+  const subcategoryTotals = new Map<string, number>();
+  for (const category of column.categoryBreakdown) {
+    for (const subcategory of category.subcategories) {
+      subcategoryTotals.set(subcategory.subcategory, (subcategoryTotals.get(subcategory.subcategory) ?? 0) + subcategory.total);
+    }
+  }
+  const rows = [...subcategoryTotals.entries()].sort(([a], [b]) => a.localeCompare(b));
+
+  if (!rows.length) return <p className="text-xs text-slate-500">Sin movimientos históricos válidos.</p>;
+
+  return (
+    <dl className="space-y-1 text-xs text-slate-600">
+      {rows.map(([subcategory, total]) => (
+        <div key={subcategory} className="flex items-center justify-between gap-3 border-b border-slate-100 last:border-0">
+          <dt className="truncate py-0.5 pl-1">{subcategory}</dt>
+          <dd className="whitespace-nowrap py-0.5 pr-1 font-medium text-slate-800">{formatCurrencyMXN(total)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 function ColumnSummaryTable({ title, columns }: { title: string; columns: WeeklyProjectionColumnSummary[] }) {
   return (
     <div>
@@ -102,12 +126,8 @@ function ColumnSummaryTable({ title, columns }: { title: string; columns: Weekly
                 <td className="min-w-56 px-3 py-2">
                   <details className="group text-xs text-slate-600">
                     <summary className="cursor-pointer font-medium text-slate-700 group-open:mb-2">Ver</summary>
-                    <div className="rounded-lg bg-slate-50 p-2">
-                      <div className="mb-2 grid grid-cols-2 gap-2 text-[11px] text-slate-500">
-                        <span>Promedio: <strong className="text-slate-700">{formatCurrencyMXN(column.averageWeekly)}</strong></span>
-                        <span>Histórico: <strong className="text-slate-700">{formatCurrencyMXN(column.total)}</strong></span>
-                      </div>
-                      {column.categoryBreakdown.length ? <CategoryBreakdownList column={column} /> : <p>Sin movimientos históricos válidos.</p>}
+                    <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                      <CompactSubcategoryBreakdown column={column} />
                     </div>
                   </details>
                 </td>

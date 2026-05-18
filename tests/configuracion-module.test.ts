@@ -237,6 +237,9 @@ describe('módulo Configuración financiera', () => {
     expect(columnsSection.indexOf('Nómina')).toBeLessThan(columnsSection.indexOf('MCI/MSI'));
     expect(columnsSection.indexOf('MCI/MSI')).toBeLessThan(columnsSection.indexOf('Gastos variables'));
     expect(columnsSection).toContain('oxxo');
+    expect(columnsSection).not.toContain('Promedio:');
+    expect(columnsSection).not.toContain('Histórico:');
+    expect(columnsSection).not.toContain('Gastos variables:');
     expect(columnsSection).not.toContain('Semana válida 1');
     expect(html).toContain('Semana actual parcial');
     expect(html).toContain('Proyección semana 12');
