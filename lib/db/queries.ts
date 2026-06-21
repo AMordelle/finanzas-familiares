@@ -388,7 +388,13 @@ function logDebug(message: string, payload?: Record<string, unknown>) {
 }
 
 function logMovementsHistoryDebug(message: string, payload?: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== 'development') return;
   console.info(`[movimientos-debug] ${message}`, payload ?? {});
+}
+
+function warnMovementsHistoryDebug(message: string, payload?: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== 'development') return;
+  console.warn(`[movimientos-debug] ${message}`, payload ?? {});
 }
 
 async function getProfileIdFromExistingMembership(client: SupabaseClientLike) {
@@ -1597,11 +1603,11 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
 
   const { data: groupsData } = await client
     .from('transaction_groups')
-    .select('id,note,created_at')
+    .select('id,note,source,created_at')
     .eq('household_id', householdId)
     .order('created_at', { ascending: false });
 
-  const groups = (groupsData ?? []) as Array<{ id: string; note?: string | null; created_at: string }>;
+  const groups = (groupsData ?? []) as Array<{ id: string; note?: string | null; source?: string | null; created_at: string }>;
   logMovementsHistoryDebug('Transaction groups recuperados antes de filtrar', {
     householdId,
     groupCount: groups.length
@@ -1614,10 +1620,29 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
   }
 
   const groupIds = groups.map((group) => group.id);
-  const { data: txData } = await client
-    .from('transactions')
-    .select('id,group_id,account_id,type,category,subcategory,amount,happened_at')
-    .in('group_id', groupIds);
+  const transactionChunks = [];
+  for (let index = 0; index < groupIds.length; index += 100) {
+    transactionChunks.push(groupIds.slice(index, index + 100));
+  }
+
+  const txData = [];
+  for (const chunk of transactionChunks) {
+    const { data, error } = await client
+      .from('transactions')
+      .select('id,group_id,account_id,type,category,subcategory,amount,happened_at')
+      .in('group_id', chunk);
+
+    if (error) {
+      warnMovementsHistoryDebug('No fue posible cargar líneas transactions por group_id', {
+        householdId,
+        chunkSize: chunk.length,
+        error: error.message
+      });
+      continue;
+    }
+
+    txData.push(...(data ?? []));
+  }
 
   const transactions = (txData ?? []) as Array<{
     id: string;
@@ -1633,6 +1658,13 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
     householdId,
     transactionLineCount: transactions.length
   });
+  if (groups.length > 0 && transactions.length === 0) {
+    warnMovementsHistoryDebug('Hay transaction_groups pero no se recuperaron líneas transactions por group_id', {
+      householdId,
+      groupCount: groups.length,
+      groupIdSample: groupIds.slice(0, 5)
+    });
+  }
 
   const { data: accountsData } = await client
     .from('accounts')
@@ -1641,12 +1673,18 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
 
   const householdAccounts = (accountsData ?? []) as Array<{ id: string; name: string; type: string }>;
   const accountById = new Map(householdAccounts.map((account) => [account.id, account.name]));
+  const transactionsByGroupId = transactions.reduce<Map<string, typeof transactions>>((acc, transaction) => {
+    const existing = acc.get(transaction.group_id) ?? [];
+    existing.push(transaction);
+    acc.set(transaction.group_id, existing);
+    return acc;
+  }, new Map());
 
   logMovementsHistoryDebug('Diagnóstico de primeros grupos de historial', {
     householdId,
     builtGroupCount: groups.length,
     groups: groups.slice(0, 5).map((group) => {
-      const lines = transactions.filter((tx) => tx.group_id === group.id);
+      const lines = transactionsByGroupId.get(group.id) ?? [];
       const categoryDiagnostics = lines.map((line) => ({
         transactionId: line.id,
         category: line.category,
@@ -1657,7 +1695,7 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
       return {
         groupId: group.id,
         note: group.note ?? null,
-        source: (group as { source?: string | null }).source ?? null,
+        source: group.source ?? null,
         created_at: group.created_at,
         lineCount: lines.length,
         categories: lines.map((line) => line.category),
@@ -1674,7 +1712,7 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
   });
 
   const movements = groups.flatMap<MovementHistoryItem>((group) => {
-    const lines = transactions.filter((tx) => tx.group_id === group.id);
+    const lines = transactionsByGroupId.get(group.id) ?? [];
     const visibleLines = lines.filter((tx) => !isTechnicalMovementCategory(tx.category));
     if (!visibleLines.length) return [];
 
