@@ -387,6 +387,16 @@ function logDebug(message: string, payload?: Record<string, unknown>) {
   console.info(`[onboarding-debug] ${message}`, payload ?? {});
 }
 
+function logMovementsHistoryDebug(message: string, payload?: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== 'development') return;
+  console.info(`[movimientos-debug] ${message}`, payload ?? {});
+}
+
+function warnMovementsHistoryDebug(message: string, payload?: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== 'development') return;
+  console.warn(`[movimientos-debug] ${message}`, payload ?? {});
+}
+
 async function getProfileIdFromExistingMembership(client: SupabaseClientLike) {
   const { data, error } = await client
     .from('household_members')
@@ -1480,13 +1490,14 @@ function inferMovementType(lines: Array<{ type: string; category: string }>) {
 }
 
 function inferStoredMovementCategory(lines: Array<{ category: string }>) {
-  const isSystemCategory = (category: string) =>
-    category === 'entrada_cuenta' || category === 'salida_cuenta' || category.startsWith('sistema_');
-
-  const userLevelCategory = lines.find((line) => Boolean(line.category) && !isSystemCategory(line.category));
+  const userLevelCategory = lines.find((line) => Boolean(line.category) && !isTechnicalMovementCategory(line.category));
   if (userLevelCategory?.category) return userLevelCategory.category;
 
   return null;
+}
+
+function isTechnicalMovementCategory(category: string | null | undefined) {
+  return category === 'entrada_cuenta' || category === 'salida_cuenta' || Boolean(category?.startsWith('sistema_'));
 }
 
 function inferSemanticMovementCategory(action: SupportedMovementAction | null, lines: Array<{ category: string }>) {
@@ -1582,6 +1593,7 @@ function reconstructMovementAccounts({
 
 export async function getMovementsHistory(client: SupabaseClientLike = supabaseAdmin): Promise<MovementsHistoryData> {
   const householdId = await getDefaultHouseholdId(client);
+  logMovementsHistoryDebug('Household resuelto para historial', { householdId: householdId ?? null });
   if (!householdId) {
     return {
       hasHousehold: false,
@@ -1591,11 +1603,15 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
 
   const { data: groupsData } = await client
     .from('transaction_groups')
-    .select('id,note,created_at')
+    .select('id,note,source,created_at')
     .eq('household_id', householdId)
     .order('created_at', { ascending: false });
 
-  const groups = (groupsData ?? []) as Array<{ id: string; note?: string | null; created_at: string }>;
+  const groups = (groupsData ?? []) as Array<{ id: string; note?: string | null; source?: string | null; created_at: string }>;
+  logMovementsHistoryDebug('Transaction groups recuperados antes de filtrar', {
+    householdId,
+    groupCount: groups.length
+  });
   if (!groups.length) {
     return {
       hasHousehold: true,
@@ -1604,10 +1620,29 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
   }
 
   const groupIds = groups.map((group) => group.id);
-  const { data: txData } = await client
-    .from('transactions')
-    .select('id,group_id,account_id,type,category,subcategory,amount,happened_at')
-    .in('group_id', groupIds);
+  const transactionChunks = [];
+  for (let index = 0; index < groupIds.length; index += 100) {
+    transactionChunks.push(groupIds.slice(index, index + 100));
+  }
+
+  const txData = [];
+  for (const chunk of transactionChunks) {
+    const { data, error } = await client
+      .from('transactions')
+      .select('id,group_id,account_id,type,category,subcategory,amount,happened_at')
+      .in('group_id', chunk);
+
+    if (error) {
+      warnMovementsHistoryDebug('No fue posible cargar líneas transactions por group_id', {
+        householdId,
+        chunkSize: chunk.length,
+        error: error.message
+      });
+      continue;
+    }
+
+    txData.push(...(data ?? []));
+  }
 
   const transactions = (txData ?? []) as Array<{
     id: string;
@@ -1619,6 +1654,17 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
     amount: string;
     happened_at?: string;
   }>;
+  logMovementsHistoryDebug('Líneas transactions recuperadas para historial', {
+    householdId,
+    transactionLineCount: transactions.length
+  });
+  if (groups.length > 0 && transactions.length === 0) {
+    warnMovementsHistoryDebug('Hay transaction_groups pero no se recuperaron líneas transactions por group_id', {
+      householdId,
+      groupCount: groups.length,
+      groupIdSample: groupIds.slice(0, 5)
+    });
+  }
 
   const { data: accountsData } = await client
     .from('accounts')
@@ -1627,12 +1673,57 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
 
   const householdAccounts = (accountsData ?? []) as Array<{ id: string; name: string; type: string }>;
   const accountById = new Map(householdAccounts.map((account) => [account.id, account.name]));
+  const transactionsByGroupId = transactions.reduce<Map<string, typeof transactions>>((acc, transaction) => {
+    const existing = acc.get(transaction.group_id) ?? [];
+    existing.push(transaction);
+    acc.set(transaction.group_id, existing);
+    return acc;
+  }, new Map());
 
-  const movements = groups.map<MovementHistoryItem>((group) => {
-    const lines = transactions.filter((tx) => tx.group_id === group.id);
+  logMovementsHistoryDebug('Diagnóstico de primeros grupos de historial', {
+    householdId,
+    builtGroupCount: groups.length,
+    groups: groups.slice(0, 5).map((group) => {
+      const lines = transactionsByGroupId.get(group.id) ?? [];
+      const categoryDiagnostics = lines.map((line) => ({
+        transactionId: line.id,
+        category: line.category,
+        visibility: isTechnicalMovementCategory(line.category) ? 'technical' : 'visible'
+      }));
+      const visibleLines = lines.filter((line) => !isTechnicalMovementCategory(line.category));
+
+      return {
+        groupId: group.id,
+        note: group.note ?? null,
+        source: group.source ?? null,
+        created_at: group.created_at,
+        lineCount: lines.length,
+        categories: lines.map((line) => line.category),
+        categoryDiagnostics,
+        visibleLines: visibleLines.map((line) => ({
+          transactionId: line.id,
+          category: line.category,
+          type: line.type,
+          account_id: line.account_id,
+          amount: line.amount
+        }))
+      };
+    })
+  });
+
+  const movements = groups.flatMap<MovementHistoryItem>((group) => {
+    const lines = transactionsByGroupId.get(group.id) ?? [];
+    const visibleLines = lines.filter((tx) => !isTechnicalMovementCategory(tx.category));
+    if (!visibleLines.length) return [];
+
     const action = inferMovementAction(lines);
     const debitLine = lines.find((tx) => tx.type === 'debit');
     const creditLine = lines.find((tx) => tx.type === 'credit');
+    const visibleDebitLine = visibleLines.find((tx) => tx.type === 'debit');
+    const visibleCreditLine = visibleLines.find((tx) => tx.type === 'credit');
+    const amountLine = visibleDebitLine ?? visibleCreditLine ?? debitLine ?? creditLine;
+    const amount = Number(amountLine?.amount ?? 0);
+
     const happenedAt = lines.find((tx) => Boolean(tx.happened_at))?.happened_at ?? group.created_at;
     const baseSourceAccountName = creditLine?.account_id ? accountById.get(creditLine.account_id) ?? null : null;
     const baseDestinationAccountName = debitLine?.account_id ? accountById.get(debitLine.account_id) ?? null : null;
@@ -1647,22 +1738,26 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
     const displayCategory = inferSemanticMovementCategory(action, lines);
     const displaySubcategory = lines.find((tx) => tx.category === displayCategory && tx.subcategory)?.subcategory ?? null;
 
-    return {
+    return [{
       id: group.id,
       fecha: happenedAt,
       tipoMovimiento: inferMovementType(lines),
       categoria: displayCategory,
       subcategoria: displaySubcategory,
       descripcion: group.note?.trim() ? group.note : 'Movimiento sin descripción',
-      monto: Number(debitLine?.amount ?? creditLine?.amount ?? 0),
+      monto: amount,
       cuentaOrigen: reconstructedAccounts.sourceAccountName,
       cuentaDestino: reconstructedAccounts.destinationAccountName,
       puedeEditar: Boolean(action),
       motivoNoEditable: action ? null : 'Este tipo de movimiento aún no se puede editar de forma segura.'
-    };
+    }];
   });
 
   movements.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
+  logMovementsHistoryDebug('Grupos visibles devueltos por historial', {
+    householdId,
+    visibleGroupCount: movements.length
+  });
 
   return {
     hasHousehold: true,
