@@ -1480,13 +1480,20 @@ function inferMovementType(lines: Array<{ type: string; category: string }>) {
 }
 
 function inferStoredMovementCategory(lines: Array<{ category: string }>) {
-  const isSystemCategory = (category: string) =>
-    category === 'entrada_cuenta' || category === 'salida_cuenta' || category.startsWith('sistema_');
-
-  const userLevelCategory = lines.find((line) => Boolean(line.category) && !isSystemCategory(line.category));
+  const userLevelCategory = lines.find((line) => Boolean(line.category) && !isTechnicalMovementCategory(line.category));
   if (userLevelCategory?.category) return userLevelCategory.category;
 
   return null;
+}
+
+function isTechnicalMovementCategory(category: string | null | undefined) {
+  return category === 'entrada_cuenta' || category === 'salida_cuenta' || Boolean(category?.startsWith('sistema_'));
+}
+
+function hasUsefulMovementDescription(description: string | null | undefined) {
+  const normalized = description?.trim().toLowerCase();
+  if (!normalized) return false;
+  return !['movimiento sin descripción', 'sin descripción', 'transferencia', 'movimiento'].includes(normalized);
 }
 
 function inferSemanticMovementCategory(action: SupportedMovementAction | null, lines: Array<{ category: string }>) {
@@ -1628,11 +1635,20 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
   const householdAccounts = (accountsData ?? []) as Array<{ id: string; name: string; type: string }>;
   const accountById = new Map(householdAccounts.map((account) => [account.id, account.name]));
 
-  const movements = groups.map<MovementHistoryItem>((group) => {
+  const movements = groups.flatMap<MovementHistoryItem>((group) => {
     const lines = transactions.filter((tx) => tx.group_id === group.id);
+    const visibleLines = lines.filter((tx) => !isTechnicalMovementCategory(tx.category));
+    if (!visibleLines.length) return [];
+
     const action = inferMovementAction(lines);
     const debitLine = lines.find((tx) => tx.type === 'debit');
     const creditLine = lines.find((tx) => tx.type === 'credit');
+    const visibleDebitLine = visibleLines.find((tx) => tx.type === 'debit');
+    const visibleCreditLine = visibleLines.find((tx) => tx.type === 'credit');
+    const amountLine = visibleDebitLine ?? visibleCreditLine ?? debitLine ?? creditLine;
+    const amount = Number(amountLine?.amount ?? 0);
+    if (amount === 0 && !hasUsefulMovementDescription(group.note)) return [];
+
     const happenedAt = lines.find((tx) => Boolean(tx.happened_at))?.happened_at ?? group.created_at;
     const baseSourceAccountName = creditLine?.account_id ? accountById.get(creditLine.account_id) ?? null : null;
     const baseDestinationAccountName = debitLine?.account_id ? accountById.get(debitLine.account_id) ?? null : null;
@@ -1647,19 +1663,19 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
     const displayCategory = inferSemanticMovementCategory(action, lines);
     const displaySubcategory = lines.find((tx) => tx.category === displayCategory && tx.subcategory)?.subcategory ?? null;
 
-    return {
+    return [{
       id: group.id,
       fecha: happenedAt,
       tipoMovimiento: inferMovementType(lines),
       categoria: displayCategory,
       subcategoria: displaySubcategory,
       descripcion: group.note?.trim() ? group.note : 'Movimiento sin descripción',
-      monto: Number(debitLine?.amount ?? creditLine?.amount ?? 0),
+      monto: amount,
       cuentaOrigen: reconstructedAccounts.sourceAccountName,
       cuentaDestino: reconstructedAccounts.destinationAccountName,
       puedeEditar: Boolean(action),
       motivoNoEditable: action ? null : 'Este tipo de movimiento aún no se puede editar de forma segura.'
-    };
+    }];
   });
 
   movements.sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());

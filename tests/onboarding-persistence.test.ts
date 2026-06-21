@@ -773,6 +773,53 @@ describe('onboarding persistence', () => {
     delete process.env.DEV_PROFILE_ID;
   });
 
+  it('movimientos agrupa líneas visibles y oculta líneas técnicas sin alterar saldos', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-visible-history', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-visible-history', profile_id: 'profile-visible-history', household_id: 'house-visible-history' });
+    fakeClient.db.accounts.push(
+      { id: 'acc-cash-visible', household_id: 'house-visible-history', name: 'Efectivo', type: 'operativa', balance: '8650.00', is_active: true },
+      { id: 'acc-bank-visible', household_id: 'house-visible-history', name: 'Banco', type: 'operativa', balance: '1440.00', is_active: true }
+    );
+    fakeClient.db.transaction_groups.push(
+      { id: 'g-expense-visible', household_id: 'house-visible-history', note: 'Supermercado', created_at: '2024-04-01T10:00:00.000Z' },
+      { id: 'g-income-visible', household_id: 'house-visible-history', note: 'Nómina', created_at: '2024-04-02T10:00:00.000Z' },
+      { id: 'g-only-entry', household_id: 'house-visible-history', note: 'Línea técnica entrada', created_at: '2024-04-03T10:00:00.000Z' },
+      { id: 'g-only-exit', household_id: 'house-visible-history', note: 'Línea técnica salida', created_at: '2024-04-04T10:00:00.000Z' },
+      { id: 'g-deleted-transfer', household_id: 'house-visible-history', note: null, created_at: '2024-04-05T10:00:00.000Z' },
+      { id: 'g-no-main', household_id: 'house-visible-history', note: 'Sin principal', created_at: '2024-04-06T10:00:00.000Z' }
+    );
+    fakeClient.db.transactions.push(
+      { id: 'tx-expense-main', group_id: 'g-expense-visible', account_id: null, type: 'debit', category: 'comida', amount: '350.00', happened_at: '2024-04-01T10:00:00.000Z' },
+      { id: 'tx-expense-technical', group_id: 'g-expense-visible', account_id: 'acc-cash-visible', type: 'credit', category: 'salida_cuenta', amount: '350.00', happened_at: '2024-04-01T10:00:00.000Z' },
+      { id: 'tx-income-technical', group_id: 'g-income-visible', account_id: 'acc-bank-visible', type: 'debit', category: 'entrada_cuenta', amount: '1200.00', happened_at: '2024-04-02T10:00:00.000Z' },
+      { id: 'tx-income-main', group_id: 'g-income-visible', account_id: null, type: 'credit', category: 'salario', amount: '1200.00', happened_at: '2024-04-02T10:00:00.000Z' },
+      { id: 'tx-only-entry', group_id: 'g-only-entry', account_id: 'acc-bank-visible', type: 'debit', category: 'entrada_cuenta', amount: '500.00', happened_at: '2024-04-03T10:00:00.000Z' },
+      { id: 'tx-only-exit', group_id: 'g-only-exit', account_id: 'acc-cash-visible', type: 'credit', category: 'salida_cuenta', amount: '200.00', happened_at: '2024-04-04T10:00:00.000Z' },
+      { id: 'tx-deleted-transfer-entry', group_id: 'g-deleted-transfer', account_id: 'acc-bank-visible', type: 'debit', category: 'entrada_cuenta', amount: '0.00', happened_at: '2024-04-05T10:00:00.000Z' },
+      { id: 'tx-deleted-transfer-exit', group_id: 'g-deleted-transfer', account_id: 'acc-cash-visible', type: 'credit', category: 'salida_cuenta', amount: '0.00', happened_at: '2024-04-05T10:00:00.000Z' },
+      { id: 'tx-system-only', group_id: 'g-no-main', account_id: null, type: 'debit', category: 'sistema_ajuste', amount: '99.00', happened_at: '2024-04-06T10:00:00.000Z' }
+    );
+    const initialBalances = fakeClient.db.accounts.map((account) => ({ id: account.id, balance: account.balance }));
+
+    process.env.DEV_PROFILE_ID = 'profile-visible-history';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getMovementsHistory } = await import('@/lib/db/queries');
+    const { buildDynamicSummary } = await import('@/lib/movements/filters');
+
+    const result = await getMovementsHistory();
+    expect(result.movements.map((movement) => movement.id)).toEqual(['g-income-visible', 'g-expense-visible']);
+    expect(result.movements.find((movement) => movement.id === 'g-expense-visible')).toMatchObject({ tipoMovimiento: 'Gasto', categoria: 'comida', monto: 350 });
+    expect(result.movements.find((movement) => movement.id === 'g-income-visible')).toMatchObject({ tipoMovimiento: 'Ingreso', categoria: 'salario', monto: 1200 });
+    expect(result.movements.map((movement) => movement.categoria)).not.toContain('entrada_cuenta');
+    expect(result.movements.map((movement) => movement.categoria)).not.toContain('salida_cuenta');
+    expect(result.movements.some((movement) => movement.id === 'g-deleted-transfer' && movement.monto === 0)).toBe(false);
+    expect(buildDynamicSummary(result.movements)).toMatchObject({ count: 2, ingresos: 1200, gastos: 350 });
+    expect(fakeClient.db.accounts.map((account) => ({ id: account.id, balance: account.balance }))).toEqual(initialBalances);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
 
   it('actualiza saldos y conserva OFH de configuración tras gasto e ingreso', async () => {
     const fakeClient = createFakeSupabase();
