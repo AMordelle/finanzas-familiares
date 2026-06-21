@@ -820,6 +820,44 @@ describe('onboarding persistence', () => {
     delete process.env.DEV_PROFILE_ID;
   });
 
+  it('movimientos conserva grupos reales con account_id null y solo oculta grupos exclusivamente técnicos', async () => {
+    const fakeClient = createFakeSupabase();
+    fakeClient.db.profiles.push({ id: 'profile-null-account-history', created_at: new Date().toISOString() });
+    fakeClient.db.household_members.push({ id: 'hm-null-account-history', profile_id: 'profile-null-account-history', household_id: 'house-null-account-history' });
+    fakeClient.db.accounts.push(
+      { id: 'acc-bbva-null-history', household_id: 'house-null-account-history', name: 'BBVA', type: 'operativa', balance: '5000.00', is_active: true },
+      { id: 'acc-prime-null-history', household_id: 'house-null-account-history', name: 'PrimeIPTV', type: 'operativa', balance: '1500.00', is_active: true }
+    );
+    fakeClient.db.transaction_groups.push(
+      { id: 'g-fixed-expense-null', household_id: 'house-null-account-history', note: 'Pago renta', created_at: '2024-05-01T10:00:00.000Z' },
+      { id: 'g-prime-income-null', household_id: 'house-null-account-history', note: 'Cobro PrimeIPTV', created_at: '2024-05-02T10:00:00.000Z' },
+      { id: 'g-technical-only-null', household_id: 'house-null-account-history', note: 'Ajuste técnico', created_at: '2024-05-03T10:00:00.000Z' }
+    );
+    fakeClient.db.transactions.push(
+      { id: 'tx-fixed-expense-main', group_id: 'g-fixed-expense-null', account_id: null, type: 'debit', category: 'gastos_fijos', amount: '900.00', happened_at: '2024-05-01T10:00:00.000Z' },
+      { id: 'tx-fixed-expense-account', group_id: 'g-fixed-expense-null', account_id: 'acc-bbva-null-history', type: 'credit', category: 'salida_cuenta', amount: '900.00', happened_at: '2024-05-01T10:00:00.000Z' },
+      { id: 'tx-prime-income-main', group_id: 'g-prime-income-null', account_id: null, type: 'credit', category: 'primeiptv', amount: '450.00', happened_at: '2024-05-02T10:00:00.000Z' },
+      { id: 'tx-prime-income-account', group_id: 'g-prime-income-null', account_id: 'acc-prime-null-history', type: 'debit', category: 'entrada_cuenta', amount: '450.00', happened_at: '2024-05-02T10:00:00.000Z' },
+      { id: 'tx-technical-entry', group_id: 'g-technical-only-null', account_id: 'acc-prime-null-history', type: 'debit', category: 'entrada_cuenta', amount: '100.00', happened_at: '2024-05-03T10:00:00.000Z' },
+      { id: 'tx-technical-exit', group_id: 'g-technical-only-null', account_id: 'acc-bbva-null-history', type: 'credit', category: 'salida_cuenta', amount: '100.00', happened_at: '2024-05-03T10:00:00.000Z' }
+    );
+
+    process.env.DEV_PROFILE_ID = 'profile-null-account-history';
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { getMovementsHistory } = await import('@/lib/db/queries');
+    const { buildDynamicSummary } = await import('@/lib/movements/filters');
+
+    const result = await getMovementsHistory();
+    expect(result.movements).not.toHaveLength(0);
+    expect(result.movements.map((movement) => movement.id)).toEqual(['g-prime-income-null', 'g-fixed-expense-null']);
+    expect(result.movements.find((movement) => movement.id === 'g-fixed-expense-null')).toMatchObject({ categoria: 'gastos_fijos', monto: 900, cuentaOrigen: 'BBVA' });
+    expect(result.movements.find((movement) => movement.id === 'g-prime-income-null')).toMatchObject({ categoria: 'primeiptv', monto: 450, cuentaDestino: 'PrimeIPTV' });
+    expect(result.movements.some((movement) => movement.id === 'g-technical-only-null')).toBe(false);
+    expect(buildDynamicSummary(result.movements)).toMatchObject({ count: 2, ingresos: 450, gastos: 900 });
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
 
   it('actualiza saldos y conserva OFH de configuración tras gasto e ingreso', async () => {
     const fakeClient = createFakeSupabase();

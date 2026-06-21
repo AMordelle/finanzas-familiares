@@ -1490,12 +1490,6 @@ function isTechnicalMovementCategory(category: string | null | undefined) {
   return category === 'entrada_cuenta' || category === 'salida_cuenta' || Boolean(category?.startsWith('sistema_'));
 }
 
-function hasUsefulMovementDescription(description: string | null | undefined) {
-  const normalized = description?.trim().toLowerCase();
-  if (!normalized) return false;
-  return !['movimiento sin descripción', 'sin descripción', 'transferencia', 'movimiento'].includes(normalized);
-}
-
 function inferSemanticMovementCategory(action: SupportedMovementAction | null, lines: Array<{ category: string }>) {
   if (action === 'prestamo_otorgado') return 'prestamo_otorgado';
   if (action === 'pago_recibido') return 'pago_recibido';
@@ -1647,7 +1641,6 @@ export async function getMovementsHistory(client: SupabaseClientLike = supabaseA
     const visibleCreditLine = visibleLines.find((tx) => tx.type === 'credit');
     const amountLine = visibleDebitLine ?? visibleCreditLine ?? debitLine ?? creditLine;
     const amount = Number(amountLine?.amount ?? 0);
-    if (amount === 0 && !hasUsefulMovementDescription(group.note)) return [];
 
     const happenedAt = lines.find((tx) => Boolean(tx.happened_at))?.happened_at ?? group.created_at;
     const baseSourceAccountName = creditLine?.account_id ? accountById.get(creditLine.account_id) ?? null : null;
