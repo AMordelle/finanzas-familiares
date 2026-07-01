@@ -9,7 +9,7 @@ class FakeQueryBuilder {
   private selected = '*';
   private payload: any = null;
   private orderBy: { field: string; ascending: boolean } | null = null;
-  constructor(private table: string, private db: Record<string, any[]>) {}
+  constructor(private table: string, private db: Record<string, any[]>, private queryLog?: Array<{ table: string; selected: string; inFilters: Array<{ field: string; values: unknown[] }> }>) {}
   select(columns = '*') { this.selected = columns; return this; }
   insert(payload: any) { this.action = 'insert'; this.payload = payload; return this; }
   update(payload: any) { this.action = 'update'; this.payload = payload; return this; }
@@ -33,6 +33,7 @@ class FakeQueryBuilder {
     if (this.action === 'upsert') { this.db[this.table] = [...rows.filter((r) => r.id !== this.payload.id), this.payload]; return { data: this.pick([this.payload]), error: null }; }
     if (this.action === 'update') { const updated = rows.map((r) => this.matches(r) ? { ...r, ...this.payload } : r); this.db[this.table] = updated; return { data: this.pick(updated.filter((r) => this.matches(r))), error: null }; }
     if (this.action === 'delete') { const deleted = rows.filter((r) => this.matches(r)); this.db[this.table] = rows.filter((r) => !this.matches(r)); return { data: this.pick(deleted), error: null }; }
+    this.queryLog?.push({ table: this.table, selected: this.selected, inFilters: this.inFilters.map((filter) => ({ field: filter.field, values: [...filter.values] })) });
     let selected = rows.filter((r) => this.matches(r));
     if (this.orderBy) selected = selected.sort((a, b) => a[this.orderBy!.field] > b[this.orderBy!.field] ? (this.orderBy!.ascending ? 1 : -1) : -1);
     return { data: this.pick(selected), error: null };
@@ -48,7 +49,8 @@ function createFakeSupabase() {
     financial_categories: [], financial_subcategories: [], projection_columns: [], projection_column_categories: [],
     transaction_groups: [], transactions: [], accounts: []
   };
-  return { db, from: (table: string) => new FakeQueryBuilder(table, db) };
+  const queryLog: Array<{ table: string; selected: string; inFilters: Array<{ field: string; values: unknown[] }> }> = [];
+  return { db, queryLog, from: (table: string) => new FakeQueryBuilder(table, db, queryLog) };
 }
 
 let fake: ReturnType<typeof createFakeSupabase>;
@@ -392,6 +394,42 @@ describe('módulo Configuración financiera', () => {
     const column = await q.createProjectionColumn({ name: 'Columna asignada', type: 'expense', displayOrder: 1 });
     await q.assignCategoryToProjectionColumn({ projectionColumnId: column.id, financialCategoryId: assigned.id });
     await expect(q.deleteFinancialCategory({ categoryId: assigned.id }, fake as any)).rejects.toThrow('todavía tiene movimientos, subcategorías o columnas asociadas');
+  });
+
+  it('valida dependencias de configuración consultando transactions en chunks de 100 grupos', async () => {
+    const q = await import('@/lib/db/queries');
+    const category = await q.createFinancialCategory({ name: 'Chunked config', type: 'expense' });
+    fake.db.transaction_groups.push(
+      ...Array.from({ length: 205 }, (_, index) => ({
+        id: `group-chunk-${index + 1}`,
+        household_id: 'house-1',
+        note: `Grupo ${index + 1}`,
+        created_at: '2026-05-01T12:00:00.000Z'
+      }))
+    );
+    fake.db.transactions.push({
+      id: 'tx-config-chunk',
+      group_id: 'group-chunk-205',
+      account_id: null,
+      type: 'debit',
+      category: category.key,
+      subcategory: null,
+      amount: '10.00',
+      happened_at: '2026-05-01T12:00:00.000Z'
+    });
+
+    const data = await q.getConfigurationData(fake as any);
+
+    expect(data.categories.find((item) => item.id === category.id)).toMatchObject({
+      canDelete: false,
+      deleteBlockedReason: expect.stringContaining('todavía tiene movimientos')
+    });
+    const dependencyQueries = fake.queryLog.filter((entry) =>
+      entry.table === 'transactions'
+      && entry.selected === 'id,group_id,category,subcategory'
+      && entry.inFilters.some((filter) => filter.field === 'group_id')
+    );
+    expect(dependencyQueries.map((entry) => entry.inFilters.find((filter) => filter.field === 'group_id')?.values.length)).toEqual([100, 100, 5]);
   });
 
   it('elimina subcategoría sin movimientos y rechaza subcategoría usada', async () => {
