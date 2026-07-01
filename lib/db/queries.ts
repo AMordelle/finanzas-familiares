@@ -407,6 +407,16 @@ function errorFinancialClosureDebug(message: string, payload?: Record<string, un
   console.error(`[cierre-debug] ${message}`, payload ?? {});
 }
 
+function logConfigurationDebug(message: string, payload?: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== 'development') return;
+  console.info(`[configuracion-debug] ${message}`, payload ?? {});
+}
+
+function errorConfigurationDebug(message: string, payload?: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== 'development') return;
+  console.error(`[configuracion-debug] ${message}`, payload ?? {});
+}
+
 async function getProfileIdFromExistingMembership(client: SupabaseClientLike) {
   const { data, error } = await client
     .from('household_members')
@@ -1962,7 +1972,8 @@ type ClosureGroup = {
   created_at?: string;
 };
 
-const FINANCIAL_CLOSURE_TRANSACTION_GROUP_CHUNK_SIZE = 100;
+const TRANSACTION_GROUP_QUERY_CHUNK_SIZE = 100;
+const FINANCIAL_CLOSURE_TRANSACTION_GROUP_CHUNK_SIZE = TRANSACTION_GROUP_QUERY_CHUNK_SIZE;
 
 function roundMoney(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -3919,12 +3930,19 @@ async function buildCategoryAuditData(
   const groupIds = groupRows.map((group) => group.id);
   if (!groupIds.length) return createEmptyCategoryAuditData();
 
-  const [{ data: txData, error: txError }, { data: accountData, error: accountError }] = await Promise.all([
-    client.from('transactions').select('id,group_id,account_id,type,category,subcategory,amount,happened_at').in('group_id', groupIds),
-    client.from('accounts').select('id,name,household_id').eq('household_id', householdId)
-  ]);
-  if (txError) throw new Error(`No fue posible leer movimientos para auditoría: ${txError.message}`);
+  const { data: accountData, error: accountError } = await client.from('accounts').select('id,name,household_id').eq('household_id', householdId);
   if (accountError) throw new Error(`No fue posible leer cuentas para auditoría: ${accountError.message}`);
+
+  const txData: Array<{ id: string; group_id: string; account_id: string | null; type: string; category: string; subcategory?: string | null; amount: string | number; happened_at?: string | null }> = [];
+  for (let index = 0; index < groupIds.length; index += TRANSACTION_GROUP_QUERY_CHUNK_SIZE) {
+    const chunk = groupIds.slice(index, index + TRANSACTION_GROUP_QUERY_CHUNK_SIZE);
+    const { data, error } = await client
+      .from('transactions')
+      .select('id,group_id,account_id,type,category,subcategory,amount,happened_at')
+      .in('group_id', chunk);
+    if (error) throw new Error(`No fue posible leer movimientos para auditoría. Falló un chunk de ${chunk.length} grupos: ${error.message}`);
+    txData.push(...((data ?? []) as typeof txData));
+  }
 
   const categoryByKey = new Map(categories.map((category) => [category.key, category]));
   const activeProjectionCategoryIds = getActiveProjectionCategoryIds(projectionColumns);
@@ -3992,12 +4010,61 @@ async function applyConfigurationDeleteAvailability(
   client: SupabaseClientLike
 ) {
   const groupIds = await getHouseholdTransactionGroupIds(householdId, client);
-  const { data: txData, error: txError } = groupIds.length
-    ? await client.from('transactions').select('id,group_id,category,subcategory').in('group_id', groupIds)
-    : { data: [] as Array<{ category: string; subcategory?: string | null }>, error: null };
-  if (txError) throw new Error(`No fue posible validar dependencias de movimientos: ${txError.message}`);
+  const transactionRows: Array<{ id: string; group_id: string; category: string; subcategory?: string | null }> = [];
 
-  const transactionRows = (txData ?? []) as Array<{ category: string; subcategory?: string | null }>;
+  logConfigurationDebug('Validando dependencias de movimientos para configuración', {
+    householdId,
+    groupIdCount: groupIds.length
+  });
+
+  for (let index = 0; index < groupIds.length; index += TRANSACTION_GROUP_QUERY_CHUNK_SIZE) {
+    const chunk = groupIds.slice(index, index + TRANSACTION_GROUP_QUERY_CHUNK_SIZE);
+    const chunkIndex = Math.floor(index / TRANSACTION_GROUP_QUERY_CHUNK_SIZE) + 1;
+
+    logConfigurationDebug('Cargando chunk de transacciones para configuración', {
+      householdId,
+      groupIdCount: groupIds.length,
+      chunkIndex,
+      chunkSize: chunk.length
+    });
+
+    try {
+      const { data, error } = await client
+        .from('transactions')
+        .select('id,group_id,category,subcategory')
+        .in('group_id', chunk);
+
+      if (error) {
+        errorConfigurationDebug('Error al validar dependencias de movimientos para configuración', {
+          householdId,
+          groupIdCount: groupIds.length,
+          chunkIndex,
+          chunkSize: chunk.length,
+          error
+        });
+        throw new Error(error.message);
+      }
+
+      transactionRows.push(...((data ?? []) as Array<{ id: string; group_id: string; category: string; subcategory?: string | null }>));
+    } catch (error) {
+      errorConfigurationDebug('Excepción al validar dependencias de movimientos para configuración', {
+        householdId,
+        groupIdCount: groupIds.length,
+        chunkIndex,
+        chunkSize: chunk.length,
+        error
+      });
+
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`No fue posible validar dependencias de movimientos. La consulta se dividió en chunks de hasta ${TRANSACTION_GROUP_QUERY_CHUNK_SIZE} grupos, pero falló el chunk ${chunkIndex} de ${chunk.length} grupos: ${message}`);
+    }
+  }
+
+  logConfigurationDebug('Transacciones cargadas para validar configuración', {
+    householdId,
+    groupIdCount: groupIds.length,
+    transactionCount: transactionRows.length
+  });
   const categoryMovementCounts = transactionRows.reduce<Record<string, number>>((acc, row) => {
     acc[row.category] = (acc[row.category] ?? 0) + 1;
     return acc;
@@ -4093,23 +4160,35 @@ async function getHouseholdTransactionGroupIds(householdId: string, client: Supa
 
 async function countTransactionsByCategory(householdId: string, categoryKey: string, client: SupabaseClientLike) {
   const groupIds = await getHouseholdTransactionGroupIds(householdId, client);
-  if (!groupIds.length) return 0;
-  const { data, error } = await client.from('transactions').select('id,group_id,category').in('group_id', groupIds).eq('category', categoryKey);
-  if (error) throw new Error(`No fue posible validar movimientos de la categoría: ${error.message}`);
-  return ((data ?? []) as Array<{ id: string }>).length;
+  let count = 0;
+  for (let index = 0; index < groupIds.length; index += TRANSACTION_GROUP_QUERY_CHUNK_SIZE) {
+    const chunk = groupIds.slice(index, index + TRANSACTION_GROUP_QUERY_CHUNK_SIZE);
+    const { data, error } = await client
+      .from('transactions')
+      .select('id,group_id,category')
+      .in('group_id', chunk)
+      .eq('category', categoryKey);
+    if (error) throw new Error(`No fue posible validar movimientos de la categoría. Falló un chunk de ${chunk.length} grupos: ${error.message}`);
+    count += ((data ?? []) as Array<{ id: string }>).length;
+  }
+  return count;
 }
 
 async function countTransactionsBySubcategory(householdId: string, categoryKey: string, subcategoryKey: string, client: SupabaseClientLike) {
   const groupIds = await getHouseholdTransactionGroupIds(householdId, client);
-  if (!groupIds.length) return 0;
-  const { data, error } = await client
-    .from('transactions')
-    .select('id,group_id,category,subcategory')
-    .in('group_id', groupIds)
-    .eq('category', categoryKey)
-    .eq('subcategory', subcategoryKey);
-  if (error) throw new Error(`No fue posible validar movimientos de la subcategoría: ${error.message}`);
-  return ((data ?? []) as Array<{ id: string }>).length;
+  let count = 0;
+  for (let index = 0; index < groupIds.length; index += TRANSACTION_GROUP_QUERY_CHUNK_SIZE) {
+    const chunk = groupIds.slice(index, index + TRANSACTION_GROUP_QUERY_CHUNK_SIZE);
+    const { data, error } = await client
+      .from('transactions')
+      .select('id,group_id,category,subcategory')
+      .in('group_id', chunk)
+      .eq('category', categoryKey)
+      .eq('subcategory', subcategoryKey);
+    if (error) throw new Error(`No fue posible validar movimientos de la subcategoría. Falló un chunk de ${chunk.length} grupos: ${error.message}`);
+    count += ((data ?? []) as Array<{ id: string }>).length;
+  }
+  return count;
 }
 
 async function getOwnedCategoryRow(householdId: string, categoryId: string, client: SupabaseClientLike) {
