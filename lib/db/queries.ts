@@ -397,6 +397,16 @@ function warnMovementsHistoryDebug(message: string, payload?: Record<string, unk
   console.warn(`[movimientos-debug] ${message}`, payload ?? {});
 }
 
+function logFinancialClosureDebug(message: string, payload?: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== 'development') return;
+  console.info(`[cierre-debug] ${message}`, payload ?? {});
+}
+
+function errorFinancialClosureDebug(message: string, payload?: Record<string, unknown>) {
+  if (process.env.NODE_ENV !== 'development') return;
+  console.error(`[cierre-debug] ${message}`, payload ?? {});
+}
+
 async function getProfileIdFromExistingMembership(client: SupabaseClientLike) {
   const { data, error } = await client
     .from('household_members')
@@ -1952,6 +1962,8 @@ type ClosureGroup = {
   created_at?: string;
 };
 
+const FINANCIAL_CLOSURE_TRANSACTION_GROUP_CHUNK_SIZE = 100;
+
 function roundMoney(value: number) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
@@ -2306,6 +2318,12 @@ function mapFinancialClosure(row: FinancialClosureRow): FinancialClosure {
 async function buildFinancialClosurePayload(input: FinancialClosureCalculationInput, client: SupabaseClientLike): Promise<FinancialClosurePersistencePayload> {
   const { start, end } = dateRangeToTimestamps(input.periodStart, input.periodEnd);
 
+  logFinancialClosureDebug('Iniciando lectura para cierre financiero', {
+    householdId: input.householdId,
+    start,
+    end
+  });
+
   const { data: accountsData, error: accountsError } = await client
     .from('accounts')
     .select('id,name,type,balance,household_id,is_active')
@@ -2328,7 +2346,8 @@ async function buildFinancialClosurePayload(input: FinancialClosureCalculationIn
   const { data: groupsData, error: groupsError } = await client
     .from('transaction_groups')
     .select('id,household_id,note,created_at')
-    .eq('household_id', input.householdId);
+    .eq('household_id', input.householdId)
+    .gte('created_at', start);
 
   if (groupsError) {
     throw new Error(`No fue posible leer movimientos para el cierre: ${groupsError.message}`);
@@ -2336,19 +2355,70 @@ async function buildFinancialClosurePayload(input: FinancialClosureCalculationIn
 
   const groups = (groupsData ?? []) as ClosureGroup[];
   const groupIds = groups.map((group) => group.id);
-  const { data: transactionsData, error: transactionsError } = groupIds.length
-    ? await client
-      .from('transactions')
-      .select('id,group_id,account_id,type,category,subcategory,amount,happened_at')
-      .in('group_id', groupIds)
-      .gte('happened_at', start)
-    : { data: [] as ClosureTransactionLine[], error: null };
+  logFinancialClosureDebug('Grupos encontrados para cierre financiero', {
+    householdId: input.householdId,
+    start,
+    end,
+    groupCount: groupIds.length
+  });
 
-  if (transactionsError) {
-    throw new Error(`No fue posible leer transacciones para el cierre: ${transactionsError.message}`);
+  const transactionsData: ClosureTransactionLine[] = [];
+
+  if (groupIds.length) {
+    for (let index = 0; index < groupIds.length; index += FINANCIAL_CLOSURE_TRANSACTION_GROUP_CHUNK_SIZE) {
+      const chunk = groupIds.slice(index, index + FINANCIAL_CLOSURE_TRANSACTION_GROUP_CHUNK_SIZE);
+
+      logFinancialClosureDebug('Cargando chunk de transacciones para cierre financiero', {
+        householdId: input.householdId,
+        start,
+        end,
+        chunkIndex: Math.floor(index / FINANCIAL_CLOSURE_TRANSACTION_GROUP_CHUNK_SIZE) + 1,
+        chunkSize: chunk.length
+      });
+
+      try {
+        const { data: chunkTransactionsData, error: transactionsError } = await client
+          .from('transactions')
+          .select('id,group_id,account_id,type,category,amount,happened_at')
+          .in('group_id', chunk)
+          .gte('happened_at', start);
+
+        if (transactionsError) {
+          errorFinancialClosureDebug('Error al leer transacciones para cierre financiero', {
+            householdId: input.householdId,
+            start,
+            end,
+            chunkSize: chunk.length,
+            error: transactionsError
+          });
+          throw new Error(`No fue posible leer transacciones para el cierre: ${transactionsError.message}`);
+        }
+
+        transactionsData.push(...((chunkTransactionsData ?? []) as ClosureTransactionLine[]));
+      } catch (error) {
+        errorFinancialClosureDebug('Excepción al leer transacciones para cierre financiero', {
+          householdId: input.householdId,
+          start,
+          end,
+          chunkSize: chunk.length,
+          error
+        });
+
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`No fue posible leer transacciones para el cierre. La consulta se dividió en chunks de hasta ${FINANCIAL_CLOSURE_TRANSACTION_GROUP_CHUNK_SIZE} grupos, pero falló al cargar un chunk de ${chunk.length} grupos: ${message}`);
+      }
+    }
   }
 
-  const closureLines = ((transactionsData ?? []) as ClosureTransactionLine[]).filter((line) => line.happened_at >= start);
+  logFinancialClosureDebug('Transacciones cargadas para cierre financiero', {
+    householdId: input.householdId,
+    start,
+    end,
+    groupCount: groupIds.length,
+    transactionCount: transactionsData.length
+  });
+
+  const closureLines = transactionsData.filter((line) => line.happened_at >= start);
   const periodLines = closureLines.filter((line) => line.happened_at <= end);
   const postPeriodLines = closureLines.filter((line) => line.happened_at > end);
   const groupedLines = groupTransactionLines(periodLines);

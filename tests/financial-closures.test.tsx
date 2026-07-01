@@ -11,7 +11,7 @@ class FakeQueryBuilder {
   private limitValue: number | null = null;
   private payload: any = null;
 
-  constructor(private table: string, private db: Db) {}
+  constructor(private table: string, private db: Db, private queryLog: Array<{ table: string; action: string; filters: Array<{ field: string; op: string; value: any }> }> = []) {}
 
   select(_columns = '*') {
     return this;
@@ -97,6 +97,7 @@ class FakeQueryBuilder {
   }
 
   private execute() {
+    this.queryLog.push({ table: this.table, action: this.action, filters: [...this.filters] });
     const rows = this.db[this.table] ?? [];
 
     if (this.action === 'insert') {
@@ -144,6 +145,7 @@ class FakeQueryBuilder {
 }
 
 function createFakeSupabase(dbOverrides: Partial<Db> = {}) {
+  const queryLog: Array<{ table: string; action: string; filters: Array<{ field: string; op: string; value: any }> }> = [];
   const db: Db = {
     profiles: [{ id: 'profile-1', full_name: 'Usuario', created_at: '2026-05-01T00:00:00.000Z' }],
     household_members: [{ id: 'member-1', profile_id: 'profile-1', household_id: 'house-1' }],
@@ -177,8 +179,9 @@ function createFakeSupabase(dbOverrides: Partial<Db> = {}) {
 
   return {
     db,
+    queryLog,
     from(table: string) {
-      return new FakeQueryBuilder(table, db);
+      return new FakeQueryBuilder(table, db, queryLog);
     },
     auth: {
       getUser: vi.fn(async () => ({ data: { user: { id: 'profile-1' } }, error: null }))
@@ -247,6 +250,51 @@ describe('cierres financieros', () => {
     ]));
     expect(closure.accountSnapshots.reduce((acc, account) => acc + account.closingBalance, 0)).toBe(10800);
     expect(fakeClient.db.financial_closures).toHaveLength(1);
+  });
+
+  it('carga transacciones del cierre en chunks por ids de grupos', async () => {
+    const extraGroups = Array.from({ length: 205 }, (_, index) => ({
+      id: `bulk-group-${index + 1}`,
+      household_id: 'house-1',
+      note: `Movimiento masivo ${index + 1}`,
+      created_at: '2026-05-03T00:00:00.000Z'
+    }));
+    const extraTransactions = extraGroups.map((group, index) => ({
+      id: `bulk-tx-${index + 1}`,
+      group_id: group.id,
+      account_id: null,
+      type: 'debit',
+      category: 'metadata',
+      amount: '0.01',
+      happened_at: '2026-05-03T12:00:00.000Z'
+    }));
+    const fakeClient = createFakeSupabase({
+      transaction_groups: [
+        ...createFakeSupabase().db.transaction_groups,
+        ...extraGroups
+      ],
+      transactions: [
+        ...createFakeSupabase().db.transactions,
+        ...extraTransactions
+      ]
+    });
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createFinancialClosure } = await import('@/lib/db/queries');
+
+    const closure = await createFinancialClosure({ type: 'weekly', periodStart: '2026-05-01', periodEnd: '2026-05-07' });
+    const transactionSelects = fakeClient.queryLog.filter((entry) => (
+      entry.table === 'transactions'
+      && entry.action === 'select'
+      && entry.filters.some((filter) => filter.field === 'group_id' && filter.op === 'in')
+    ));
+    const chunkSizes = transactionSelects.map((entry) => (
+      entry.filters.find((filter) => filter.field === 'group_id' && filter.op === 'in')?.value.length
+    ));
+
+    expect(closure.incomeTotal).toBe(500);
+    expect(closure.expenseTotal).toBe(200);
+    expect(transactionSelects).toHaveLength(3);
+    expect(chunkSizes).toEqual([100, 100, 8]);
   });
 
   it('reconstruye saldos históricos deshaciendo movimientos posteriores al cierre', async () => {
