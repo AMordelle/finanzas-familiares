@@ -4,9 +4,9 @@ import { getAllocatedByAccount, getAllocatedByFund, getAvailableByAccount, getTo
 const household = 'home-a';
 const cash: FlowAccount = { id: 'cash', householdId: household, type: 'operational_cash', balance: 10_000, isActive: true };
 const allocations: FlowAllocationAmount[] = [
-  { householdId: household, accountId: 'cash', fundId: 'weekly', amount: 4_000 },
-  { householdId: household, accountId: 'cash', fundId: 'monthly', amount: 2_000 },
-  { householdId: 'home-b', accountId: 'cash-b', fundId: 'weekly-b', amount: 50_000 }
+  { householdId: household, accountId: 'cash', fundId: 'weekly', cycleId: 'week-29', amount: 4_000 },
+  { householdId: household, accountId: 'cash', fundId: 'monthly', cycleId: 'month-7', amount: 2_000 },
+  { householdId: 'home-b', accountId: 'cash-b', fundId: 'weekly-b', cycleId: 'week-b', amount: 50_000 }
 ];
 
 describe('base de Flujos', () => {

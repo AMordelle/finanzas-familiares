@@ -62,10 +62,30 @@ export const flowFunds = pgTable('flow_funds', {
   priorityCheck: check('flow_funds_priority_check', sql`${table.priority} > 0`)
 }));
 
+export const flowCycles = pgTable('flow_cycles', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').references(() => households.id).notNull(),
+  fundId: uuid('fund_id').references(() => flowFunds.id).notNull(),
+  cycleStart: date('cycle_start').notNull(),
+  cycleEnd: date('cycle_end').notNull(),
+  cycleLabel: text('cycle_label').notNull(),
+  targetAmount: numeric('target_amount', { precision: 14, scale: 2 }).notNull().default('0'),
+  consumedAmount: numeric('consumed_amount', { precision: 14, scale: 2 }).notNull().default('0'),
+  status: text('status').notNull().default('pending'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull()
+}, (table) => ({
+  fundPeriodUnique: uniqueIndex('flow_cycles_fund_period_unique').on(table.householdId, table.fundId, table.cycleStart, table.cycleEnd),
+  targetCheck: check('flow_cycles_target_check', sql`${table.targetAmount} >= 0`),
+  consumedCheck: check('flow_cycles_consumed_check', sql`${table.consumedAmount} >= 0`)
+}));
+
+
 export const flowAllocations = pgTable('flow_allocations', {
   id: uuid('id').primaryKey().defaultRandom(),
   householdId: uuid('household_id').references(() => households.id).notNull(),
   fundId: uuid('fund_id').references(() => flowFunds.id).notNull(),
+  cycleId: uuid('cycle_id').references(() => flowCycles.id).notNull(),
   accountId: uuid('account_id').references(() => accounts.id).notNull(),
   amount: numeric('amount', { precision: 14, scale: 2 }).notNull(),
   notes: text('notes'),
