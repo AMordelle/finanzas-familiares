@@ -47,6 +47,34 @@ export const accounts = pgTable('accounts', {
   isActive: boolean('is_active').notNull().default(true)
 });
 
+export const flowFunds = pgTable('flow_funds', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').references(() => households.id).notNull(),
+  name: text('name').notNull(),
+  code: text('code').notNull(),
+  periodType: text('period_type').notNull(),
+  priority: integer('priority').notNull(),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull()
+}, (table) => ({
+  householdCodeUnique: uniqueIndex('flow_funds_household_code_unique').on(table.householdId, table.code),
+  priorityCheck: check('flow_funds_priority_check', sql`${table.priority} > 0`)
+}));
+
+export const flowAllocations = pgTable('flow_allocations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').references(() => households.id).notNull(),
+  fundId: uuid('fund_id').references(() => flowFunds.id).notNull(),
+  accountId: uuid('account_id').references(() => accounts.id).notNull(),
+  amount: numeric('amount', { precision: 14, scale: 2 }).notNull(),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull()
+}, (table) => ({
+  amountPositiveCheck: check('flow_allocations_amount_check', sql`${table.amount} > 0`)
+}));
+
 export const incomeSources = pgTable('income_sources', {
   id: uuid('id').primaryKey().defaultRandom(),
   householdId: uuid('household_id').references(() => households.id).notNull(),
