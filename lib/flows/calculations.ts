@@ -1,7 +1,7 @@
 export const LIQUID_ACCOUNT_TYPES = ['operativa', 'operational_cash'] as const;
 
 export type FlowAccount = { id: string; householdId: string; type: string; balance: number; isActive: boolean };
-export type FlowAllocationAmount = { householdId: string; accountId: string; fundId: string; amount: number };
+export type FlowAllocationAmount = { householdId: string; accountId: string; fundId: string; cycleId: string; amount: number };
 
 export function isLiquidAccount(account: FlowAccount) {
   return account.isActive && (LIQUID_ACCOUNT_TYPES as readonly string[]).includes(account.type) && Number.isFinite(account.balance) && account.balance > 0;
@@ -19,12 +19,13 @@ export function getUnallocatedMoney(accounts: FlowAccount[], allocations: FlowAl
   return getTotalLiquidity(accounts, householdId) - getTotalAllocated(allocations, householdId);
 }
 
-function allocatedBy(allocations: FlowAllocationAmount[], householdId: string, key: 'accountId' | 'fundId', id: string) {
+function allocatedBy(allocations: FlowAllocationAmount[], householdId: string, key: 'accountId' | 'fundId' | 'cycleId', id: string) {
   return allocations.filter((item) => item.householdId === householdId && item[key] === id).reduce((total, item) => total + item.amount, 0);
 }
 
 export const getAllocatedByAccount = (allocations: FlowAllocationAmount[], householdId: string, accountId: string) => allocatedBy(allocations, householdId, 'accountId', accountId);
 export const getAllocatedByFund = (allocations: FlowAllocationAmount[], householdId: string, fundId: string) => allocatedBy(allocations, householdId, 'fundId', fundId);
+export const getAllocatedByCycle = (allocations: FlowAllocationAmount[], householdId: string, cycleId: string) => allocatedBy(allocations, householdId, 'cycleId', cycleId);
 
 export function getAvailableByAccount(account: FlowAccount, allocations: FlowAllocationAmount[], householdId: string) {
   if (account.householdId !== householdId || !isLiquidAccount(account)) return 0;
