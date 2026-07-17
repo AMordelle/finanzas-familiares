@@ -7,6 +7,7 @@ const nav = [
   ['Registro', '/registro'],
   ['Cuentas', '/cuentas'],
   ['Movimientos', '/movimientos'],
+  ['Flujos', '/flujos'],
   ['Proyección', '/proyeccion'],
   ['MSI', '/msi'],
   ['Extras', '/extras'],
