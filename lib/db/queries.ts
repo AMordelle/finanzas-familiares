@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { calculateFlowTarget, FLOW_PERIOD_TYPES, type FlowPeriodType, type FlowTargetType } from '@/lib/flows/targets';
+import { normalizeFlowPeriodType } from '@/lib/flows/configuration';
 import { supabaseAdmin } from '@/lib/db/supabase';
 import {
   buildRecommendations,
@@ -3490,7 +3491,7 @@ export type ProjectionColumn = {
 };
 
 export type ConfiguredFlow = {
-  id: string; householdId: string; name: string; periodType: FlowPeriodType; targetType: FlowTargetType; manualTargetAmount: number | null; isActive: boolean; canDelete: boolean; deleteBlockedReason: string | null; targetAmount: number;
+  id: string; householdId: string; name: string; code: string; periodType: FlowPeriodType | null; requiresPeriodConfiguration: boolean; targetType: FlowTargetType; manualTargetAmount: number | null; isActive: boolean; canDelete: boolean; deleteBlockedReason: string | null; targetAmount: number;
 };
 
 export type ConfigurationData = {
@@ -3682,7 +3683,7 @@ export const financialSubcategoryDeleteSchema = z.object({ subcategoryId: z.stri
 
 const flowBaseSchema = z.object({
   name: z.string().trim().min(1, 'El nombre del flujo es obligatorio.').max(80),
-  periodType: z.enum(FLOW_PERIOD_TYPES),
+  periodType: z.enum(FLOW_PERIOD_TYPES, { errorMap: () => ({ message: 'Selecciona una periodicidad válida antes de guardar el flujo.' }) }),
   targetType: z.enum(['calculated', 'manual']),
   manualTargetAmount: z.coerce.number().finite().min(0).nullable().optional(),
   householdId: z.string().min(1).optional()
@@ -4152,7 +4153,7 @@ export async function getConfigurationData(client: SupabaseClientLike = supabase
     client.from('financial_subcategories').select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,flow_fund_id,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
     client.from('projection_columns').select('id,household_id,name,key,type,description,display_order,is_active,created_at,updated_at').eq('household_id', householdId).order('display_order', { ascending: true }),
     client.from('projection_column_categories').select('projection_column_id,financial_category_id').eq('household_id', householdId),
-    client.from('flow_funds').select('id,household_id,name,period_type,target_type,manual_target_amount,is_active,priority').eq('household_id', householdId).order('priority')
+    client.from('flow_funds').select('id,household_id,name,code,period_type,target_type,manual_target_amount,is_active,priority').eq('household_id', householdId).order('priority')
   ]);
 
   for (const result of [categoriesResult, subcategoriesResult, columnsResult, assignmentsResult, flowsResult]) {
@@ -4180,7 +4181,7 @@ export async function getConfigurationData(client: SupabaseClientLike = supabase
 
   const concepts = deletableConfiguration.categories.flatMap((category) => category.subcategories);
   const flowReferences = new Set(concepts.map((concept) => concept.flowFundId).filter(Boolean));
-  const flows = ((flowsResult.data ?? []) as Array<{ id: string; household_id: string; name: string; period_type: FlowPeriodType; target_type: FlowTargetType; manual_target_amount: string | number | null; is_active: boolean }>).map((flow) => ({ id: flow.id, householdId: flow.household_id, name: flow.name, periodType: flow.period_type, targetType: flow.target_type, manualTargetAmount: flow.manual_target_amount == null ? null : Number(flow.manual_target_amount), isActive: flow.is_active, canDelete: !flowReferences.has(flow.id), deleteBlockedReason: flowReferences.has(flow.id) ? 'No se puede eliminar este flujo porque tiene conceptos asociados. Reasígnalos o elimínalos primero.' : null, targetAmount: calculateFlowTarget({ id: flow.id, periodType: flow.period_type, targetType: flow.target_type, manualTargetAmount: flow.manual_target_amount == null ? null : Number(flow.manual_target_amount) }, concepts.map((concept) => ({ flowFundId: concept.flowFundId ?? null, plannedAmount: concept.plannedAmount ?? null, plannedPeriodType: concept.plannedPeriodType ?? null, isActive: concept.isActive })) ) }));
+  const flows = ((flowsResult.data ?? []) as Array<{ id: string; household_id: string; name: string; code: string; period_type: string | null; target_type: FlowTargetType; manual_target_amount: string | number | null; is_active: boolean }>).map((flow) => { const periodType = normalizeFlowPeriodType(flow.period_type, flow.code); const manualTargetAmount = flow.manual_target_amount == null ? null : Number(flow.manual_target_amount); return { id: flow.id, householdId: flow.household_id, name: flow.name, code: flow.code, periodType, requiresPeriodConfiguration: !periodType, targetType: flow.target_type, manualTargetAmount, isActive: flow.is_active, canDelete: !flowReferences.has(flow.id), deleteBlockedReason: flowReferences.has(flow.id) ? 'No se puede eliminar este flujo porque tiene conceptos asociados. Reasígnalos o elimínalos primero.' : null, targetAmount: periodType ? calculateFlowTarget({ id: flow.id, periodType, targetType: flow.target_type, manualTargetAmount }, concepts.map((concept) => ({ flowFundId: concept.flowFundId ?? null, plannedAmount: concept.plannedAmount ?? null, plannedPeriodType: concept.plannedPeriodType ?? null, isActive: concept.isActive }))) : 0 }; });
   return { hasHousehold: true, householdId, categories: deletableConfiguration.categories, projectionColumns: deletableConfiguration.projectionColumns, flows, categoryAudit };
 }
 

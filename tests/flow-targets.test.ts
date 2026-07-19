@@ -31,3 +31,27 @@ describe('default flow configuration', () => {
   });
 
 });
+
+import { buildFlowFormPayload, normalizeFlowPeriodType } from '@/lib/flows/configuration';
+
+describe('flow period configuration', () => {
+  it('normalizes invalid legacy periods only for built-in flows', () => {
+    expect(normalizeFlowPeriodType('none', 'miscellaneous')).toBe('weekly');
+    expect(normalizeFlowPeriodType(null, 'wealth')).toBe('monthly');
+    expect(normalizeFlowPeriodType('none', 'custom')).toBeNull();
+  });
+
+  it('keeps built-in manual flows editable through both target types', () => {
+    const variables = { flowId: 'variables', name: 'Gastos Variables', periodType: 'weekly', manualTargetAmount: '0' };
+    const wealth = { flowId: 'wealth', name: 'Patrimonio', periodType: 'monthly', manualTargetAmount: '500' };
+    expect(buildFlowFormPayload({ ...variables, targetType: 'calculated', isActive: true }).periodType).toBe('weekly');
+    expect(buildFlowFormPayload({ ...variables, targetType: 'manual', isActive: true }).targetType).toBe('manual');
+    expect(buildFlowFormPayload({ ...wealth, targetType: 'calculated', isActive: true }).periodType).toBe('monthly');
+    expect(buildFlowFormPayload({ ...wealth, targetType: 'manual', isActive: true }).targetType).toBe('manual');
+  });
+
+  it('never builds a request with an invalid period and explains the required correction', () => {
+    expect(() => buildFlowFormPayload({ name: 'Personalizado', periodType: 'none', targetType: 'manual', manualTargetAmount: '' })).toThrow('Selecciona una periodicidad válida');
+    expect(() => buildFlowFormPayload({ name: 'Personalizado', periodType: '', targetType: 'calculated', manualTargetAmount: '' })).toThrow('Selecciona una periodicidad válida');
+  });
+});
