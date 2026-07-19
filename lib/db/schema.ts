@@ -83,6 +83,21 @@ export const flowCycles = pgTable('flow_cycles', {
 }));
 
 
+export const flowPeriods = pgTable('flow_periods', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  householdId: uuid('household_id').references(() => households.id).notNull(),
+  fundId: uuid('fund_id').references(() => flowFunds.id).notNull(),
+  periodStart: date('period_start').notNull(),
+  periodEnd: date('period_end').notNull(),
+  periodLabel: text('period_label').notNull(),
+  targetAmount: numeric('target_amount', { precision: 14, scale: 2 }).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull()
+}, (table) => ({
+  fundPeriodUnique: uniqueIndex('flow_periods_fund_period_unique').on(table.householdId, table.fundId, table.periodStart, table.periodEnd),
+  targetCheck: check('flow_periods_target_check', sql`${table.targetAmount} >= 0`)
+}));
+
+
 export const flowAllocations = pgTable('flow_allocations', {
   id: uuid('id').primaryKey().defaultRandom(),
   householdId: uuid('household_id').references(() => households.id).notNull(),
