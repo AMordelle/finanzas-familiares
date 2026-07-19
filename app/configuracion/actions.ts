@@ -3,6 +3,9 @@
 import { revalidatePath } from 'next/cache';
 import {
   assignCategoryToProjectionColumn,
+  createConfiguredFlow,
+  updateConfiguredFlow,
+  deleteConfiguredFlow,
   createFinancialCategory,
   createFinancialSubcategory,
   createProjectionColumn,
@@ -122,3 +125,7 @@ export async function reclassifyCategoryAuditMovementAction(payload: unknown) {
   revalidateAuditPaths();
   return { success: true, message: 'Movimiento reclasificado correctamente.', data };
 }
+
+export async function createConfiguredFlowAction(payload: unknown) { const data = await createConfiguredFlow(payload); revalidateConfigurationPaths(); return { success: true, message: 'Flujo creado correctamente.', data }; }
+export async function updateConfiguredFlowAction(payload: unknown) { await updateConfiguredFlow(payload); revalidateConfigurationPaths(); return { success: true, message: 'Flujo actualizado correctamente.' }; }
+export async function deleteConfiguredFlowAction(payload: unknown) { await deleteConfiguredFlow(payload); revalidateConfigurationPaths(); return { success: true, message: 'Flujo eliminado correctamente.' }; }

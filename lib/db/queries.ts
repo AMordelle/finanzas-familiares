@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { calculateFlowTarget, FLOW_PERIOD_TYPES, type FlowPeriodType, type FlowTargetType } from '@/lib/flows/targets';
+import { normalizeFlowPeriodType } from '@/lib/flows/configuration';
 import { supabaseAdmin } from '@/lib/db/supabase';
 import {
   buildRecommendations,
@@ -3447,6 +3449,9 @@ export type FinancialSubcategory = {
   name: string;
   key: string;
   isActive: boolean;
+  plannedAmount?: number | null;
+  plannedPeriodType?: FlowPeriodType | null;
+  flowFundId?: string | null;
   canDelete: boolean;
   deleteBlockedReason: string | null;
   createdAt: string;
@@ -3485,11 +3490,16 @@ export type ProjectionColumn = {
   categories: Array<{ id: string; name: string; key: string; type: FinancialCategoryType; isActive: boolean; noProjectable: boolean }>;
 };
 
+export type ConfiguredFlow = {
+  id: string; householdId: string; name: string; code: string; periodType: FlowPeriodType | null; requiresPeriodConfiguration: boolean; targetType: FlowTargetType; manualTargetAmount: number | null; isActive: boolean; canDelete: boolean; deleteBlockedReason: string | null; targetAmount: number;
+};
+
 export type ConfigurationData = {
   hasHousehold: boolean;
   householdId: string | null;
   categories: FinancialCategory[];
   projectionColumns: ProjectionColumn[];
+  flows: ConfiguredFlow[];
   categoryAudit: CategoryAuditData;
 };
 
@@ -3657,6 +3667,9 @@ export const financialCategoryDeleteSchema = z.object({ categoryId: z.string().m
 export const financialSubcategoryCreateSchema = z.object({
   financialCategoryId: z.string().min(1),
   name: z.string().trim().min(1, 'El nombre de la subcategoría es obligatorio.').max(80),
+  plannedAmount: z.coerce.number().finite().min(0).nullable().optional(),
+  plannedPeriodType: z.enum(FLOW_PERIOD_TYPES).nullable().optional(),
+  flowFundId: z.string().uuid().nullable().optional(),
   householdId: z.string().min(1).optional()
 });
 
@@ -3667,6 +3680,17 @@ export const financialSubcategoryUpdateSchema = financialSubcategoryCreateSchema
 
 export const financialSubcategoryToggleSchema = z.object({ subcategoryId: z.string().min(1), isActive: z.boolean() });
 export const financialSubcategoryDeleteSchema = z.object({ subcategoryId: z.string().min(1) });
+
+const flowBaseSchema = z.object({
+  name: z.string().trim().min(1, 'El nombre del flujo es obligatorio.').max(80),
+  periodType: z.enum(FLOW_PERIOD_TYPES, { errorMap: () => ({ message: 'Selecciona una periodicidad válida antes de guardar el flujo.' }) }),
+  targetType: z.enum(['calculated', 'manual']),
+  manualTargetAmount: z.coerce.number().finite().min(0).nullable().optional(),
+  householdId: z.string().min(1).optional()
+});
+export const flowCreateSchema = flowBaseSchema;
+export const flowUpdateSchema = flowBaseSchema.extend({ flowId: z.string().uuid(), isActive: z.boolean().optional() });
+export const flowDeleteSchema = z.object({ flowId: z.string().uuid() });
 
 export const projectionColumnCreateSchema = z.object({
   name: z.string().trim().min(1, 'El nombre de la columna es obligatorio.').max(80),
@@ -3704,6 +3728,9 @@ type FinancialSubcategoryRow = {
   name: string;
   key: string;
   is_active: boolean;
+  planned_amount?: string | number | null;
+  planned_period_type?: FlowPeriodType | null;
+  flow_fund_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -3744,6 +3771,9 @@ function mapFinancialSubcategory(row: FinancialSubcategoryRow): FinancialSubcate
     name: row.name,
     key: row.key,
     isActive: row.is_active ?? true,
+    plannedAmount: row.planned_amount == null ? null : Number(row.planned_amount),
+    plannedPeriodType: row.planned_period_type ?? null,
+    flowFundId: row.flow_fund_id ?? null,
     canDelete: true,
     deleteBlockedReason: null,
     createdAt: row.created_at,
@@ -3801,7 +3831,7 @@ export async function getFinancialCategoryCatalog(householdId?: string | null, c
       .order('name', { ascending: true }),
     client
       .from('financial_subcategories')
-      .select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at')
+      .select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,flow_fund_id,created_at,updated_at')
       .eq('household_id', resolvedHouseholdId)
       .eq('is_active', true)
       .order('name', { ascending: true })
@@ -4116,16 +4146,17 @@ async function applyConfigurationDeleteAvailability(
 
 export async function getConfigurationData(client: SupabaseClientLike = supabaseAdmin): Promise<ConfigurationData> {
   const householdId = await getDefaultHouseholdId(client);
-  if (!householdId) return { hasHousehold: false, householdId: null, categories: [], projectionColumns: [], categoryAudit: createEmptyCategoryAuditData() };
+  if (!householdId) return { hasHousehold: false, householdId: null, categories: [], projectionColumns: [], flows: [], categoryAudit: createEmptyCategoryAuditData() };
 
-  const [categoriesResult, subcategoriesResult, columnsResult, assignmentsResult] = await Promise.all([
+  const [categoriesResult, subcategoriesResult, columnsResult, assignmentsResult, flowsResult] = await Promise.all([
     client.from('financial_categories').select('id,household_id,name,key,type,no_projectable,is_active,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
-    client.from('financial_subcategories').select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
+    client.from('financial_subcategories').select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,flow_fund_id,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
     client.from('projection_columns').select('id,household_id,name,key,type,description,display_order,is_active,created_at,updated_at').eq('household_id', householdId).order('display_order', { ascending: true }),
-    client.from('projection_column_categories').select('projection_column_id,financial_category_id').eq('household_id', householdId)
+    client.from('projection_column_categories').select('projection_column_id,financial_category_id').eq('household_id', householdId),
+    client.from('flow_funds').select('id,household_id,name,code,period_type,target_type,manual_target_amount,is_active,priority').eq('household_id', householdId).order('priority')
   ]);
 
-  for (const result of [categoriesResult, subcategoriesResult, columnsResult, assignmentsResult]) {
+  for (const result of [categoriesResult, subcategoriesResult, columnsResult, assignmentsResult, flowsResult]) {
     if (result.error) throw new Error(`No fue posible leer configuración: ${result.error.message}`);
   }
 
@@ -4148,7 +4179,10 @@ export async function getConfigurationData(client: SupabaseClientLike = supabase
   const deletableConfiguration = await applyConfigurationDeleteAvailability(householdId, categories, projectionColumns, (assignmentsResult.data ?? []) as ProjectionAssignmentRow[], client);
   const categoryAudit = await buildCategoryAuditData(householdId, deletableConfiguration.categories, deletableConfiguration.projectionColumns, client);
 
-  return { hasHousehold: true, householdId, categories: deletableConfiguration.categories, projectionColumns: deletableConfiguration.projectionColumns, categoryAudit };
+  const concepts = deletableConfiguration.categories.flatMap((category) => category.subcategories);
+  const flowReferences = new Set(concepts.map((concept) => concept.flowFundId).filter(Boolean));
+  const flows = ((flowsResult.data ?? []) as Array<{ id: string; household_id: string; name: string; code: string; period_type: string | null; target_type: FlowTargetType; manual_target_amount: string | number | null; is_active: boolean }>).map((flow) => { const periodType = normalizeFlowPeriodType(flow.period_type, flow.code); const manualTargetAmount = flow.manual_target_amount == null ? null : Number(flow.manual_target_amount); return { id: flow.id, householdId: flow.household_id, name: flow.name, code: flow.code, periodType, requiresPeriodConfiguration: !periodType, targetType: flow.target_type, manualTargetAmount, isActive: flow.is_active, canDelete: !flowReferences.has(flow.id), deleteBlockedReason: flowReferences.has(flow.id) ? 'No se puede eliminar este flujo porque tiene conceptos asociados. Reasígnalos o elimínalos primero.' : null, targetAmount: periodType ? calculateFlowTarget({ id: flow.id, periodType, targetType: flow.target_type, manualTargetAmount }, concepts.map((concept) => ({ flowFundId: concept.flowFundId ?? null, plannedAmount: concept.plannedAmount ?? null, plannedPeriodType: concept.plannedPeriodType ?? null, isActive: concept.isActive }))) : 0 }; });
+  return { hasHousehold: true, householdId, categories: deletableConfiguration.categories, projectionColumns: deletableConfiguration.projectionColumns, flows, categoryAudit };
 }
 
 
@@ -4206,7 +4240,7 @@ async function getOwnedCategoryRow(householdId: string, categoryId: string, clie
 async function getOwnedSubcategoryWithCategory(householdId: string, subcategoryId: string, client: SupabaseClientLike) {
   const { data: subcategory, error } = await client
     .from('financial_subcategories')
-    .select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at')
+    .select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,flow_fund_id,created_at,updated_at')
     .eq('id', subcategoryId)
     .eq('household_id', householdId)
     .maybeSingle();
@@ -4293,7 +4327,7 @@ export async function createFinancialSubcategory(rawInput: unknown, client: Supa
   const householdId = await resolveInputHouseholdId(input.householdId, client);
   const key = normalizeAndValidateRequiredKey(input.name, 'La subcategoría');
   await assertUniqueKey('financial_subcategories', householdId, key, client, undefined, { field: 'financial_category_id', value: input.financialCategoryId });
-  const { data, error } = await client.from('financial_subcategories').insert({ household_id: householdId, financial_category_id: input.financialCategoryId, name: input.name.trim(), key, is_active: true, updated_at: new Date().toISOString() }).select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at').single();
+  const { data, error } = await client.from('financial_subcategories').insert({ household_id: householdId, financial_category_id: input.financialCategoryId, name: input.name.trim(), key, is_active: true, planned_amount: input.plannedAmount ?? null, planned_period_type: input.plannedPeriodType ?? null, flow_fund_id: input.flowFundId ?? null, updated_at: new Date().toISOString() }).select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,flow_fund_id,created_at,updated_at').single();
   if (error || !data) throw new Error(error?.message ?? 'No fue posible crear la subcategoría.');
   return mapFinancialSubcategory(data);
 }
@@ -4303,7 +4337,7 @@ export async function updateFinancialSubcategory(rawInput: unknown, client: Supa
   const householdId = await resolveInputHouseholdId(input.householdId, client);
   const key = normalizeAndValidateRequiredKey(input.name, 'La subcategoría');
   await assertUniqueKey('financial_subcategories', householdId, key, client, input.subcategoryId, { field: 'financial_category_id', value: input.financialCategoryId });
-  const { data, error } = await client.from('financial_subcategories').update({ financial_category_id: input.financialCategoryId, name: input.name.trim(), key, is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.subcategoryId).eq('household_id', householdId).select('id,household_id,financial_category_id,name,key,is_active,created_at,updated_at').maybeSingle();
+  const { data, error } = await client.from('financial_subcategories').update({ financial_category_id: input.financialCategoryId, name: input.name.trim(), key, is_active: input.isActive, planned_amount: input.plannedAmount ?? null, planned_period_type: input.plannedPeriodType ?? null, flow_fund_id: input.flowFundId ?? null, updated_at: new Date().toISOString() }).eq('id', input.subcategoryId).eq('household_id', householdId).select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,flow_fund_id,created_at,updated_at').maybeSingle();
   if (error) throw new Error(`No fue posible editar la subcategoría: ${error.message}`);
   if (!data) throw new Error('No se encontró la subcategoría en este hogar.');
   return mapFinancialSubcategory(data);
@@ -4753,4 +4787,24 @@ export async function buildWeeklyProjectionSummary(client: SupabaseClientLike = 
       ignoredNoProjectableCategories: noProjectableKeys.size
     }
   };
+}
+
+
+export async function createConfiguredFlow(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = flowCreateSchema.parse(rawInput); const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const { data: maxPriority } = await client.from('flow_funds').select('priority').eq('household_id', householdId).order('priority', { ascending: false }).limit(1);
+  const { data, error } = await client.from('flow_funds').insert({ household_id: householdId, name: input.name.trim(), code: normalizeAndValidateRequiredKey(input.name, 'El flujo'), period_type: input.periodType, target_type: input.targetType, manual_target_amount: input.targetType === 'manual' ? input.manualTargetAmount : null, priority: Number(maxPriority?.[0]?.priority ?? 0) + 1, is_active: true }).select('id').single();
+  if (error || !data) throw new Error(error?.message ?? 'No fue posible crear el flujo.'); return data;
+}
+export async function updateConfiguredFlow(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = flowUpdateSchema.parse(rawInput); const householdId = await resolveInputHouseholdId(input.householdId, client);
+  const { error } = await client.from('flow_funds').update({ name: input.name.trim(), period_type: input.periodType, target_type: input.targetType, manual_target_amount: input.targetType === 'manual' ? input.manualTargetAmount : null, is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.flowId).eq('household_id', householdId);
+  if (error) throw new Error(`No fue posible editar el flujo: ${error.message}`);
+}
+export async function deleteConfiguredFlow(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
+  const input = flowDeleteSchema.parse(rawInput); const householdId = await resolveInputHouseholdId(undefined, client);
+  const { data: references, error: referenceError } = await client.from('financial_subcategories').select('id').eq('household_id', householdId).eq('flow_fund_id', input.flowId);
+  if (referenceError) throw new Error(`No fue posible validar conceptos asociados: ${referenceError.message}`);
+  if (references?.length) throw new Error('No se puede eliminar el flujo porque tiene conceptos asociados.');
+  const { error } = await client.from('flow_funds').delete().eq('id', input.flowId).eq('household_id', householdId); if (error) throw new Error(`No fue posible eliminar el flujo: ${error.message}`);
 }

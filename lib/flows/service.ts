@@ -4,10 +4,8 @@ import { getDefaultHouseholdId } from '@/lib/db/queries';
 import { getAllocatedByAccount, getAllocatedByCycle, getTotalAllocated, getTotalLiquidity, getUnallocatedMoney, type FlowAccount, type FlowAllocationAmount } from './calculations';
 import { calculateCycleStatus, calculateMissingAmount, calculateRemainingAmount, createCycleIfMissing, type FlowCycle, type FlowPeriodType } from './cycles';
 
-export const DEFAULT_FLOW_FUNDS = [
-  ['Semanal', 'weekly', 'weekly'], ['Mensual', 'monthly', 'monthly'], ['Bimestral', 'bimonthly', 'bimonthly'],
-  ['Semestral', 'semiannual', 'semiannual'], ['Anual', 'annual', 'annual'], ['Gastos varios', 'miscellaneous', 'none'], ['Patrimonio', 'wealth', 'none']
-] as const;
+export { DEFAULT_FLOW_FUNDS } from './defaults';
+import { DEFAULT_FLOW_FUNDS } from './defaults';
 
 export const flowAllocationCreateSchema = z.object({
   accountId: z.string().uuid('La cuenta no es válida.'),
@@ -21,7 +19,7 @@ export const flowCycleUpdateSchema = z.object({ cycleId: z.string().uuid('El cic
 type Client = typeof supabaseAdmin;
 
 export async function ensureDefaultFlowFunds(householdId: string, client: Client = supabaseAdmin) {
-  const rows = DEFAULT_FLOW_FUNDS.map(([name, code, periodType], index) => ({ household_id: householdId, name, code, period_type: periodType, priority: index + 1, is_active: true }));
+  const rows = DEFAULT_FLOW_FUNDS.map(([name, code, periodType, targetType], index) => ({ household_id: householdId, name, code, period_type: periodType, target_type: targetType, manual_target_amount: targetType === 'manual' ? 0 : null, priority: index + 1, is_active: true }));
   const { error } = await client.from('flow_funds').upsert(rows, { onConflict: 'household_id,code', ignoreDuplicates: true });
   if (error) throw new Error(`No fue posible preparar los fondos: ${error.message}`);
 }
