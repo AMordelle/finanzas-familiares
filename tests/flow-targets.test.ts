@@ -19,3 +19,15 @@ describe('flow targets', () => {
     expect(convertPlannedAmount(1200, 'monthly', 'annual')).toBe(14400);
   });
 });
+
+import { DEFAULT_FLOW_FUNDS } from '@/lib/flows/defaults';
+
+describe('default flow configuration', () => {
+  it('sets variable spending and wealth as manual flows with their intended periods', () => {
+    expect(DEFAULT_FLOW_FUNDS).toEqual(expect.arrayContaining([
+      ['Gastos Variables', 'miscellaneous', 'weekly', 'manual'],
+      ['Patrimonio', 'wealth', 'monthly', 'manual']
+    ]));
+  });
+
+});

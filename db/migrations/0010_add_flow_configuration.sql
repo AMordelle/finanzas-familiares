@@ -14,3 +14,27 @@ ALTER TABLE financial_subcategories
 
 CREATE INDEX IF NOT EXISTS financial_subcategories_flow_fund_idx
   ON financial_subcategories(flow_fund_id);
+
+
+-- Align the built-in flows that may have been created before this configuration existed.
+UPDATE flow_funds
+SET name = 'Semanal', period_type = 'weekly', target_type = 'calculated', manual_target_amount = NULL
+WHERE code = 'weekly';
+UPDATE flow_funds
+SET name = 'Mensual', period_type = 'monthly', target_type = 'calculated', manual_target_amount = NULL
+WHERE code = 'monthly';
+UPDATE flow_funds
+SET name = 'Bimestral', period_type = 'bimonthly', target_type = 'calculated', manual_target_amount = NULL
+WHERE code = 'bimonthly';
+UPDATE flow_funds
+SET name = 'Semestral', period_type = 'semiannual', target_type = 'calculated', manual_target_amount = NULL
+WHERE code = 'semiannual';
+UPDATE flow_funds
+SET name = 'Anual', period_type = 'annual', target_type = 'calculated', manual_target_amount = NULL
+WHERE code = 'annual';
+UPDATE flow_funds
+SET name = 'Gastos Variables', period_type = 'weekly', target_type = 'manual', manual_target_amount = COALESCE(manual_target_amount, 0)
+WHERE code = 'miscellaneous';
+UPDATE flow_funds
+SET name = 'Patrimonio', period_type = 'monthly', target_type = 'manual', manual_target_amount = COALESCE(manual_target_amount, 0)
+WHERE code = 'wealth';

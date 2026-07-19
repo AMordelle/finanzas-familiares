@@ -3687,8 +3687,8 @@ const flowBaseSchema = z.object({
   manualTargetAmount: z.coerce.number().finite().min(0).nullable().optional(),
   householdId: z.string().min(1).optional()
 });
-export const flowCreateSchema = flowBaseSchema.superRefine((value, ctx) => { if (value.targetType === 'manual' && value.manualTargetAmount == null) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Captura el objetivo manual.' }); });
-export const flowUpdateSchema = flowBaseSchema.extend({ flowId: z.string().uuid(), isActive: z.boolean().optional() }).superRefine((value, ctx) => { if (value.targetType === 'manual' && value.manualTargetAmount == null) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Captura el objetivo manual.' }); });
+export const flowCreateSchema = flowBaseSchema;
+export const flowUpdateSchema = flowBaseSchema.extend({ flowId: z.string().uuid(), isActive: z.boolean().optional() });
 export const flowDeleteSchema = z.object({ flowId: z.string().uuid() });
 
 export const projectionColumnCreateSchema = z.object({
