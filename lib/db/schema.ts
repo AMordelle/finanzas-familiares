@@ -53,6 +53,8 @@ export const flowFunds = pgTable('flow_funds', {
   name: text('name').notNull(),
   code: text('code').notNull(),
   periodType: text('period_type').notNull(),
+  targetType: text('target_type').notNull().default('calculated'),
+  manualTargetAmount: numeric('manual_target_amount', { precision: 14, scale: 2 }),
   priority: integer('priority').notNull(),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -159,6 +161,9 @@ export const financialSubcategories = pgTable('financial_subcategories', {
   financialCategoryId: uuid('financial_category_id').references(() => financialCategories.id).notNull(),
   name: text('name').notNull(),
   key: text('key').notNull(),
+  plannedAmount: numeric('planned_amount', { precision: 14, scale: 2 }),
+  plannedPeriodType: text('planned_period_type'),
+  flowFundId: uuid('flow_fund_id').references(() => flowFunds.id, { onDelete: 'restrict' }),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull()

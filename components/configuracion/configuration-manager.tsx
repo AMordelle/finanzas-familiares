@@ -20,6 +20,9 @@ import {
   toggleFinancialSubcategoryAction,
   toggleProjectionColumnAction,
   updateFinancialCategoryAction,
+  createConfiguredFlowAction,
+  updateConfiguredFlowAction,
+  deleteConfiguredFlowAction,
   updateFinancialSubcategoryAction,
   updateProjectionColumnAction
 } from '@/app/configuracion/actions';
@@ -27,6 +30,9 @@ import {
 type Props = { data: ConfigurationData };
 type CategoryType = 'income' | 'expense' | 'both';
 type ColumnType = 'income' | 'expense';
+type FlowPeriodType = 'weekly' | 'monthly' | 'bimonthly' | 'semiannual' | 'annual';
+type FlowTargetType = 'calculated' | 'manual';
+const flowPeriodLabels: Record<FlowPeriodType, string> = { weekly: 'Semanal', monthly: 'Mensual', bimonthly: 'Bimestral', semiannual: 'Semestral', annual: 'Anual' };
 
 const categoryTypeLabels: Record<CategoryType, string> = { income: 'Ingreso', expense: 'Gasto', both: 'Ambos' };
 const columnTypeLabels: Record<ColumnType, string> = { income: 'Ingreso', expense: 'Gasto' };
@@ -41,6 +47,11 @@ export function ConfigurationManager({ data }: Props) {
   const [categoryName, setCategoryName] = useState('');
   const [categoryType, setCategoryType] = useState<CategoryType>('expense');
   const [categoryNoProjectable, setCategoryNoProjectable] = useState(false);
+  const [flowName, setFlowName] = useState('');
+  const [flowPeriodType, setFlowPeriodType] = useState<FlowPeriodType>('monthly');
+  const [flowTargetType, setFlowTargetType] = useState<FlowTargetType>('calculated');
+  const [flowManualTarget, setFlowManualTarget] = useState('');
+  const [editingFlowId, setEditingFlowId] = useState<string | null>(null);
   const [columnName, setColumnName] = useState('');
   const [columnType, setColumnType] = useState<ColumnType>('expense');
   const [columnDescription, setColumnDescription] = useState('');
@@ -54,7 +65,8 @@ export function ConfigurationManager({ data }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
-  const hasConfiguration = data.categories.length > 0 || data.projectionColumns.length > 0;
+  const configFlows = data.flows ?? [];
+  const hasConfiguration = data.categories.length > 0 || data.projectionColumns.length > 0 || configFlows.length > 0;
   const activeCategories = useMemo(() => data.categories.filter((category) => category.isActive), [data.categories]);
   const projectableAssignmentCategories = useMemo(() => activeCategories.filter((category) => !category.noProjectable), [activeCategories]);
 
@@ -84,7 +96,22 @@ export function ConfigurationManager({ data }: Props) {
 
       <Card>
         <details open>
-          <summary className="cursor-pointer text-base font-semibold">1. Categorías y subcategorías</summary>
+          <summary className="cursor-pointer text-base font-semibold">1. Flujos</summary>
+          <p className="mt-2 text-sm text-slate-600">Los objetivos calculados se obtienen siempre de los conceptos planificados; no se guarda ningún total.</p>
+          <form className="mt-4 grid gap-2 md:grid-cols-4" onSubmit={(event) => { event.preventDefault(); run(async () => { const result = await createConfiguredFlowAction({ name: flowName, periodType: flowPeriodType, targetType: flowTargetType, manualTargetAmount: flowTargetType === 'manual' ? Number(flowManualTarget) : null }); setFlowName(''); setFlowManualTarget(''); return result; }); }}>
+            <input className="rounded-md border p-2 text-sm" placeholder="Nombre del flujo" value={flowName} onChange={(event) => setFlowName(event.target.value)} />
+            <select className="rounded-md border bg-white p-2 text-sm" value={flowPeriodType} onChange={(event) => setFlowPeriodType(event.target.value as FlowPeriodType)}>{Object.entries(flowPeriodLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+            <select className="rounded-md border bg-white p-2 text-sm" value={flowTargetType} onChange={(event) => setFlowTargetType(event.target.value as FlowTargetType)}><option value="calculated">Objetivo calculado</option><option value="manual">Objetivo manual</option></select>
+            {flowTargetType === 'manual' && <input className="rounded-md border p-2 text-sm" type="number" min="0" step="0.01" placeholder="Importe objetivo" value={flowManualTarget} onChange={(event) => setFlowManualTarget(event.target.value)} />}
+            <Button disabled={isPending || !flowName.trim() || (flowTargetType === 'manual' && !flowManualTarget)}>Crear flujo</Button>
+          </form>
+          <div className="mt-4 space-y-2">{configFlows.map((flow) => <FlowRow key={flow.id} flow={flow} isEditing={editingFlowId === flow.id} isPending={isPending} onToggleEdit={() => setEditingFlowId((current) => current === flow.id ? null : flow.id)} run={run} />)}</div>
+        </details>
+      </Card>
+
+      <Card>
+        <details open>
+          <summary className="cursor-pointer text-base font-semibold">2. Categorías y subcategorías</summary>
           <form
             className="mt-4 grid gap-2 md:grid-cols-[1fr_160px_auto]"
             onSubmit={(event) => {
@@ -115,6 +142,7 @@ export function ConfigurationManager({ data }: Props) {
               <CategoryCard
                 key={category.id}
                 category={category}
+                flows={configFlows}
                 isPending={isPending}
                 isEditing={editingCategoryId === category.id}
                 editingSubcategoryId={editingSubcategoryId}
@@ -131,7 +159,7 @@ export function ConfigurationManager({ data }: Props) {
 
       <Card>
         <details open>
-          <summary className="cursor-pointer text-base font-semibold">2. Columnas de Proyección</summary>
+          <summary className="cursor-pointer text-base font-semibold">3. Columnas de Proyección</summary>
           <form
             className="mt-4 grid gap-2 md:grid-cols-[1fr_130px_100px]"
             onSubmit={(event) => {
@@ -175,8 +203,14 @@ export function ConfigurationManager({ data }: Props) {
   );
 }
 
-function CategoryCard({ category, isPending, isEditing, editingSubcategoryId, subcategoryDraft, onToggleEdit, onToggleSubcategoryEdit, onSubcategoryDraftChange, run }: {
+function FlowRow({ flow, isEditing, isPending, onToggleEdit, run }: { flow: ConfigurationData['flows'][number]; isEditing: boolean; isPending: boolean; onToggleEdit: () => void; run: (action: () => Promise<{ message?: string } | unknown>) => void }) {
+  const [name, setName] = useState(flow.name); const [periodType, setPeriodType] = useState<FlowPeriodType>(flow.periodType); const [targetType, setTargetType] = useState<FlowTargetType>(flow.targetType); const [manualTarget, setManualTarget] = useState(flow.manualTargetAmount == null ? '' : String(flow.manualTargetAmount));
+  return <details className="rounded-xl border border-slate-200 p-3" open={isEditing}><summary className="cursor-pointer font-medium">{flow.name} <span className="text-xs text-slate-500">· {flowPeriodLabels[flow.periodType]} · {flow.targetType === 'calculated' ? 'Calculado' : 'Manual'} · Objetivo: {formatCurrencyMXN(flow.targetAmount)}</span></summary><div className="mt-3"><Button type="button" variant="outline" onClick={onToggleEdit} disabled={isPending}>Editar</Button>{isEditing && <form className="mt-2 grid gap-2 md:grid-cols-4" onSubmit={(event) => { event.preventDefault(); run(() => updateConfiguredFlowAction({ flowId: flow.id, name, periodType, targetType, manualTargetAmount: targetType === 'manual' ? Number(manualTarget) : null, isActive: flow.isActive })); }}><input className="rounded-md border p-2" value={name} onChange={(event) => setName(event.target.value)} /><select className="rounded-md border p-2" value={periodType} onChange={(event) => setPeriodType(event.target.value as FlowPeriodType)}>{Object.entries(flowPeriodLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select className="rounded-md border p-2" value={targetType} onChange={(event) => setTargetType(event.target.value as FlowTargetType)}><option value="calculated">Calculado</option><option value="manual">Manual</option></select>{targetType === 'manual' && <input className="rounded-md border p-2" type="number" min="0" step="0.01" value={manualTarget} onChange={(event) => setManualTarget(event.target.value)} />}<Button disabled={isPending}>Guardar</Button><Button type="button" variant="outline" disabled={isPending || !flow.canDelete} onClick={() => { if (window.confirm('¿Eliminar este flujo?')) run(() => deleteConfiguredFlowAction({ flowId: flow.id })); }}>Eliminar</Button>{flow.deleteBlockedReason && <p className="text-xs text-amber-700 md:col-span-4">{flow.deleteBlockedReason}</p>}</form>}</div></details>;
+}
+
+function CategoryCard({ category, flows, isPending, isEditing, editingSubcategoryId, subcategoryDraft, onToggleEdit, onToggleSubcategoryEdit, onSubcategoryDraftChange, run }: {
   category: FinancialCategory;
+  flows: ConfigurationData['flows'];
   isPending: boolean;
   isEditing: boolean;
   editingSubcategoryId: string | null;
@@ -217,19 +251,22 @@ function CategoryCard({ category, isPending, isEditing, editingSubcategoryId, su
         )}
         <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); run(async () => { const result = await createFinancialSubcategoryAction({ financialCategoryId: category.id, name: subcategoryDraft }); onSubcategoryDraftChange(''); return result; }); }}><input className="min-w-0 flex-1 rounded-md border p-2 text-sm" placeholder="Nueva subcategoría" value={subcategoryDraft} onChange={(event) => onSubcategoryDraftChange(event.target.value)} /><Button disabled={isPending || !subcategoryDraft.trim()}>Agregar</Button></form>
         <div className="grid gap-2 md:grid-cols-2">
-          {category.subcategories.map((subcategory) => <SubcategoryRow key={subcategory.id} subcategory={subcategory} isEditing={editingSubcategoryId === subcategory.id} isPending={isPending} onToggleEdit={() => onToggleSubcategoryEdit(editingSubcategoryId === subcategory.id ? null : subcategory.id)} run={run} />)}
+          {category.subcategories.map((subcategory) => <SubcategoryRow key={subcategory.id} subcategory={subcategory} flows={flows} isEditing={editingSubcategoryId === subcategory.id} isPending={isPending} onToggleEdit={() => onToggleSubcategoryEdit(editingSubcategoryId === subcategory.id ? null : subcategory.id)} run={run} />)}
         </div>
       </div>
     </details>
   );
 }
 
-function SubcategoryRow({ subcategory, isEditing, isPending, onToggleEdit, run }: { subcategory: FinancialCategory['subcategories'][number]; isEditing: boolean; isPending: boolean; onToggleEdit: () => void; run: (action: () => Promise<{ message?: string } | unknown>) => void }) {
+function SubcategoryRow({ subcategory, flows, isEditing, isPending, onToggleEdit, run }: { subcategory: FinancialCategory['subcategories'][number]; flows: ConfigurationData['flows']; isEditing: boolean; isPending: boolean; onToggleEdit: () => void; run: (action: () => Promise<{ message?: string } | unknown>) => void }) {
   const [name, setName] = useState(subcategory.name);
+  const [plannedAmount, setPlannedAmount] = useState(subcategory.plannedAmount == null ? '' : String(subcategory.plannedAmount));
+  const [plannedPeriodType, setPlannedPeriodType] = useState<FlowPeriodType>(subcategory.plannedPeriodType ?? 'monthly');
+  const [flowFundId, setFlowFundId] = useState(subcategory.flowFundId ?? '');
   return (
     <div className="rounded-lg bg-slate-50 p-2 text-sm">
       <div className="flex items-center justify-between gap-2">
-        <span>{subcategory.name} <span className="text-xs text-slate-500">· {subcategory.key} · {subcategory.isActive ? 'Activa' : 'Inactiva'}</span></span>
+        <span>{subcategory.name} <span className="text-xs text-slate-500">· {subcategory.key} · {subcategory.isActive ? 'Activa' : 'Inactiva'}{subcategory.flowFundId ? ` · Plan: ${formatCurrencyMXN(subcategory.plannedAmount ?? 0)}` : ''}</span></span>
         <div className="flex gap-1">
           <Button type="button" variant="outline" className="h-7 px-2 text-xs" onClick={onToggleEdit} disabled={isPending}>Editar</Button>
           <Button type="button" variant="outline" className="h-7 px-2 text-xs" onClick={() => run(() => toggleFinancialSubcategoryAction({ subcategoryId: subcategory.id, isActive: !subcategory.isActive }))} disabled={isPending}>{subcategory.isActive ? 'Desactivar' : 'Activar'}</Button>
@@ -237,9 +274,10 @@ function SubcategoryRow({ subcategory, isEditing, isPending, onToggleEdit, run }
       </div>
       {isEditing && (
         <div className="mt-2 space-y-2">
-          <form className="flex gap-2" onSubmit={(event) => { event.preventDefault(); run(() => updateFinancialSubcategoryAction({ subcategoryId: subcategory.id, financialCategoryId: subcategory.financialCategoryId, name, isActive: subcategory.isActive })); }}>
+          <form className="grid gap-2" onSubmit={(event) => { event.preventDefault(); run(() => updateFinancialSubcategoryAction({ subcategoryId: subcategory.id, financialCategoryId: subcategory.financialCategoryId, name, isActive: subcategory.isActive, plannedAmount: flowFundId ? Number(plannedAmount || 0) : null, plannedPeriodType: flowFundId ? plannedPeriodType : null, flowFundId: flowFundId || null })); }}>
             <input className="min-w-0 flex-1 rounded-md border p-2" value={name} onChange={(event) => setName(event.target.value)} />
             <Button disabled={isPending}>Guardar</Button>
+            <div className="grid gap-2 md:grid-cols-3"><select className="rounded-md border p-2" value={flowFundId} onChange={(event) => setFlowFundId(event.target.value)}><option value="">Sin flujo (sin plan)</option>{flows.filter((flow) => flow.isActive).map((flow) => <option key={flow.id} value={flow.id}>{flow.name}</option>)}</select><input className="rounded-md border p-2" type="number" min="0" step="0.01" placeholder="Importe planificado" value={plannedAmount} onChange={(event) => setPlannedAmount(event.target.value)} disabled={!flowFundId} /><select className="rounded-md border p-2" value={plannedPeriodType} onChange={(event) => setPlannedPeriodType(event.target.value as FlowPeriodType)} disabled={!flowFundId}>{Object.entries(flowPeriodLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
           </form>
           <div>
             <Button type="button" variant="outline" className="h-8 px-2 text-xs" disabled={isPending || !subcategory.canDelete} onClick={() => { if (window.confirm('¿Eliminar esta subcategoría?')) run(() => deleteFinancialSubcategoryAction({ subcategoryId: subcategory.id })); }}>Eliminar subcategoría</Button>
