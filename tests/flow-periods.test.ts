@@ -76,3 +76,14 @@ describe('integración de carga lazy de periodos', () => {
     expect(buildFlowCardState({ id: 'broken', name: 'Inválido', code: 'broken', periodType: 'none', priority: 1, isActive: true }, [], 0).status).toBe('sin_inicializar');
   });
 });
+
+describe('inicio efectivo del seguimiento', () => {
+  it('no crea la semana anterior cuando el seguimiento empieza un lunes', () => {
+    const periods = buildMissingFlowPeriods({ ...base, periodType: 'weekly', createdAt: '2026-07-20T00:00:00Z', now: new Date('2026-07-20T12:00:00Z'), existing: [] });
+    expect(periods).toMatchObject([{ periodStart: '2026-07-20', periodEnd: '2026-07-26' }]);
+  });
+  it('no crea julio para un flujo mensual que inicia en agosto', () => {
+    const periods = buildMissingFlowPeriods({ ...base, createdAt: '2026-08-01T00:00:00Z', now: new Date('2026-08-10T00:00:00Z'), existing: [] });
+    expect(periods).toMatchObject([{ periodStart: '2026-08-01', periodEnd: '2026-08-31' }]);
+  });
+});

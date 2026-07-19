@@ -41,7 +41,7 @@ const validPeriodTypes = new Set<FlowPeriodType>(['weekly', 'monthly', 'bimonthl
 const isDevelopment = process.env.NODE_ENV === 'development';
 const flowDebug = (event: string, details: Record<string, unknown>) => { if (isDevelopment) console.info(`[flows] ${event}`, details); };
 
-export async function ensureFlowPeriods(householdId: string, funds: Array<{ id: string; name?: string; period_type: string; created_at: string; target_type: string; manual_target_amount: string | number | null }>, concepts: Array<{ flow_fund_id: string | null; planned_amount: string | number | null; planned_period_type: string | null; is_active: boolean }>, client: Client = supabaseAdmin, now = new Date()) {
+export async function ensureFlowPeriods(householdId: string, funds: Array<{ id: string; name?: string; period_type: string; created_at: string; tracking_start_date?: string | null; target_type: string; manual_target_amount: string | number | null }>, concepts: Array<{ flow_fund_id: string | null; planned_amount: string | number | null; planned_period_type: string | null; is_active: boolean }>, client: Client = supabaseAdmin, now = new Date()) {
   const { data, error } = await client.from('flow_periods').select('id,household_id,fund_id,period_start,period_end,period_label,target_amount').eq('household_id', householdId).order('period_start');
   if (error) { flowDebug('flow_periods.select.failed', { householdId, error }); throw new Error(`No fue posible consultar los periodos: ${error.message}`); }
   const existing: FlowPeriod[] = (data ?? []).map((row) => ({ id: row.id, householdId: row.household_id, fundId: row.fund_id, periodStart: row.period_start, periodEnd: row.period_end, periodLabel: row.period_label, targetAmount: Number(row.target_amount) }));
@@ -49,7 +49,7 @@ export async function ensureFlowPeriods(householdId: string, funds: Array<{ id: 
   const missing = funds.flatMap((fund) => {
     if (!validPeriodTypes.has(fund.period_type as FlowPeriodType) || !fund.created_at) { flowDebug('flow_periods.skipped_invalid_flow', { householdId, flowId: fund.id, name: fund.name, periodType: fund.period_type, createdAt: fund.created_at }); return []; }
     const targetAmount = calculateFlowTarget({ id: fund.id, periodType: fund.period_type as TargetPeriodType, targetType: fund.target_type as 'calculated' | 'manual', manualTargetAmount: fund.manual_target_amount === null ? null : Number(fund.manual_target_amount) }, normalizedConcepts);
-    const generated = buildMissingFlowPeriods({ existing, householdId, fundId: fund.id, periodType: fund.period_type as FlowPeriodType, createdAt: fund.created_at, targetAmount, now });
+    const generated = buildMissingFlowPeriods({ existing, householdId, fundId: fund.id, periodType: fund.period_type as FlowPeriodType, createdAt: fund.tracking_start_date ?? fund.created_at, targetAmount, now });
     flowDebug('flow_periods.prepared', { householdId, flowId: fund.id, name: fund.name, periodType: fund.period_type, objectiveType: fund.target_type, targetAmount, missingStart: generated[0]?.periodStart, missingEnd: generated.at(-1)?.periodEnd, insertCount: generated.length });
     return generated;
   });
@@ -72,7 +72,7 @@ export async function getFlowsData(client: Client = supabaseAdmin) {
   await ensureDefaultFlowFunds(householdId, client);
   const [accountsResult, fundsResult, allocationsResult, conceptsResult] = await Promise.all([
     client.from('accounts').select('id,name,type,balance,is_active,household_id').eq('household_id', householdId).eq('is_active', true).in('type', ['operativa', 'operational_cash']).order('display_order'),
-    client.from('flow_funds').select('id,name,code,period_type,target_type,manual_target_amount,priority,is_active,household_id,created_at').eq('household_id', householdId).order('priority'),
+    client.from('flow_funds').select('id,name,code,period_type,target_type,manual_target_amount,priority,is_active,household_id,created_at,tracking_start_date').eq('household_id', householdId).order('priority'),
     client.from('flow_allocations').select('id,household_id,fund_id,cycle_id,account_id,amount,notes,created_at').eq('household_id', householdId).order('created_at', { ascending: false }),
     client.from('financial_subcategories').select('flow_fund_id,planned_amount,planned_period_type,is_active').eq('household_id', householdId)
   ]);

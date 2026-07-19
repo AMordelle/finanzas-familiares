@@ -28,6 +28,7 @@ function revalidateConfigurationPaths() {
   revalidatePath('/registro');
   revalidatePath('/dashboard');
   revalidatePath('/proyeccion');
+  revalidatePath('/flujos');
 }
 
 function revalidateAuditPaths() {

@@ -3491,7 +3491,7 @@ export type ProjectionColumn = {
 };
 
 export type ConfiguredFlow = {
-  id: string; householdId: string; name: string; code: string; periodType: FlowPeriodType | null; requiresPeriodConfiguration: boolean; targetType: FlowTargetType; manualTargetAmount: number | null; isActive: boolean; canDelete: boolean; deleteBlockedReason: string | null; targetAmount: number;
+  id: string; householdId: string; name: string; code: string; periodType: FlowPeriodType | null; requiresPeriodConfiguration: boolean; targetType: FlowTargetType; manualTargetAmount: number | null; isActive: boolean; trackingStartDate: string; canDelete: boolean; deleteBlockedReason: string | null; targetAmount: number;
 };
 
 export type ConfigurationData = {
@@ -3686,6 +3686,7 @@ const flowBaseSchema = z.object({
   periodType: z.enum(FLOW_PERIOD_TYPES, { errorMap: () => ({ message: 'Selecciona una periodicidad válida antes de guardar el flujo.' }) }),
   targetType: z.enum(['calculated', 'manual']),
   manualTargetAmount: z.coerce.number().finite().min(0).nullable().optional(),
+  trackingStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Selecciona una fecha válida para iniciar el seguimiento.').optional(),
   householdId: z.string().min(1).optional()
 });
 export const flowCreateSchema = flowBaseSchema;
@@ -4153,7 +4154,7 @@ export async function getConfigurationData(client: SupabaseClientLike = supabase
     client.from('financial_subcategories').select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,flow_fund_id,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
     client.from('projection_columns').select('id,household_id,name,key,type,description,display_order,is_active,created_at,updated_at').eq('household_id', householdId).order('display_order', { ascending: true }),
     client.from('projection_column_categories').select('projection_column_id,financial_category_id').eq('household_id', householdId),
-    client.from('flow_funds').select('id,household_id,name,code,period_type,target_type,manual_target_amount,is_active,priority').eq('household_id', householdId).order('priority')
+    client.from('flow_funds').select('id,household_id,name,code,period_type,target_type,manual_target_amount,is_active,priority,tracking_start_date').eq('household_id', householdId).order('priority')
   ]);
 
   for (const result of [categoriesResult, subcategoriesResult, columnsResult, assignmentsResult, flowsResult]) {
@@ -4181,7 +4182,7 @@ export async function getConfigurationData(client: SupabaseClientLike = supabase
 
   const concepts = deletableConfiguration.categories.flatMap((category) => category.subcategories);
   const flowReferences = new Set(concepts.map((concept) => concept.flowFundId).filter(Boolean));
-  const flows = ((flowsResult.data ?? []) as Array<{ id: string; household_id: string; name: string; code: string; period_type: string | null; target_type: FlowTargetType; manual_target_amount: string | number | null; is_active: boolean }>).map((flow) => { const periodType = normalizeFlowPeriodType(flow.period_type, flow.code); const manualTargetAmount = flow.manual_target_amount == null ? null : Number(flow.manual_target_amount); return { id: flow.id, householdId: flow.household_id, name: flow.name, code: flow.code, periodType, requiresPeriodConfiguration: !periodType, targetType: flow.target_type, manualTargetAmount, isActive: flow.is_active, canDelete: !flowReferences.has(flow.id), deleteBlockedReason: flowReferences.has(flow.id) ? 'No se puede eliminar este flujo porque tiene conceptos asociados. Reasígnalos o elimínalos primero.' : null, targetAmount: periodType ? calculateFlowTarget({ id: flow.id, periodType, targetType: flow.target_type, manualTargetAmount }, concepts.map((concept) => ({ flowFundId: concept.flowFundId ?? null, plannedAmount: concept.plannedAmount ?? null, plannedPeriodType: concept.plannedPeriodType ?? null, isActive: concept.isActive }))) : 0 }; });
+  const flows = ((flowsResult.data ?? []) as Array<{ id: string; household_id: string; name: string; code: string; period_type: string | null; target_type: FlowTargetType; manual_target_amount: string | number | null; is_active: boolean; tracking_start_date: string }>).map((flow) => { const periodType = normalizeFlowPeriodType(flow.period_type, flow.code); const manualTargetAmount = flow.manual_target_amount == null ? null : Number(flow.manual_target_amount); return { id: flow.id, householdId: flow.household_id, name: flow.name, code: flow.code, periodType, requiresPeriodConfiguration: !periodType, targetType: flow.target_type, manualTargetAmount, trackingStartDate: flow.tracking_start_date, isActive: flow.is_active, canDelete: !flowReferences.has(flow.id), deleteBlockedReason: flowReferences.has(flow.id) ? 'No se puede eliminar este flujo porque tiene conceptos asociados. Reasígnalos o elimínalos primero.' : null, targetAmount: periodType ? calculateFlowTarget({ id: flow.id, periodType, targetType: flow.target_type, manualTargetAmount }, concepts.map((concept) => ({ flowFundId: concept.flowFundId ?? null, plannedAmount: concept.plannedAmount ?? null, plannedPeriodType: concept.plannedPeriodType ?? null, isActive: concept.isActive }))) : 0 }; });
   return { hasHousehold: true, householdId, categories: deletableConfiguration.categories, projectionColumns: deletableConfiguration.projectionColumns, flows, categoryAudit };
 }
 
@@ -4793,12 +4794,13 @@ export async function buildWeeklyProjectionSummary(client: SupabaseClientLike = 
 export async function createConfiguredFlow(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
   const input = flowCreateSchema.parse(rawInput); const householdId = await resolveInputHouseholdId(input.householdId, client);
   const { data: maxPriority } = await client.from('flow_funds').select('priority').eq('household_id', householdId).order('priority', { ascending: false }).limit(1);
-  const { data, error } = await client.from('flow_funds').insert({ household_id: householdId, name: input.name.trim(), code: normalizeAndValidateRequiredKey(input.name, 'El flujo'), period_type: input.periodType, target_type: input.targetType, manual_target_amount: input.targetType === 'manual' ? input.manualTargetAmount : null, priority: Number(maxPriority?.[0]?.priority ?? 0) + 1, is_active: true }).select('id').single();
+  const { data, error } = await client.from('flow_funds').insert({ household_id: householdId, name: input.name.trim(), code: normalizeAndValidateRequiredKey(input.name, 'El flujo'), period_type: input.periodType, target_type: input.targetType, manual_target_amount: input.targetType === 'manual' ? input.manualTargetAmount : null, priority: Number(maxPriority?.[0]?.priority ?? 0) + 1, is_active: true, tracking_start_date: input.trackingStartDate ?? new Date().toISOString().slice(0, 10) }).select('id').single();
   if (error || !data) throw new Error(error?.message ?? 'No fue posible crear el flujo.'); return data;
 }
 export async function updateConfiguredFlow(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
   const input = flowUpdateSchema.parse(rawInput); const householdId = await resolveInputHouseholdId(input.householdId, client);
-  const { error } = await client.from('flow_funds').update({ name: input.name.trim(), period_type: input.periodType, target_type: input.targetType, manual_target_amount: input.targetType === 'manual' ? input.manualTargetAmount : null, is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.flowId).eq('household_id', householdId);
+  if (input.trackingStartDate) { const { data: history, error: historyError } = await client.from('flow_periods').select('id').eq('household_id', householdId).eq('fund_id', input.flowId).limit(1); if (historyError) throw new Error(`No fue posible validar el historial del flujo: ${historyError.message}`); if (history?.length) { const { data: current } = await client.from('flow_funds').select('tracking_start_date').eq('id', input.flowId).eq('household_id', householdId).single(); if (current?.tracking_start_date !== input.trackingStartDate) throw new Error('No puedes cambiar el inicio del seguimiento porque este flujo ya tiene historial.'); } }
+  const { error } = await client.from('flow_funds').update({ name: input.name.trim(), period_type: input.periodType, target_type: input.targetType, manual_target_amount: input.targetType === 'manual' ? input.manualTargetAmount : null, ...(input.trackingStartDate ? { tracking_start_date: input.trackingStartDate } : {}), is_active: input.isActive, updated_at: new Date().toISOString() }).eq('id', input.flowId).eq('household_id', householdId);
   if (error) throw new Error(`No fue posible editar el flujo: ${error.message}`);
 }
 export async function deleteConfiguredFlow(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {

@@ -57,6 +57,7 @@ export const flowFunds = pgTable('flow_funds', {
   manualTargetAmount: numeric('manual_target_amount', { precision: 14, scale: 2 }),
   priority: integer('priority').notNull(),
   isActive: boolean('is_active').notNull().default(true),
+  trackingStartDate: date('tracking_start_date').notNull().default(sql`CURRENT_DATE`),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull()
 }, (table) => ({
