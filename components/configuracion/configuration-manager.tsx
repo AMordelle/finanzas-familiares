@@ -52,6 +52,7 @@ export function ConfigurationManager({ data }: Props) {
   const [flowPeriodType, setFlowPeriodType] = useState<FlowPeriodType>('monthly');
   const [flowTargetType, setFlowTargetType] = useState<FlowTargetType>('calculated');
   const [flowManualTarget, setFlowManualTarget] = useState('');
+  const [flowTrackingStartDate, setFlowTrackingStartDate] = useState(new Date().toISOString().slice(0, 10));
   const [editingFlowId, setEditingFlowId] = useState<string | null>(null);
   const [columnName, setColumnName] = useState('');
   const [columnType, setColumnType] = useState<ColumnType>('expense');
@@ -99,11 +100,11 @@ export function ConfigurationManager({ data }: Props) {
         <details open>
           <summary className="cursor-pointer text-base font-semibold">1. Flujos</summary>
           <p className="mt-2 text-sm text-slate-600">Los objetivos calculados se obtienen siempre de los conceptos planificados; no se guarda ningún total.</p>
-          <form className="mt-4 grid gap-2 md:grid-cols-4" onSubmit={(event) => { event.preventDefault(); run(async () => { const result = await createConfiguredFlowAction(buildFlowFormPayload({ name: flowName, periodType: flowPeriodType, targetType: flowTargetType, manualTargetAmount: flowManualTarget })); setFlowName(''); setFlowManualTarget(''); return result; }); }}>
+          <form className="mt-4 grid gap-2 md:grid-cols-4" onSubmit={(event) => { event.preventDefault(); run(async () => { const result = await createConfiguredFlowAction(buildFlowFormPayload({ name: flowName, periodType: flowPeriodType, targetType: flowTargetType, manualTargetAmount: flowManualTarget, trackingStartDate: flowTrackingStartDate })); setFlowName(''); setFlowManualTarget(''); return result; }); }}>
             <input className="rounded-md border p-2 text-sm" placeholder="Nombre del flujo" value={flowName} onChange={(event) => setFlowName(event.target.value)} />
             <select className="rounded-md border bg-white p-2 text-sm" value={flowPeriodType} onChange={(event) => setFlowPeriodType(event.target.value as FlowPeriodType)}>{Object.entries(flowPeriodLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
             <select className="rounded-md border bg-white p-2 text-sm" value={flowTargetType} onChange={(event) => setFlowTargetType(event.target.value as FlowTargetType)}><option value="calculated">Objetivo calculado</option><option value="manual">Objetivo manual</option></select>
-            {flowTargetType === 'manual' && <input className="rounded-md border p-2 text-sm" type="number" min="0" step="0.01" placeholder="Importe objetivo" value={flowManualTarget} onChange={(event) => setFlowManualTarget(event.target.value)} />}
+            <label className="text-sm">Iniciar seguimiento desde<input required type="date" className="mt-1 w-full rounded-md border p-2" value={flowTrackingStartDate} onChange={(event) => setFlowTrackingStartDate(event.target.value)} /></label>{flowTargetType === 'manual' && <input className="rounded-md border p-2 text-sm" type="number" min="0" step="0.01" placeholder="Importe objetivo" value={flowManualTarget} onChange={(event) => setFlowManualTarget(event.target.value)} />}
             <Button disabled={isPending || !flowName.trim()}>Crear flujo</Button>
           </form>
           <div className="mt-4 space-y-2">{configFlows.map((flow) => <FlowRow key={flow.id} flow={flow} isEditing={editingFlowId === flow.id} isPending={isPending} onToggleEdit={() => setEditingFlowId((current) => current === flow.id ? null : flow.id)} run={run} />)}</div>
@@ -209,15 +210,17 @@ function FlowRow({ flow, isEditing, isPending, onToggleEdit, run }: { flow: Conf
   const [periodType, setPeriodType] = useState<FlowPeriodType | ''>(flow.periodType ?? '');
   const [targetType, setTargetType] = useState<FlowTargetType>(flow.targetType);
   const [manualTarget, setManualTarget] = useState(flow.manualTargetAmount == null ? '' : String(flow.manualTargetAmount));
+  const [trackingStartDate, setTrackingStartDate] = useState(flow.trackingStartDate);
   const periodLabel = flow.periodType ? flowPeriodLabels[flow.periodType] : 'Periodicidad pendiente';
   return <details className="rounded-xl border border-slate-200 p-3" open={isEditing}>
     <summary className="cursor-pointer font-medium">{flow.name} <span className="text-xs text-slate-500">· {periodLabel} · {flow.targetType === 'calculated' ? 'Calculado' : 'Manual'} · Objetivo: {formatCurrencyMXN(flow.targetAmount)}</span></summary>
-    <div className="mt-3"><Button type="button" variant="outline" onClick={onToggleEdit} disabled={isPending}>Editar</Button>{isEditing && <form className="mt-2 grid gap-2 md:grid-cols-4" onSubmit={(event) => { event.preventDefault(); run(() => updateConfiguredFlowAction(buildFlowFormPayload({ flowId: flow.id, name, periodType, targetType, manualTargetAmount: manualTarget, isActive: flow.isActive }))); }}>
+    <div className="mt-3"><Button type="button" variant="outline" onClick={onToggleEdit} disabled={isPending}>Editar</Button>{isEditing && <form className="mt-2 grid gap-2 md:grid-cols-4" onSubmit={(event) => { event.preventDefault(); run(() => updateConfiguredFlowAction(buildFlowFormPayload({ flowId: flow.id, name, periodType, targetType, manualTargetAmount: manualTarget, trackingStartDate, isActive: flow.isActive }))); }}>
       <input className="rounded-md border p-2" value={name} onChange={(event) => setName(event.target.value)} />
       <select className="rounded-md border p-2" value={periodType} onChange={(event) => setPeriodType(event.target.value as FlowPeriodType | '')} required aria-label="Periodicidad del flujo">
         <option value="" disabled>Selecciona periodicidad</option>{Object.entries(flowPeriodLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select>
       <select className="rounded-md border p-2" value={targetType} onChange={(event) => setTargetType(event.target.value as FlowTargetType)}><option value="calculated">Calculado</option><option value="manual">Manual</option></select>
+      <label className="text-sm">Iniciar seguimiento desde<input className="mt-1 w-full rounded-md border p-2" type="date" required value={trackingStartDate} onChange={(event) => setTrackingStartDate(event.target.value)} /></label>
       {targetType === 'manual' && <input className="rounded-md border p-2" type="number" min="0" step="0.01" value={manualTarget} onChange={(event) => setManualTarget(event.target.value)} />}
       <Button disabled={isPending || !periodType}>Guardar</Button><Button type="button" variant="outline" disabled={isPending || !flow.canDelete} onClick={() => { if (window.confirm('¿Eliminar este flujo?')) run(() => deleteConfiguredFlowAction({ flowId: flow.id })); }}>Eliminar</Button>
       {flow.requiresPeriodConfiguration && <p className="text-xs text-amber-700 md:col-span-4">Este flujo tenía una periodicidad inválida. Selecciona una periodicidad válida para poder guardarlo.</p>}{flow.deleteBlockedReason && <p className="text-xs text-amber-700 md:col-span-4">{flow.deleteBlockedReason}</p>}

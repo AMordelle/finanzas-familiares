@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db/supabase';
 import { getDefaultHouseholdId } from '@/lib/db/queries';
-import { getAllocatedByAccount, getAllocatedByCycle, getTotalAllocated, getTotalLiquidity, getUnallocatedMoney, type FlowAccount, type FlowAllocationAmount } from './calculations';
+import { getAllocatedByAccount, getAllocatedByCycle, getAllocatedByFund, getTotalAllocated, getTotalLiquidity, getUnallocatedMoney, type FlowAccount, type FlowAllocationAmount } from './calculations';
 import { calculateCycleStatus, calculateMissingAmount, calculateRemainingAmount, createCycleIfMissing, type FlowCycle, type FlowPeriodType } from './cycles';
+import { buildMissingFlowPeriods, calculateFlowFinancialState, type FlowPeriod } from './periods';
+import { calculateFlowTarget, type FlowPeriodType as TargetPeriodType } from './targets';
 
 export { DEFAULT_FLOW_FUNDS } from './defaults';
 import { DEFAULT_FLOW_FUNDS } from './defaults';
@@ -35,34 +37,60 @@ export async function ensureActiveFlowCycles(householdId: string, funds: Array<{
   }
 }
 
+const validPeriodTypes = new Set<FlowPeriodType>(['weekly', 'monthly', 'bimonthly', 'semiannual', 'annual']);
+const isDevelopment = process.env.NODE_ENV === 'development';
+const flowDebug = (event: string, details: Record<string, unknown>) => { if (isDevelopment) console.info(`[flows] ${event}`, details); };
+
+export async function ensureFlowPeriods(householdId: string, funds: Array<{ id: string; name?: string; period_type: string; created_at: string; tracking_start_date?: string | null; target_type: string; manual_target_amount: string | number | null }>, concepts: Array<{ flow_fund_id: string | null; planned_amount: string | number | null; planned_period_type: string | null; is_active: boolean }>, client: Client = supabaseAdmin, now = new Date()) {
+  const { data, error } = await client.from('flow_periods').select('id,household_id,fund_id,period_start,period_end,period_label,target_amount').eq('household_id', householdId).order('period_start');
+  if (error) { flowDebug('flow_periods.select.failed', { householdId, error }); throw new Error(`No fue posible consultar los periodos: ${error.message}`); }
+  const existing: FlowPeriod[] = (data ?? []).map((row) => ({ id: row.id, householdId: row.household_id, fundId: row.fund_id, periodStart: row.period_start, periodEnd: row.period_end, periodLabel: row.period_label, targetAmount: Number(row.target_amount) }));
+  const normalizedConcepts = concepts.map((concept) => ({ flowFundId: concept.flow_fund_id, plannedAmount: concept.planned_amount === null ? null : Number(concept.planned_amount), plannedPeriodType: concept.planned_period_type as TargetPeriodType | null, isActive: concept.is_active }));
+  const missing = funds.flatMap((fund) => {
+    if (!validPeriodTypes.has(fund.period_type as FlowPeriodType) || !fund.created_at) { flowDebug('flow_periods.skipped_invalid_flow', { householdId, flowId: fund.id, name: fund.name, periodType: fund.period_type, createdAt: fund.created_at }); return []; }
+    const targetAmount = calculateFlowTarget({ id: fund.id, periodType: fund.period_type as TargetPeriodType, targetType: fund.target_type as 'calculated' | 'manual', manualTargetAmount: fund.manual_target_amount === null ? null : Number(fund.manual_target_amount) }, normalizedConcepts);
+    const generated = buildMissingFlowPeriods({ existing, householdId, fundId: fund.id, periodType: fund.period_type as FlowPeriodType, createdAt: fund.tracking_start_date ?? fund.created_at, targetAmount, now });
+    flowDebug('flow_periods.prepared', { householdId, flowId: fund.id, name: fund.name, periodType: fund.period_type, objectiveType: fund.target_type, targetAmount, missingStart: generated[0]?.periodStart, missingEnd: generated.at(-1)?.periodEnd, insertCount: generated.length });
+    return generated;
+  });
+  if (!missing.length) return;
+  const { data: inserted, error: insertError } = await client.from('flow_periods').upsert(missing.map((period) => ({ household_id: period.householdId, fund_id: period.fundId, period_start: period.periodStart, period_end: period.periodEnd, period_label: period.periodLabel, target_amount: period.targetAmount })), { onConflict: 'household_id,fund_id,period_start,period_end', ignoreDuplicates: true }).select('id,fund_id,period_start');
+  flowDebug('flow_periods.inserted', { householdId, requested: missing.length, inserted: inserted?.length ?? 0, error: insertError });
+  if (insertError) throw new Error(`No fue posible crear los periodos: ${insertError.message}`);
+}
+
+export function buildFlowCardState(fund: { id: string; name: string; code: string; periodType: string; priority: number; isActive: boolean }, periods: FlowPeriod[], reserve: number) {
+  const currentPeriod = periods.at(-1) ?? null;
+  if (!currentPeriod) return { ...fund, currentPeriod: null, periodTarget: 0, pendingAccumulated: 0, currentNeed: 0, accumulatedNeed: 0, availableReserve: reserve, difference: 0, status: 'sin_inicializar' as const };
+  const state = calculateFlowFinancialState(periods, reserve);
+  return { ...fund, currentPeriod, periodTarget: currentPeriod.targetAmount, pendingAccumulated: Math.max(0, -state.difference), currentNeed: Math.max(0, -state.difference), ...state };
+}
+
 export async function getFlowsData(client: Client = supabaseAdmin) {
   const householdId = await getDefaultHouseholdId(client);
   if (!householdId) return { hasHousehold: false as const, liquidity: 0, allocated: 0, unallocated: 0, funds: [], accounts: [], allocations: [] };
   await ensureDefaultFlowFunds(householdId, client);
-  const [accountsResult, fundsResult, allocationsResult] = await Promise.all([
+  const [accountsResult, fundsResult, allocationsResult, conceptsResult] = await Promise.all([
     client.from('accounts').select('id,name,type,balance,is_active,household_id').eq('household_id', householdId).eq('is_active', true).in('type', ['operativa', 'operational_cash']).order('display_order'),
-    client.from('flow_funds').select('id,name,code,period_type,priority,is_active,household_id').eq('household_id', householdId).order('priority'),
-    client.from('flow_allocations').select('id,household_id,fund_id,cycle_id,account_id,amount,notes,created_at').eq('household_id', householdId).order('created_at', { ascending: false })
+    client.from('flow_funds').select('id,name,code,period_type,target_type,manual_target_amount,priority,is_active,household_id,created_at,tracking_start_date').eq('household_id', householdId).order('priority'),
+    client.from('flow_allocations').select('id,household_id,fund_id,cycle_id,account_id,amount,notes,created_at').eq('household_id', householdId).order('created_at', { ascending: false }),
+    client.from('financial_subcategories').select('flow_fund_id,planned_amount,planned_period_type,is_active').eq('household_id', householdId)
   ]);
-  const error = accountsResult.error ?? fundsResult.error ?? allocationsResult.error;
+  const error = accountsResult.error ?? fundsResult.error ?? allocationsResult.error ?? conceptsResult.error;
   if (error) throw new Error(`No fue posible consultar Flujos: ${error.message}`);
   const fundRows = fundsResult.data ?? [];
-  await ensureActiveFlowCycles(householdId, fundRows, client);
-  const cyclesResult = await client.from('flow_cycles').select('id,household_id,fund_id,cycle_start,cycle_end,cycle_label,target_amount,consumed_amount,status').eq('household_id', householdId).neq('status', 'closed');
-  if (cyclesResult.error) throw new Error(`No fue posible consultar los ciclos: ${cyclesResult.error.message}`);
+  await ensureFlowPeriods(householdId, fundRows, conceptsResult.data ?? [], client);
+  const periodsResult = await client.from('flow_periods').select('id,household_id,fund_id,period_start,period_end,period_label,target_amount').eq('household_id', householdId).order('period_start');
+  if (periodsResult.error) { flowDebug('flow_periods.reload.failed', { householdId, error: periodsResult.error }); throw new Error(`No fue posible consultar los periodos: ${periodsResult.error.message}`); }
+  flowDebug('flow_periods.reloaded', { householdId, count: periodsResult.data?.length ?? 0 });
   const accounts = (accountsResult.data ?? []).map((row) => ({ id: row.id, name: row.name, type: row.type, balance: Number(row.balance), isActive: row.is_active, householdId: row.household_id }));
   const allocations = (allocationsResult.data ?? []).map((row) => ({ id: row.id, householdId: row.household_id, fundId: row.fund_id, cycleId: row.cycle_id, accountId: row.account_id, amount: Number(row.amount), notes: row.notes, createdAt: row.created_at }));
-  const amounts: FlowAllocationAmount[] = allocations;
-  const flowAccounts: FlowAccount[] = accounts;
-  const cycles = cyclesResult.data ?? [];
+  const amounts: FlowAllocationAmount[] = allocations; const flowAccounts: FlowAccount[] = accounts;
+  const periods = (periodsResult.data ?? []).map((row) => ({ id: row.id, householdId: row.household_id, fundId: row.fund_id, periodStart: row.period_start, periodEnd: row.period_end, periodLabel: row.period_label, targetAmount: Number(row.target_amount) }));
   const funds = fundRows.map((row) => {
-    const cycle = cycles.find((item) => item.fund_id === row.id);
-    const assignedAmount = cycle ? getAllocatedByCycle(amounts, householdId, cycle.id) : 0;
-    const targetAmount = Number(cycle?.target_amount ?? 0); const consumedAmount = Number(cycle?.consumed_amount ?? 0);
-    return { id: row.id, name: row.name, code: row.code, periodType: row.period_type, priority: row.priority, isActive: row.is_active, totalAllocated: assignedAmount, cycle: cycle ? { id: cycle.id, cycleStart: cycle.cycle_start, cycleEnd: cycle.cycle_end, cycleLabel: cycle.cycle_label, targetAmount, assignedAmount, consumedAmount, remainingAmount: calculateRemainingAmount(assignedAmount, consumedAmount), missingAmount: calculateMissingAmount(targetAmount, assignedAmount), status: calculateCycleStatus(assignedAmount, targetAmount, consumedAmount, cycle.status) } : null };
+    const fundPeriods = periods.filter((period) => period.fundId === row.id);
+    return buildFlowCardState({ id: row.id, name: row.name, code: row.code, periodType: row.period_type, priority: row.priority, isActive: row.is_active }, fundPeriods, getAllocatedByFund(amounts, householdId, row.id));
   });
-  // Una asignación sigue reservando dinero aunque su ciclo llegue a cerrarse. El cierre futuro
-  // deberá liberarla, trasladarla con una asignación nueva o dejarla para reasignación manual.
   return { hasHousehold: true as const, householdId, liquidity: getTotalLiquidity(flowAccounts, householdId), allocated: getTotalAllocated(amounts, householdId), unallocated: getUnallocatedMoney(flowAccounts, amounts, householdId), funds, accounts: accounts.map((account) => ({ ...account, available: account.balance - getAllocatedByAccount(amounts, householdId, account.id) })), allocations };
 }
 
