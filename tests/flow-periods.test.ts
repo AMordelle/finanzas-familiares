@@ -87,3 +87,23 @@ describe('inicio efectivo del seguimiento', () => {
     expect(periods).toMatchObject([{ periodStart: '2026-08-01', periodEnd: '2026-08-31' }]);
   });
 });
+
+describe('reinicialización segura del seguimiento', () => {
+  it('regenera únicamente el flujo seleccionado desde su nueva fecha', () => {
+    const weekly = buildMissingFlowPeriods({ ...base, fundId: 'weekly', periodType: 'weekly', createdAt: '2026-07-20T00:00:00Z', targetAmount: 1200, existing: [], now: new Date('2026-07-20T12:00:00Z') });
+    const monthly = buildMissingFlowPeriods({ ...base, fundId: 'monthly', createdAt: '2026-08-01T00:00:00Z', targetAmount: 2000, existing: [], now: new Date('2026-08-05T12:00:00Z') });
+    expect(weekly).toMatchObject([{ fundId: 'weekly', periodStart: '2026-07-20' }]);
+    expect(monthly).toMatchObject([{ fundId: 'monthly', periodStart: '2026-08-01' }]);
+  });
+});
+
+describe('contrato de reinicialización atómica', () => {
+  it('protege reservas/consumo y borra solamente los periodos del flujo bloqueado', async () => {
+    const { readFileSync } = await import('node:fs');
+    const sql = readFileSync('db/migrations/0014_reset_empty_flow_tracking.sql', 'utf8');
+    expect(sql).toContain('flow_has_financial_activity');
+    expect(sql).toContain('FROM flow_allocations');
+    expect(sql).toContain('consumed_amount > 0');
+    expect(sql).toContain('DELETE FROM flow_periods WHERE household_id = p_household_id AND fund_id = p_flow_id');
+  });
+});
