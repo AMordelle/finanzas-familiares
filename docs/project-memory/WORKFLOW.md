@@ -47,14 +47,25 @@ Un chat nuevo debe poder reconstruir el contexto con estas fuentes sin exigir al
 
 ### 2. Persistencia de la decisión
 
-Antes o junto con la implementación:
+La memoria se sincroniza cuando existe un hito significativo, no por una periodicidad fija. Entre los hitos relevantes están una decisión o regla nueva confirmada, la sustitución explícita de una decisión, un cambio relevante del estado/siguiente paso y un merge que cambie lo descrito por la memoria.
 
-- Actualizar `DECISIONS.md` si existe una decisión nueva/reemplazada relevante.
-- Actualizar `BUSINESS_RULES.md` si cambian reglas funcionales.
-- Actualizar `CURRENT_STATE.md` con el trabajo activo y siguiente paso.
-- Guardar conclusiones, no el diálogo completo ni ideas descartadas sin valor futuro.
+Mientras `$actualizar-memoria-proyecto` permanezca en estado `Experimental`:
 
-La actualización de memoria deberá automatizarse progresivamente mediante una Skill específica, manteniendo revisión humana mientras se valida su fiabilidad.
+- su ejecución se invoca de forma explícita;
+- debe consultar primero la memoria vigente en `main`;
+- sólo prepara cambios cuando detecta conocimiento nuevo confirmado;
+- cualquier sincronización se propone mediante un PR documental para revisión humana;
+- si no existe novedad real, termina sin crear rama, commit ni PR.
+
+Según el tipo de cambio:
+
+- actualizar `DECISIONS.md` si existe una decisión nueva/reemplazada relevante;
+- actualizar `BUSINESS_RULES.md` si cambian reglas funcionales;
+- actualizar `PRODUCT_MAP.md` si cambia el papel o relación de un módulo;
+- actualizar `CURRENT_STATE.md` si cambia el trabajo activo, estado global o siguiente paso;
+- actualizar `WORKFLOW.md` o `SKILLS_CATALOG.md` si cambia el proceso o el contrato/estado de una Skill.
+
+Guardar conclusiones, no el diálogo completo ni ideas descartadas sin valor futuro.
 
 ### 3. Especificación para Codex
 
@@ -109,13 +120,15 @@ El merge final a `main` permanece bajo decisión del usuario.
 
 ### 8. Cierre y actualización de memoria
 
-Después del merge:
+Después del merge, si el merge cambia el estado descrito por la memoria, se ejecuta `$actualizar-memoria-proyecto` para:
 
 - confirmar el estado real en GitHub;
 - mover la funcionalidad de trabajo activo a terminada cuando corresponda;
 - registrar decisiones finales que hayan cambiado durante la implementación;
 - actualizar `CURRENT_STATE.md` y el siguiente paso;
 - mantener la memoria breve, vigente y sin convertirla en un historial de commits.
+
+Si el merge no introduce ninguna novedad documental real, la Skill no debe producir cambios.
 
 ## Automatización prevista
 
@@ -126,7 +139,7 @@ Se pueden utilizar Programación/Work para vigilar eventos que reduzcan trabajo 
 - conflictos o riesgos que requieran atención;
 - detección de merge para iniciar el cierre documental.
 
-Las automatizaciones deben avisar según reglas explícitas y no realizar merges por defecto.
+La automatización futura de memoria debe basarse en detección de hitos, no en una ejecución periódica indiscriminada. Las automatizaciones deben avisar según reglas explícitas y no realizar merges por defecto.
 
 ## Política para PR antiguos
 
