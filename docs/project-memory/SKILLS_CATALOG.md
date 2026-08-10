@@ -158,7 +158,7 @@ La Skill permanece `Experimental` hasta acumular uso real suficiente para decidi
 
 ## $reconstruir-contexto-proyecto
 
-**Estado:** Planificada  
+**Estado:** Experimental  
 **Versión de contrato:** 0.1  
 **Última revisión:** 2026-08-09
 
@@ -264,6 +264,20 @@ Si existe una contradicción relevante, debe destacarse dentro de `ESTADO ACTUAL
 - Probar un caso donde memoria y GitHub coincidan.
 - Probar al menos un caso controlado donde exista una discrepancia entre memoria y GitHub y verificar que la detecta sin modificar ninguna fuente.
 - Confirmar que entrega un único siguiente paso accionable.
+
+### Validación Experimental
+
+Completada el 2026-08-09:
+
+- ejecución en un chat nuevo sin depender del historial conversacional;
+- lectura de memoria canónica desde `main` y contraste con GitHub;
+- selección de reglas y decisiones únicamente relevantes para el trabajo activo;
+- caso consistente entre memoria y GitHub con un único siguiente paso accionable;
+- caso controlado de discrepancia donde GitHub mostraba el PR #73 cerrado sin merge mientras la memoria lo describía abierto;
+- detección correcta de la contradicción sin modificar memoria ni GitHub y recomendación de `$actualizar-memoria-proyecto` como siguiente acción;
+- restauración posterior del PR #73 a su estado abierto original.
+
+La Skill permanece `Experimental` hasta acumular uso real suficiente para decidir si su contrato puede considerarse estable y pasar a `Vigente`.
 
 ---
 
