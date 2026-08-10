@@ -17,6 +17,12 @@ Mantener continuidad entre chats y sesiones, permitir que ChatGPT/Codex trabajen
 
 Si las fuentes se contradicen, no se debe adivinar. Se debe contrastar el código/estado real con la memoria y corregir la fuente desactualizada.
 
+## Organización de conversaciones del proyecto
+
+Los chats pueden separarse por módulo, problema o línea de trabajo para mantener cada conversación enfocada. Además, el proyecto mantiene un chat específico de Skills para definir su propósito, revisar su contrato y acordar cambios de comportamiento.
+
+Esta organización no convierte los chats en fuente de verdad. Las conclusiones vigentes que deban sobrevivir al historial conversacional se reflejan en `docs/project-memory/`, y el contrato canónico de cada Skill del proyecto se mantiene en `SKILLS_CATALOG.md`.
+
 ## Inicio o reanudación de trabajo
 
 Antes de diseñar o implementar una funcionalidad:
