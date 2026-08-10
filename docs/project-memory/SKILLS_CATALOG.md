@@ -22,7 +22,7 @@
 
 ## $actualizar-memoria-proyecto
 
-**Estado:** Planificada  
+**Estado:** Experimental  
 **Versión de contrato:** 0.1  
 **Última revisión:** 2026-08-09
 
@@ -143,6 +143,16 @@ No se creó ningún PR.
 - Confirmar que genera un PR documental mínimo.
 - Ejecutarla nuevamente sin cambios y verificar que no duplica información ni crea otro PR.
 - Probar al menos una sustitución explícita de decisión.
+
+### Validación Experimental
+
+Completada el 2026-08-09:
+
+- primera sincronización con novedad real y PR documental mínimo;
+- segunda ejecución sin novedades, sin duplicación ni PR adicional;
+- sustitución explícita de una decisión con conservación de trazabilidad.
+
+La Skill permanece `Experimental` hasta acumular uso real suficiente para decidir si su contrato puede considerarse estable y pasar a `Vigente`.
 
 ---
 

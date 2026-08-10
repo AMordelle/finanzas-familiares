@@ -122,17 +122,39 @@ Permite que ChatGPT, Codex y el desarrollador consulten el mismo contexto y que 
 
 ## DEC-009 — Intervención manual mínima en el pipeline
 
+**Estado:** Sustituida  
+**Formalizada:** 2026-08-09  
+**Sustituida por:** DEC-010
+
+### Decisión histórica
+El flujo debía automatizar tanto como fuera razonable entre el diseño y la validación final, concentrando la intervención manual deseada en conversar y decidir el comportamiento del producto, realizar la validación local y hacer el merge final.
+
+El transporte manual de prompts, resúmenes y estado entre ChatGPT, Codex y GitHub debía reducirse progresivamente.
+
+### Motivo de sustitución
+La decisión expresaba la dirección general, pero no definía cuándo debía sincronizarse la memoria viva ni el nivel de supervisión requerido mientras la Skill responsable estuviera en pruebas.
+
+---
+
+## DEC-010 — Actualización de memoria activada por hitos
+
 **Estado:** Objetivo operativo  
 **Formalizada:** 2026-08-09
 
 ### Decisión
-El flujo debe automatizar tanto como sea razonable entre el diseño y la validación final. La intervención manual deseada se concentra en:
+La actualización de la memoria viva forma parte del pipeline y debe activarse por cambios significativos del proyecto, no por una periodicidad fija.
 
-1. Conversar y decidir el comportamiento del producto con ChatGPT.
-2. Realizar la validación local cuando el cambio esté listo.
-3. Hacer el merge final.
+Los hitos que pueden justificar una sincronización incluyen, según corresponda:
 
-El transporte manual de prompts, resúmenes y estado entre ChatGPT, Codex y GitHub debe reducirse progresivamente.
+1. una conversación de diseño que cierre una decisión o regla nueva;
+2. la sustitución explícita de una decisión vigente;
+3. un cambio relevante del estado funcional o del siguiente paso;
+4. un merge que cambie el estado descrito por la memoria.
+
+Mientras `$actualizar-memoria-proyecto` permanezca en estado `Experimental`, su ejecución será supervisada: se invoca de forma explícita y cualquier cambio se presenta mediante un PR documental para revisión humana. Si no existe conocimiento nuevo confirmado, no se crea rama, commit ni PR.
+
+### Consecuencia
+La memoria deja de depender de recordatorios periódicos o de que el usuario reconstruya manualmente qué debe documentarse. La automatización futura puede detectar hitos y proponer o iniciar la sincronización, pero no debe convertir la actualización de memoria en una tarea periódica sin novedades ni eliminar la revisión humana mientras el contrato de la Skill siga en fase experimental.
 
 ## Regla de mantenimiento
 
