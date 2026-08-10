@@ -156,11 +156,121 @@ La Skill permanece `Experimental` hasta acumular uso real suficiente para decidi
 
 ---
 
+## $reconstruir-contexto-proyecto
+
+**Estado:** Planificada  
+**Versión de contrato:** 0.1  
+**Última revisión:** 2026-08-09
+
+### Propósito
+
+Reconstruir el contexto operativo vigente de Finanzas Familiares al iniciar un chat, retomar una línea de trabajo o cuando exista duda sobre el estado real del proyecto, combinando la memoria viva con evidencia actual de GitHub sin depender del historial conversacional.
+
+La Skill es de solo lectura: informa y detecta inconsistencias, pero no modifica memoria, código ni estado de GitHub.
+
+### Cuándo usarla
+
+- Al iniciar un chat nuevo de trabajo sobre Finanzas Familiares.
+- Al retomar trabajo después de una pausa cuando sea necesario confirmar el punto vigente.
+- Antes de diseñar o implementar una funcionalidad si el contexto actual no está suficientemente establecido.
+- Cuando memoria y conversación parezcan contradictorias o exista duda sobre PR, ramas, merges o siguiente paso.
+
+No es necesario ejecutarla repetidamente dentro de una conversación cuando el contexto vigente ya está establecido y no ocurrió un cambio relevante.
+
+### Fuentes que debe consultar
+
+1. `docs/project-memory/CURRENT_STATE.md` desde `main`.
+2. `docs/project-memory/PRODUCT_MAP.md` desde `main`.
+3. `docs/project-memory/BUSINESS_RULES.md` desde `main`.
+4. `docs/project-memory/DECISIONS.md` desde `main`.
+5. `docs/project-memory/WORKFLOW.md` desde `main` cuando sea necesario interpretar el siguiente paso o el proceso.
+6. `docs/project-memory/SKILLS_CATALOG.md` desde `main` cuando el contexto involucre Skills o el pipeline.
+7. Estado real de GitHub relevante para el trabajo actual: como mínimo PR abiertos o mencionados por la memoria, ramas/commits relacionados y estado de merge cuando afecten el contexto reconstruido.
+
+La conversación actual puede aportar el objetivo inmediato del usuario, pero no debe sustituir la consulta de las fuentes canónicas.
+
+### Procedimiento obligatorio
+
+1. Leer primero `CURRENT_STATE.md` desde `main`.
+2. Identificar el trabajo activo, riesgos y siguiente paso que declara la memoria.
+3. Leer las decisiones y reglas de negocio relevantes para ese trabajo; consultar `PRODUCT_MAP.md` para ubicar el estado funcional de los módulos implicados.
+4. Consultar `WORKFLOW.md` y `SKILLS_CATALOG.md` cuando el contexto dependa del proceso o de una Skill.
+5. Consultar GitHub para validar las afirmaciones técnicas que puedan haber cambiado desde la última actualización de memoria, especialmente estado de PR, merges, ramas y trabajo activo.
+6. Contrastar memoria y GitHub antes de presentar el contexto como vigente.
+7. Si existe contradicción, no elegir silenciosamente una fuente ni inventar una reconciliación: describir la discrepancia, indicar cuál evidencia técnica muestra GitHub y señalar que la memoria requiere sincronización cuando corresponda.
+8. Sintetizar únicamente el contexto necesario para continuar trabajando; no convertir la salida en un volcado completo de todos los documentos.
+9. Terminar con un único siguiente paso respaldado por las fuentes disponibles. Si una contradicción impide determinarlo con seguridad, el siguiente paso debe ser resolver esa contradicción.
+
+### Prioridad de fuentes
+
+- Para código, ramas, commits, PR, merge y estado técnico observable: GitHub tiene prioridad factual.
+- Para decisiones aprobadas, reglas de negocio y propósito funcional: la memoria canónica tiene prioridad mientras no exista evidencia explícita de que quedó desactualizada.
+- La existencia de código o de un PR no convierte por sí sola una propuesta en decisión funcional vigente.
+- Una conversación no debe sobrescribir silenciosamente una decisión registrada.
+
+### Contradicciones y memoria desactualizada
+
+Si, por ejemplo, `CURRENT_STATE.md` indica que un PR está abierto pero GitHub confirma que ya fue mergeado, la Skill debe:
+
+1. informar que la memoria está desactualizada en ese punto;
+2. utilizar el estado real de GitHub para describir la situación técnica actual;
+3. no modificar `CURRENT_STATE.md`;
+4. recomendar `$actualizar-memoria-proyecto` como siguiente acción cuando la discrepancia afecte el contexto vigente.
+
+### Puede hacer
+
+- Leer todos los archivos de `docs/project-memory/` necesarios para reconstruir contexto.
+- Consultar repositorio, PR, ramas, commits y otros metadatos de GitHub en modo lectura.
+- Relacionar estado técnico con decisiones, reglas y mapa funcional.
+- Detectar memoria potencialmente desactualizada o contradicciones entre fuentes.
+- Recomendar la Skill o acción siguiente apropiada.
+
+### No puede hacer
+
+- Modificar archivos del repositorio.
+- Crear ramas, commits o PR.
+- Hacer merge, cerrar PR ni cambiar su estado.
+- Actualizar la memoria viva por sí misma.
+- Inventar estado técnico, decisiones, reglas o fechas.
+- Tratar un PR abierto, código existente o una idea de conversación como decisión aprobada sin respaldo canónico.
+- Resolver contradicciones relevantes mediante suposición.
+
+### Resultado esperado
+
+La salida debe ser breve y operativa, estructurada alrededor de estas cuatro preguntas:
+
+```text
+CONTEXTO
+Qué estamos construyendo y qué parte del proyecto es relevante ahora.
+
+ESTADO ACTUAL
+Qué está terminado, activo o pendiente según memoria + GitHub.
+
+REGLAS Y DECISIONES A RESPETAR
+Solo las que condicionan el trabajo inmediato.
+
+SIGUIENTE PASO
+Una sola acción concreta respaldada por las fuentes.
+```
+
+Si existe una contradicción relevante, debe destacarse dentro de `ESTADO ACTUAL` y afectar el `SIGUIENTE PASO` cuando impida continuar con seguridad.
+
+### Criterios para pasar a Experimental
+
+- Crear la Skill con este contrato como base.
+- Ejecutarla en un chat/contexto nuevo y comprobar que reconstruye el proyecto sin depender del historial conversacional.
+- Confirmar que consulta memoria desde `main` y valida contra GitHub.
+- Confirmar que selecciona únicamente reglas y decisiones relevantes en lugar de volcar toda la memoria.
+- Probar un caso donde memoria y GitHub coincidan.
+- Probar al menos un caso controlado donde exista una discrepancia entre memoria y GitHub y verificar que la detecta sin modificar ninguna fuente.
+- Confirmar que entrega un único siguiente paso accionable.
+
+---
+
 ## Skills previstas para el pipeline v2
 
 Las siguientes Skills están identificadas como candidatas, pero su contrato todavía no está definido. No deben asumirse disponibles hasta que tengan una sección propia en este catálogo.
 
-- `$reconstruir-contexto-proyecto`: recuperar memoria + estado real de GitHub al iniciar o retomar trabajo.
 - `$preparar-especificacion-codex`: convertir una decisión funcional confirmada en una especificación implementable y verificable.
 - `$revisar-pr-proyecto`: auditar un PR contra memoria, reglas, alcance, pruebas y riesgos.
 - `$generar-plan-validacion-local`: producir un protocolo específico de pruebas humanas para el PR listo para validar.
