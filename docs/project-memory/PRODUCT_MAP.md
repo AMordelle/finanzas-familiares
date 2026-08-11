@@ -24,11 +24,11 @@ La navegación simplificada del producto se concentra actualmente en seis áreas
 
 **Propósito:** ser la entrada sencilla para capturar actividad financiera.
 
-**Estado:** existente; evolución pendiente.
+**Estado:** funcional con captura conversacional multi-movimiento integrada mediante PR #58.
 
-**Comportamiento objetivo conocido:** interpretar → detectar/validar faltantes → confirmar → guardar → recalcular.
+**Comportamiento vigente conocido:** interpretar → detectar/validar faltantes → confirmar → guardar → recalcular. Una sola entrada puede producir varios movimientos, manteniendo trazabilidad individual mediante el texto de origen de cada movimiento; el lote se previsualiza antes de guardar y el guardado se bloquea si existen movimientos incompletos.
 
-**Pendiente relevante:** permitir captura multi-movimiento en una sola entrada, conservando la trazabilidad individual de los movimientos generados.
+**Pendiente relevante:** cualquier evolución adicional del Registro multi-movimiento debe partir del comportamiento ya integrado y definir explícitamente el delta funcional antes de preparar nueva implementación.
 
 ## Cuentas
 
