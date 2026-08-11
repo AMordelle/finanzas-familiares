@@ -283,7 +283,7 @@ La Skill permanece `Experimental` hasta acumular uso real suficiente para decidi
 
 ## $preparar-especificacion-codex
 
-**Estado:** Planificada  
+**Estado:** Experimental  
 **Versión de contrato:** 0.1  
 **Última revisión:** 2026-08-10
 
@@ -430,6 +430,20 @@ Cuando exista una ambigüedad material, no entregar un prompt definitivo. La sal
 - Verificar que incluye alcance, fuera de alcance, casos límite, pruebas y criterios de aceptación.
 - Probar un caso controlado con una ambigüedad funcional material y comprobar que se detiene en vez de inventar una decisión.
 - Confirmar que no modifica repositorio ni memoria.
+
+### Validación Experimental
+
+Completada el 2026-08-10:
+
+- prueba con DEC-004 — Calendario de compromisos por subcategoría, generando una especificación autosuficiente basada en memoria, `main`, código, pruebas, migraciones y PR relacionado;
+- detección del solapamiento con el PR #73 sin tratarlo como fuente de verdad por encima de `main`;
+- identificación de un riesgo real de idempotencia/upsert sin inventar rutas ni requisitos técnicos;
+- inclusión explícita de alcance, fuera de alcance, casos límite, pruebas, compatibilidad, restricciones y criterios de aceptación;
+- prueba controlada con Registro multi-movimiento, donde la Skill se detuvo al comprobar que el objetivo genérico ya estaba implementado y que faltaba definir un delta funcional legítimo;
+- detección de memoria desactualizada respecto al PR #58, sin modificar ninguna fuente, y derivación correcta hacia `$actualizar-memoria-proyecto`;
+- sincronización posterior de esa discrepancia mediante el PR documental #81, ya fusionado.
+
+La Skill permanece `Experimental` hasta acumular uso real suficiente para decidir si su contrato puede considerarse estable y pasar a `Vigente`.
 
 ---
 
