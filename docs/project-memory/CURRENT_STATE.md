@@ -45,7 +45,7 @@ El repositorio contiene además rutas para otros módulos y pantallas; su mera e
 
 ### PR #73 — Calendario individual de compromisos
 
-Estado: abierto y pendiente de validación local integral.
+Estado: abierto y requiere correcciones antes de validación local.
 
 Objetivo:
 - Usar las subcategorías como fuente de verdad para los compromisos financieros, sin crear una tabla adicional de compromisos.
@@ -63,12 +63,15 @@ Cambios relevantes reportados:
 Validación reportada por el PR:
 - 23 pruebas focalizadas pasaron.
 
-Validaciones todavía requeridas antes del merge:
-- Revisar la migración con datos representativos/existentes.
-- Ejecutar la suite completa.
-- Verificar TypeScript y build.
-- Probar manualmente Configuración → subcategoría → calendario → Flujos.
-- Confirmar el comportamiento cuando dos subcategorías del mismo flujo tienen la misma fecha de vencimiento y que la idempotencia/upsert usa la clave correcta por subcategoría.
+Resultado de revisión asistida:
+- Dictamen: `CORREGIR ANTES`.
+- La identidad única vigente y el `onConflict` no garantizan obligaciones independientes por subcategoría.
+- Un flujo con compromisos completos e incompletos puede ocultar el estado `Requiere configuración`.
+- La implementación propuesta introduce una regresión para subcategorías semanales calculadas.
+- Faltan pruebas de integración para identidad/idempotencia persistida y estados mixtos.
+- La rama está desactualizada y GitHub la marca como no mergeable.
+
+Antes de validación local, la implementación debe reconstruirse o actualizarse desde `main` y corregir conjuntamente esos bloqueos.
 
 ## Riesgos actuales
 
@@ -78,8 +81,8 @@ Validaciones todavía requeridas antes del merge:
 
 ## Siguiente paso
 
-Validar localmente el PR #73 de forma integral antes de decidir su merge.
+Corregir o reconstruir el PR #73 desde el `main` vigente y repetir `$revisar-pr-proyecto` antes de preparar la validación local.
 
 ## Última actualización
 
-2026-08-10 — Registro multi-movimiento reconciliado con el estado real de `main`; PR #58 ya estaba integrado.
+2026-08-10 — PR #73 reclasificado como `CORREGIR ANTES`; `$revisar-pr-proyecto` validada como `Experimental`.
