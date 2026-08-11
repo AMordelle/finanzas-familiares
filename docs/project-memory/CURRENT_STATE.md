@@ -28,7 +28,7 @@ Aplicación web responsiva para gestionar las finanzas del hogar compartido, pri
 - Movimientos: funcional y pieza central para consulta mediante filtros.
 - Extras: funcional para tiempo extra, destajo y comidas; permite crear, editar, marcar pagado y eliminar.
 - Flujos: en desarrollo activo.
-- Registro: pendiente de evolucionar hacia captura multi-movimiento.
+- Registro: funcional con captura conversacional multi-movimiento integrada mediante PR #58; permite interpretar y guardar varios movimientos en una sola entrada conservando trazabilidad individual.
 - Cierre semanal/mensual: pendiente de evolución.
 - Publicación para acceso desde distintos dispositivos: pendiente.
 - Dashboard/IA: alcance futuro por definir.
@@ -82,4 +82,4 @@ Validar localmente el PR #73 de forma integral antes de decidir su merge.
 
 ## Última actualización
 
-2026-08-09 — Creación inicial de la memoria viva del proyecto.
+2026-08-10 — Registro multi-movimiento reconciliado con el estado real de `main`; PR #58 ya estaba integrado.
