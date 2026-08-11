@@ -75,7 +75,7 @@ La navegación simplificada del producto se concentra actualmente en seis áreas
 
 **Relaciones:** depende de la configuración financiera de categorías/subcategorías y de su calendario; debe mantener identidad por subcategoría para evitar colisiones entre obligaciones del mismo flujo.
 
-**Pendiente inmediato:** validación local integral del PR #73 antes de decidir su merge.
+**Pendiente inmediato:** corregir o reconstruir el PR #73 desde `main` y repetir la revisión asistida antes de preparar la validación local.
 
 ## Cierre
 
