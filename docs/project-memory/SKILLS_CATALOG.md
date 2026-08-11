@@ -281,11 +281,162 @@ La Skill permanece `Experimental` hasta acumular uso real suficiente para decidi
 
 ---
 
+## $preparar-especificacion-codex
+
+**Estado:** Planificada  
+**Versión de contrato:** 0.1  
+**Última revisión:** 2026-08-10
+
+### Propósito
+
+Convertir una decisión funcional ya confirmada en una especificación autosuficiente, concreta y verificable para Codex, utilizando la memoria canónica y el estado real del repositorio para reducir al mínimo el transporte manual de contexto.
+
+La Skill prepara instrucciones de implementación; no decide el producto, no implementa código y no modifica GitHub ni la memoria viva.
+
+### Cuándo usarla
+
+- Después de que una conversación de diseño haya cerrado suficientemente el comportamiento esperado de una funcionalidad o corrección.
+- Antes de delegar una implementación a Codex.
+- Cuando sea necesario reconstruir un prompt de implementación a partir de una decisión ya registrada y el estado actual del repositorio.
+- Para reemplazar prompts manuales que dependan de copiar resúmenes extensos entre ChatGPT y Codex.
+
+No debe utilizarse para decidir entre alternativas funcionales todavía abiertas ni para convertir una idea exploratoria en una instrucción de implementación.
+
+### Fuentes que debe consultar
+
+1. Objetivo o decisión confirmada en la conversación actual, cuando exista.
+2. `docs/project-memory/CURRENT_STATE.md` desde `main`.
+3. `docs/project-memory/PRODUCT_MAP.md` desde `main` para ubicar el módulo afectado.
+4. `docs/project-memory/BUSINESS_RULES.md` desde `main` para reglas funcionales relevantes.
+5. `docs/project-memory/DECISIONS.md` desde `main` para decisiones vigentes que condicionen la implementación.
+6. `docs/project-memory/WORKFLOW.md` desde `main` para restricciones del proceso.
+7. Estado real del repositorio y archivos/código relevantes en `main`.
+8. PR o ramas relacionadas cuando sean necesarias para evitar repetir, solapar o basar trabajo nuevo sobre una implementación obsoleta.
+
+### Procedimiento obligatorio
+
+1. Confirmar primero cuál es la decisión o comportamiento que se pretende implementar.
+2. Leer `CURRENT_STATE.md` desde `main` y ubicar la funcionalidad en el estado vigente del proyecto.
+3. Leer únicamente las reglas y decisiones que condicionan ese cambio.
+4. Inspeccionar el código y archivos relevantes en `main` para entender la arquitectura existente, nombres reales, puntos de integración y pruebas relacionadas.
+5. Consultar PR o ramas relacionadas cuando exista riesgo de solapamiento, obsolescencia o trabajo previo relevante.
+6. Detectar contradicciones entre la decisión confirmada, memoria y repositorio antes de redactar la especificación.
+7. Si existe una ambigüedad funcional que pueda cambiar materialmente la implementación, no inventar una respuesta ni entregar un prompt aparentemente definitivo: señalar el bloqueo que debe resolverse primero.
+8. Si el comportamiento está suficientemente definido, preparar una especificación que incluya como mínimo:
+   - objetivo;
+   - contexto técnico relevante;
+   - comportamiento esperado;
+   - reglas de negocio y decisiones aplicables;
+   - alcance;
+   - fuera de alcance;
+   - casos límite relevantes;
+   - requisitos de pruebas;
+   - migraciones y compatibilidad de datos cuando corresponda;
+   - restricciones de implementación derivadas de la arquitectura vigente;
+   - criterios de aceptación;
+   - resultado esperado del trabajo de Codex.
+9. Referenciar rutas, módulos, funciones o pruebas concretas sólo cuando hayan sido observadas en el repositorio o estén respaldadas por la memoria; no inventar nombres técnicos para hacer el prompt parecer más específico.
+10. Entregar la especificación lista para enviarse a Codex sin exigir que el usuario añada manualmente contexto ya disponible en las fuentes.
+
+### Política de ambigüedad
+
+Una especificación no debe ocultar decisiones pendientes.
+
+Si falta una definición que pueda alterar comportamiento, modelo de datos, compatibilidad, UX, reglas financieras o criterios de aceptación, la Skill debe detener la preparación definitiva e indicar con precisión qué decisión falta.
+
+Puede resolver detalles técnicos menores a partir de patrones observables del repositorio cuando no cambien el comportamiento aprobado, pero debe distinguir una decisión funcional pendiente de una elección de implementación delegable a Codex.
+
+### Prioridad de fuentes
+
+- Las decisiones funcionales confirmadas y reglas canónicas determinan qué debe hacer el producto.
+- `main` determina la arquitectura y estado técnico sobre los que debe implementarse.
+- Un PR antiguo puede aportar evidencia o ideas, pero no tiene prioridad sobre `main` ni se asume vigente por estar abierto.
+- Si memoria y GitHub discrepan en un hecho técnico, debe resolverse o señalarse la discrepancia antes de basar la especificación en ese hecho.
+
+### Puede hacer
+
+- Leer memoria viva y archivos relevantes del repositorio.
+- Consultar GitHub, PR, ramas y commits en modo lectura.
+- Inspeccionar código, esquemas, migraciones y pruebas existentes.
+- Traducir decisiones funcionales confirmadas a requisitos técnicos y criterios verificables.
+- Recomendar qué áreas del repositorio debe revisar Codex sin imponer archivos inventados.
+- Entregar un prompt/especificación listo para Codex.
+
+### No puede hacer
+
+- Inventar decisiones funcionales, reglas de negocio, estados o requisitos.
+- Elegir silenciosamente entre alternativas de producto todavía abiertas.
+- Modificar memoria, código, ramas, PR o datos.
+- Implementar el cambio por sí misma.
+- Crear un PR o hacer merge.
+- Basar una implementación nueva en una rama antigua sin contrastarla con `main`.
+- Presentar como obligatorio un detalle técnico no respaldado cuando Codex puede decidirlo dentro del alcance aprobado.
+
+### Resultado esperado
+
+Cuando la decisión esté suficientemente cerrada, entregar una especificación directamente reutilizable, por ejemplo:
+
+```text
+ESPECIFICACIÓN PARA CODEX
+
+OBJETIVO
+...
+
+CONTEXTO TÉCNICO RELEVANTE
+...
+
+COMPORTAMIENTO ESPERADO
+...
+
+REGLAS Y DECISIONES A RESPETAR
+...
+
+ALCANCE
+...
+
+FUERA DE ALCANCE
+...
+
+CASOS LÍMITE
+...
+
+PRUEBAS REQUERIDAS
+...
+
+MIGRACIONES / COMPATIBILIDAD
+...
+
+RESTRICCIONES DE IMPLEMENTACIÓN
+...
+
+CRITERIOS DE ACEPTACIÓN
+...
+
+ENTREGA ESPERADA
+- implementación en rama dedicada;
+- PR pequeño y enfocado contra `main`;
+- resumen de cambios, pruebas ejecutadas y riesgos/pendientes.
+```
+
+Cuando exista una ambigüedad material, no entregar un prompt definitivo. La salida debe identificar el bloqueo concreto y la decisión necesaria para poder preparar la especificación.
+
+### Criterios para pasar a Experimental
+
+- Crear la Skill con este contrato como base.
+- Probarla con una decisión funcional real ya confirmada.
+- Confirmar que consulta memoria y `main` antes de redactar.
+- Confirmar que inspecciona código/pruebas relevantes y no inventa rutas o nombres técnicos.
+- Confirmar que genera una especificación autosuficiente que pueda enviarse a Codex sin contexto manual adicional.
+- Verificar que incluye alcance, fuera de alcance, casos límite, pruebas y criterios de aceptación.
+- Probar un caso controlado con una ambigüedad funcional material y comprobar que se detiene en vez de inventar una decisión.
+- Confirmar que no modifica repositorio ni memoria.
+
+---
+
 ## Skills previstas para el pipeline v2
 
 Las siguientes Skills están identificadas como candidatas, pero su contrato todavía no está definido. No deben asumirse disponibles hasta que tengan una sección propia en este catálogo.
 
-- `$preparar-especificacion-codex`: convertir una decisión funcional confirmada en una especificación implementable y verificable.
 - `$revisar-pr-proyecto`: auditar un PR contra memoria, reglas, alcance, pruebas y riesgos.
 - `$generar-plan-validacion-local`: producir un protocolo específico de pruebas humanas para el PR listo para validar.
 
