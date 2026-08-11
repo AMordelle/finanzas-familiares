@@ -447,11 +447,161 @@ La Skill permanece `Experimental` hasta acumular uso real suficiente para decidi
 
 ---
 
+## $revisar-pr-proyecto
+
+**Estado:** Planificada  
+**Versión de contrato:** 0.1  
+**Última revisión:** 2026-08-10
+
+### Propósito
+
+Auditar un pull request de Finanzas Familiares contra su objetivo funcional, la memoria canónica, el estado real de `main`, el diff completo y la evidencia disponible de pruebas, migraciones y checks, para decidir si requiere correcciones antes de continuar o si está listo para pasar a validación local humana.
+
+La Skill es de solo lectura. No corrige el PR, no modifica GitHub y no sustituye la validación local ni la decisión humana de merge.
+
+### Cuándo usarla
+
+- Después de que Codex abra un PR de implementación o corrección.
+- Después de que Codex aplique correcciones a un PR previamente revisado.
+- Antes de preparar el protocolo de validación local.
+- Cuando exista duda sobre si un PR respeta alcance, reglas, migraciones, pruebas o arquitectura vigente.
+
+No debe utilizarse como sustituto de la especificación previa ni como aprobación automática de merge.
+
+### Fuentes que debe consultar
+
+1. PR objetivo: metadata, base/head, estado, descripción y commits relevantes.
+2. Diff completo y lista real de archivos modificados del PR.
+3. Checks/CI disponibles, estado de merge/conflictos y revisiones/comentarios relevantes cuando existan.
+4. `docs/project-memory/CURRENT_STATE.md` desde `main`.
+5. `docs/project-memory/PRODUCT_MAP.md` desde `main` para ubicar módulos afectados.
+6. `docs/project-memory/BUSINESS_RULES.md` desde `main` para reglas funcionales aplicables.
+7. `docs/project-memory/DECISIONS.md` desde `main` para decisiones vigentes.
+8. `docs/project-memory/WORKFLOW.md` desde `main` para criterios del proceso.
+9. Especificación para Codex u objetivo funcional confirmado, cuando esté disponible en la conversación, PR o memoria.
+10. Código, pruebas, esquemas y migraciones relevantes en `main` cuando sean necesarios para interpretar correctamente el diff.
+
+### Procedimiento obligatorio
+
+1. Confirmar el PR exacto y verificar que su base sea la esperada; no asumir que un PR antiguo o abierto sigue vigente.
+2. Leer el objetivo funcional/especificación que el PR pretende satisfacer. Si no existe suficiente contexto para evaluar el comportamiento, usar el dictamen `BLOQUEADO POR CONTEXTO` en lugar de inventarlo.
+3. Leer memoria canónica relevante desde `main` y confirmar reglas/decisiones que condicionan el cambio.
+4. Obtener la lista completa de archivos cambiados y revisar el diff real del PR; no basar la auditoría únicamente en el resumen del autor o de Codex.
+5. Inspeccionar, cuando sea necesario, el código de `main` alrededor de los puntos modificados para distinguir cambios intencionales de regresiones o supuestos incorrectos.
+6. Comprobar como mínimo:
+   - alineación con objetivo y criterios de aceptación conocidos;
+   - reglas de negocio y decisiones vigentes;
+   - alcance y archivos/cambios fuera de alcance;
+   - compatibilidad con arquitectura vigente;
+   - migraciones, constraints, índices y compatibilidad de datos cuando apliquen;
+   - pruebas añadidas/modificadas y huecos de cobertura relevantes;
+   - riesgos de regresión;
+   - manejo de errores, idempotencia, aislamiento por hogar y seguridad cuando sean pertinentes al cambio;
+   - estado del PR, conflictos, checks/CI y revisiones pendientes disponibles.
+7. Separar hechos observados de inferencias. Un check ausente no debe presentarse como check fallido; una prueba reportada por el PR no debe presentarse como ejecutada independientemente por la Skill.
+8. Clasificar hallazgos por severidad:
+   - `CRÍTICO`: puede causar pérdida/corrupción de datos, vulneración de aislamiento/seguridad, comportamiento financiero incorrecto grave o hace inviable la implementación;
+   - `ALTO`: incumple un requisito/decisión, rompe un caso importante, introduce regresión material o deja una migración/compatibilidad insegura;
+   - `MEDIO`: defecto real o cobertura insuficiente que conviene corregir antes de validación local, pero no amenaza por sí solo integridad crítica;
+   - `BAJO`: mejora menor o riesgo residual que no bloquea necesariamente el paso a validación local.
+9. Evitar comentarios cosméticos o preferencias de estilo que no afecten corrección, mantenibilidad relevante, alcance o riesgo.
+10. Emitir exactamente uno de estos dictámenes:
+   - `CORREGIR ANTES`: existe al menos un hallazgo que debe resolverse antes de pedir validación local;
+   - `LISTO PARA VALIDACIÓN LOCAL`: no se observan bloqueos de revisión y las incertidumbres restantes pertenecen legítimamente a validación humana;
+   - `BLOQUEADO POR CONTEXTO`: falta una decisión, especificación o evidencia imprescindible para evaluar el PR con seguridad.
+11. Terminar con una sola siguiente acción concreta.
+
+### Política de evidencia
+
+La Skill debe distinguir claramente entre:
+
+- hechos observados directamente en GitHub/diff/código;
+- resultados de pruebas o checks mostrados por GitHub;
+- pruebas que el autor afirma haber ejecutado pero que no están verificadas por CI;
+- inferencias técnicas derivadas del diff.
+
+No debe afirmar que una suite, TypeScript, build, migración o flujo manual “pasa” sin evidencia observable correspondiente.
+
+### Relación con la validación local
+
+`LISTO PARA VALIDACIÓN LOCAL` no significa `LISTO PARA MERGE`.
+
+Cuando el dictamen sea `LISTO PARA VALIDACIÓN LOCAL`, la siguiente etapa del pipeline es preparar el protocolo específico mediante `$generar-plan-validacion-local` cuando esa Skill esté disponible, o entregar únicamente una indicación breve de que corresponde validación local si todavía no está disponible.
+
+La revisión puede identificar áreas que deben probarse localmente, pero no debe reemplazar esa Skill generando un protocolo exhaustivo dentro del mismo resultado.
+
+### Puede hacer
+
+- Leer PR, diff, commits, comentarios, reviews, checks y estado de GitHub.
+- Leer memoria canónica y código relevante en `main`.
+- Inspeccionar pruebas, migraciones, esquemas y archivos modificados.
+- Comparar implementación contra objetivo, decisiones, reglas y arquitectura.
+- Señalar hallazgos concretos con archivo/área afectada cuando exista evidencia.
+- Recomendar corrección por Codex o paso a validación local.
+
+### No puede hacer
+
+- Modificar código, memoria, ramas, PR, comentarios, reviews o labels.
+- Resolver threads, aprobar/rechazar formalmente el PR ni cambiar su estado.
+- Hacer merge.
+- Inventar resultados de pruebas/checks.
+- Tratar el resumen de Codex como sustituto del diff.
+- Recomendar merge directo sin validación local cuando ésta sea requerida por el workflow.
+- Convertir preferencias cosméticas en bloqueos.
+- Generar el protocolo exhaustivo de validación local que corresponde a `$generar-plan-validacion-local`.
+
+### Resultado esperado
+
+La salida debe ser breve pero verificable y usar esta estructura:
+
+```text
+REVISIÓN DE PR
+
+PR
+#XXX — título
+
+OBJETIVO EVALUADO
+...
+
+ESTADO TÉCNICO
+- base/head
+- merge/conflictos
+- checks/CI disponibles
+
+HALLAZGOS
+[CRÍTICO|ALTO|MEDIO|BAJO] archivo/área — problema, evidencia e impacto
+...
+
+PRUEBAS / MIGRACIONES / COMPATIBILIDAD
+- evidencia observada
+- huecos relevantes
+
+DICTAMEN
+CORREGIR ANTES | LISTO PARA VALIDACIÓN LOCAL | BLOQUEADO POR CONTEXTO
+
+SIGUIENTE ACCIÓN
+Una sola acción concreta.
+```
+
+Si no existen hallazgos materiales, debe decirlo explícitamente en `HALLAZGOS`; no inventar observaciones para llenar la sección.
+
+### Criterios para pasar a Experimental
+
+- Crear la Skill con este contrato como base.
+- Probarla contra un PR real con al menos un defecto/riesgo material conocido y confirmar que lo detecta desde el diff.
+- Confirmar que consulta memoria canónica y objetivo/especificación relevantes.
+- Confirmar que revisa la lista completa de archivos y no depende sólo del resumen del PR.
+- Confirmar que distingue evidencia de checks/pruebas reportadas e inferencias.
+- Probarla contra un PR sin bloqueos materiales conocidos y verificar que puede emitir `LISTO PARA VALIDACIÓN LOCAL` sin recomendar merge.
+- Probar un caso con contexto insuficiente y comprobar `BLOQUEADO POR CONTEXTO` sin inventar requisitos.
+- Confirmar que no modifica GitHub ni memoria.
+
+---
+
 ## Skills previstas para el pipeline v2
 
 Las siguientes Skills están identificadas como candidatas, pero su contrato todavía no está definido. No deben asumirse disponibles hasta que tengan una sección propia en este catálogo.
 
-- `$revisar-pr-proyecto`: auditar un PR contra memoria, reglas, alcance, pruebas y riesgos.
 - `$generar-plan-validacion-local`: producir un protocolo específico de pruebas humanas para el PR listo para validar.
 
 ## Regla de mantenimiento del catálogo
