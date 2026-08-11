@@ -449,7 +449,7 @@ La Skill permanece `Experimental` hasta acumular uso real suficiente para decidi
 
 ## $revisar-pr-proyecto
 
-**Estado:** Planificada  
+**Estado:** Experimental  
 **Versión de contrato:** 0.2  
 **Última revisión:** 2026-08-10
 
@@ -628,6 +628,19 @@ Cuando falte respaldo vigente, la siguiente acción debe orientarse a confirmar 
 - Probarla contra un PR sin bloqueos materiales conocidos y verificar que puede emitir `LISTO PARA VALIDACIÓN LOCAL` sin recomendar merge.
 - Probar un PR antiguo/no vigente cuya descripción explique bien su objetivo pero que carezca de respaldo funcional actual, y comprobar que emite `BLOQUEADO POR CONTEXTO` aunque encuentre defectos técnicos.
 - Confirmar que no modifica GitHub ni memoria.
+
+### Validación Experimental
+
+Completada el 2026-08-10:
+
+- PR #73 como caso vigente con defectos materiales: detectó desalineación entre índice único y `onConflict`, colisión entre obligaciones de distintas subcategorías, estados mixtos incompletos y regresión semanal; emitió `CORREGIR ANTES`;
+- PR #82 como caso histórico sin bloqueos materiales: distinguió el estado posterior al merge de la evaluación histórica, verificó el alcance documental y emitió `LISTO PARA VALIDACIÓN LOCAL` sin recomendar merge;
+- PR #24 como caso histórico sin respaldo vigente: tras el ajuste 0.2 separó objetivo declarado de vigencia funcional, mantuvo los riesgos técnicos como contexto y emitió `BLOQUEADO POR CONTEXTO` con una siguiente acción orientada a confirmar la decisión;
+- en los tres casos consultó memoria canónica, estado real de GitHub, diff y evidencia disponible, distinguió pruebas reportadas de checks observables y no modificó GitHub ni memoria.
+
+La Skill permanece `Experimental` hasta acumular uso real suficiente para decidir si su contrato puede considerarse estable y pasar a `Vigente`.
+
+---
 
 ### Ajuste de contrato 0.2
 
