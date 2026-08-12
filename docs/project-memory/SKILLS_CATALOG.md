@@ -651,7 +651,7 @@ Motivado por la tercera prueba controlada de la versión 0.1 con el PR #24. La S
 ## $generar-plan-validacion-local
 
 **Estado:** Planificada  
-**Versión de contrato:** 0.1  
+**Versión de contrato:** 0.2  
 **Última revisión:** 2026-08-11
 
 ### Propósito
@@ -675,16 +675,42 @@ Antes de generar el protocolo debe existir evidencia suficiente de que:
 1. el PR exacto está identificado;
 2. existe un dictamen vigente `LISTO PARA VALIDACIÓN LOCAL`;
 3. ese dictamen corresponde al mismo `head SHA` que se pretende validar;
-4. el objetivo/criterios de aceptación y los riesgos residuales relevantes pueden reconstruirse desde la revisión, especificación, memoria y PR.
+4. la procedencia del dictamen y del `head SHA` revisado es verificable;
+5. el objetivo/criterios de aceptación y los riesgos residuales relevantes pueden reconstruirse desde la revisión, especificación, memoria y PR.
 
 Si el `head SHA` cambió después de la revisión, la validación anterior queda obsoleta y debe repetirse `$revisar-pr-proyecto` antes de generar un nuevo plan.
 
 Si no puede confirmar un dictamen vigente `LISTO PARA VALIDACIÓN LOCAL`, no debe inventarlo ni realizar una revisión abreviada para saltarse la etapa anterior.
 
+### Procedencia verificable de la revisión
+
+Una revisión previa sólo puede considerarse válida para esta Skill cuando su resultado y el `head SHA` revisado están disponibles de forma observable en una fuente explícita accesible durante la ejecución.
+
+Fuentes aceptables:
+
+- una salida de `$revisar-pr-proyecto` presente en la conversación actual;
+- una fuente persistente/canónica explícita que registre inequívocamente el PR, el dictamen y el `head SHA` revisado.
+
+No son fuentes suficientes:
+
+- memoria implícita del modelo;
+- una conversación borrada o no accesible;
+- una afirmación genérica de que “ya se revisó” sin evidencia del resultado y SHA;
+- un SHA inferido o reconstruido sin fuente explícita;
+- datos que parezcan provenir de otra revisión o PR.
+
+Si la procedencia no puede verificarse:
+
+- tratar el dictamen como no confirmado;
+- mostrar `HEAD REVISADO: No confirmado`;
+- no inventar ni reutilizar un hash;
+- emitir `PLAN DE VALIDACIÓN BLOQUEADO`;
+- indicar como siguiente acción ejecutar `$revisar-pr-proyecto` sobre el PR real.
+
 ### Fuentes que debe consultar
 
 1. PR objetivo: metadata, base/head, estado, lista de archivos y diff vigente.
-2. Resultado vigente de `$revisar-pr-proyecto`, cuando esté disponible en la conversación o contexto confirmado.
+2. Resultado vigente de `$revisar-pr-proyecto`, únicamente cuando su procedencia sea observable y verificable según la regla anterior.
 3. Especificación para Codex, decisión o criterios de aceptación relevantes.
 4. `docs/project-memory/CURRENT_STATE.md` desde `main`.
 5. `docs/project-memory/PRODUCT_MAP.md` desde `main`.
@@ -696,10 +722,12 @@ Si no puede confirmar un dictamen vigente `LISTO PARA VALIDACIÓN LOCAL`, no deb
 ### Procedimiento obligatorio
 
 1. Confirmar PR, rama/head y `head SHA` actual.
-2. Confirmar que la última revisión aplicable emitió `LISTO PARA VALIDACIÓN LOCAL` para ese mismo `head SHA`.
-3. Reconstruir el objetivo y los criterios de aceptación que la validación debe demostrar.
-4. Revisar el diff y los archivos afectados sólo con el nivel necesario para diseñar las pruebas; no reabrir una auditoría general ya concluida.
-5. Identificar las superficies que requieren validación humana o local, priorizando:
+2. Identificar la fuente observable de la última revisión aplicable.
+3. Extraer de esa fuente el dictamen y el `head SHA` revisado; si cualquiera falta, es ambiguo o no corresponde al PR real, bloquear el plan sin inventar valores.
+4. Confirmar que la revisión emitió `LISTO PARA VALIDACIÓN LOCAL` para el mismo `head SHA` actual.
+5. Reconstruir el objetivo y los criterios de aceptación que la validación debe demostrar.
+6. Revisar el diff y los archivos afectados sólo con el nivel necesario para diseñar las pruebas; no reabrir una auditoría general ya concluida.
+7. Identificar las superficies que requieren validación humana o local, priorizando:
    - comportamiento funcional visible;
    - regresiones en rutas relacionadas;
    - persistencia y saldos/cálculos financieros cuando apliquen;
@@ -707,16 +735,16 @@ Si no puede confirmar un dictamen vigente `LISTO PARA VALIDACIÓN LOCAL`, no deb
    - permisos/aislamiento por hogar cuando apliquen;
    - estados de error y casos límite relevantes;
    - build, tipado, tests u otros comandos necesarios según el cambio.
-6. Derivar comandos únicamente de scripts, herramientas y convenciones observables del repositorio. No inventar scripts inexistentes.
-7. Separar el protocolo en preparación, verificaciones automatizadas, validación manual y comprobaciones de datos/migración cuando correspondan.
-8. Para cada paso manual indicar:
+8. Derivar comandos únicamente de scripts, herramientas y convenciones observables del repositorio. No inventar scripts inexistentes.
+9. Separar el protocolo en preparación, verificaciones automatizadas, validación manual y comprobaciones de datos/migración cuando correspondan.
+10. Para cada paso manual indicar:
    - acción concreta;
    - resultado esperado;
    - qué evidencia o anomalía debe reportarse.
-9. Ordenar las pruebas para detectar primero bloqueos baratos/rápidos y evitar trabajo manual innecesario si falla una comprobación crítica temprana.
-10. Incluir condiciones de parada: si una prueba crítica falla o aparece corrupción, regresión material, error de migración o comportamiento contrario a una regla/criterio, detener la validación y devolver el PR a corrección/revisión.
-11. No recomendar merge mientras quede pendiente una prueba crítica capaz de cambiar la decisión.
-12. Terminar indicando qué resultados mínimos debe devolver el usuario para poder decidir el siguiente paso.
+11. Ordenar las pruebas para detectar primero bloqueos baratos/rápidos y evitar trabajo manual innecesario si falla una comprobación crítica temprana.
+12. Incluir condiciones de parada: si una prueba crítica falla o aparece corrupción, regresión material, error de migración o comportamiento contrario a una regla/criterio, detener la validación y devolver el PR a corrección/revisión.
+13. No recomendar merge mientras quede pendiente una prueba crítica capaz de cambiar la decisión.
+14. Terminar indicando qué resultados mínimos debe devolver el usuario para poder decidir el siguiente paso.
 
 ### Anclaje al commit revisado
 
@@ -740,7 +768,7 @@ Si GitHub informa un SHA diferente antes o durante la validación:
 ### Puede hacer
 
 - Leer PR, diff, commits y estado de GitHub en modo lectura.
-- Leer memoria, especificación, revisión previa y código relacionado.
+- Leer memoria, especificación, revisión previa verificable y código relacionado.
 - Inspeccionar scripts, tests, migraciones y configuración.
 - Diseñar comandos y escenarios específicos respaldados por el repositorio.
 - Priorizar pruebas según riesgo e impacto.
@@ -752,6 +780,8 @@ Si GitHub informa un SHA diferente antes o durante la validación:
 - Hacer merge, aprobar formalmente el PR o cambiar su estado.
 - Sustituir `$revisar-pr-proyecto` ni convertir `CORREGIR ANTES`/`BLOQUEADO POR CONTEXTO` en un plan de validación.
 - Inventar que una prueba ya pasó.
+- Inventar o inferir una revisión previa, un dictamen o un `head SHA` sin fuente explícita verificable.
+- Usar memoria implícita del modelo como evidencia de una revisión previa.
 - Inventar scripts, rutas, comandos, tablas o flujos no observados.
 - Ejecutar operaciones destructivas sobre producción.
 - Recomendar merge antes de completar las validaciones críticas aplicables.
@@ -759,7 +789,7 @@ Si GitHub informa un SHA diferente antes o durante la validación:
 
 ### Resultado esperado
 
-La salida debe utilizar esta estructura:
+Cuando proceda generar el plan, la salida debe utilizar esta estructura:
 
 ```text
 PLAN DE VALIDACIÓN LOCAL
@@ -800,6 +830,27 @@ RESULTADO A REPORTAR
 - cualquier diferencia de SHA o cambio del PR durante la validación.
 ```
 
+Cuando no proceda generar el plan por falta de revisión verificable o por diferencia de SHA, debe usar:
+
+```text
+PLAN DE VALIDACIÓN BLOQUEADO
+
+PR
+#XXX — título
+
+MOTIVO
+...
+
+HEAD ACTUAL
+<sha>
+
+HEAD REVISADO
+<sha> | No confirmado
+
+SIGUIENTE ACCIÓN
+Una sola acción concreta.
+```
+
 Debe omitir secciones operativas que realmente no apliquen, excepto `DATOS / MIGRACIONES`, que puede indicar explícitamente `No aplica` cuando sea útil para dejar constancia.
 
 ### Criterios para pasar a Experimental
@@ -810,8 +861,13 @@ Debe omitir secciones operativas que realmente no apliquen, excepto `DATOS / MIG
 - Confirmar que deriva comandos de scripts/configuración reales y distingue pruebas automatizadas de validación humana.
 - Probar un cambio con migración/persistencia y comprobar que incluye validaciones de datos seguras y específicas.
 - Probar un PR o nuevo commit cuyo `head SHA` no coincida con la revisión previa y comprobar que se bloquea y pide repetir `$revisar-pr-proyecto`.
+- Probar un caso sin revisión previa observable y comprobar que emite `PLAN DE VALIDACIÓN BLOQUEADO`, muestra `HEAD REVISADO: No confirmado` y no inventa un SHA ni un dictamen.
 - Confirmar que incluye resultados esperados, condiciones de parada y evidencia mínima a reportar.
 - Confirmar que no modifica repositorio, GitHub ni datos.
+
+### Ajuste de contrato 0.2
+
+Motivado por la primera prueba controlada de la versión 0.1 con el PR #82 en un chat donde la revisión anterior ya no estaba disponible. La Skill se bloqueó correctamente, pero presentó como recuperado un dictamen y un SHA sin fuente observable. El contrato 0.2 exige procedencia verificable de la revisión previa y prohíbe reconstruir o inventar el dictamen o `head SHA` desde memoria implícita.
 
 ---
 
