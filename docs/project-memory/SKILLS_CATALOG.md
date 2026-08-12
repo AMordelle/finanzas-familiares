@@ -76,6 +76,8 @@ Si A, B y C ya están registrados y la conversación contiene A, B, C, D y E, ú
 
 Si se ejecuta dos veces sin decisiones nuevas, la segunda ejecución debe informar que la memoria ya está sincronizada y no crear cambios.
 
+Si se ejecuta dos veces sin decisiones nuevas, la segunda ejecución debe informar que la memoria ya está sincronizada y no crear cambios.
+
 ### Decisiones sustituidas
 
 Cuando una decisión vigente A sea reemplazada explícitamente por B:
@@ -648,11 +650,176 @@ Motivado por la tercera prueba controlada de la versión 0.1 con el PR #24. La S
 
 ---
 
+## $generar-plan-validacion-local
+
+**Estado:** Planificada  
+**Versión de contrato:** 0.1  
+**Última revisión:** 2026-08-11
+
+### Propósito
+
+Convertir un PR que ya fue revisado y obtuvo `LISTO PARA VALIDACIÓN LOCAL` en un protocolo concreto, reproducible y priorizado de pruebas que el usuario pueda ejecutar en su entorno local antes de decidir el merge.
+
+La Skill prepara la validación humana. No repite la auditoría completa del PR, no ejecuta por defecto las pruebas en lugar del usuario y no decide ni realiza el merge.
+
+### Cuándo usarla
+
+- Después de `$revisar-pr-proyecto` cuando el dictamen vigente sea `LISTO PARA VALIDACIÓN LOCAL`.
+- Cuando un PR revisado necesite traducir riesgos residuales, criterios de aceptación y cambios reales a pasos de validación local.
+- Para regenerar el plan si la revisión se repite sobre un nuevo `head SHA` y vuelve a resultar `LISTO PARA VALIDACIÓN LOCAL`.
+
+No debe utilizarse para un PR con dictamen `CORREGIR ANTES` o `BLOQUEADO POR CONTEXTO`, ni como sustituto de `$revisar-pr-proyecto`.
+
+### Precondiciones
+
+Antes de generar el protocolo debe existir evidencia suficiente de que:
+
+1. el PR exacto está identificado;
+2. existe un dictamen vigente `LISTO PARA VALIDACIÓN LOCAL`;
+3. ese dictamen corresponde al mismo `head SHA` que se pretende validar;
+4. el objetivo/criterios de aceptación y los riesgos residuales relevantes pueden reconstruirse desde la revisión, especificación, memoria y PR.
+
+Si el `head SHA` cambió después de la revisión, la validación anterior queda obsoleta y debe repetirse `$revisar-pr-proyecto` antes de generar un nuevo plan.
+
+Si no puede confirmar un dictamen vigente `LISTO PARA VALIDACIÓN LOCAL`, no debe inventarlo ni realizar una revisión abreviada para saltarse la etapa anterior.
+
+### Fuentes que debe consultar
+
+1. PR objetivo: metadata, base/head, estado, lista de archivos y diff vigente.
+2. Resultado vigente de `$revisar-pr-proyecto`, cuando esté disponible en la conversación o contexto confirmado.
+3. Especificación para Codex, decisión o criterios de aceptación relevantes.
+4. `docs/project-memory/CURRENT_STATE.md` desde `main`.
+5. `docs/project-memory/PRODUCT_MAP.md` desde `main`.
+6. `docs/project-memory/BUSINESS_RULES.md` y `DECISIONS.md` sólo cuando condicionen las pruebas.
+7. `docs/project-memory/WORKFLOW.md` desde `main`.
+8. Código, pruebas, migraciones, esquemas y configuración modificados o directamente relacionados con el PR.
+9. `package.json` y scripts/configuración reales del repositorio cuando proponga comandos automatizados.
+
+### Procedimiento obligatorio
+
+1. Confirmar PR, rama/head y `head SHA` actual.
+2. Confirmar que la última revisión aplicable emitió `LISTO PARA VALIDACIÓN LOCAL` para ese mismo `head SHA`.
+3. Reconstruir el objetivo y los criterios de aceptación que la validación debe demostrar.
+4. Revisar el diff y los archivos afectados sólo con el nivel necesario para diseñar las pruebas; no reabrir una auditoría general ya concluida.
+5. Identificar las superficies que requieren validación humana o local, priorizando:
+   - comportamiento funcional visible;
+   - regresiones en rutas relacionadas;
+   - persistencia y saldos/cálculos financieros cuando apliquen;
+   - migraciones y compatibilidad con datos existentes cuando apliquen;
+   - permisos/aislamiento por hogar cuando apliquen;
+   - estados de error y casos límite relevantes;
+   - build, tipado, tests u otros comandos necesarios según el cambio.
+6. Derivar comandos únicamente de scripts, herramientas y convenciones observables del repositorio. No inventar scripts inexistentes.
+7. Separar el protocolo en preparación, verificaciones automatizadas, validación manual y comprobaciones de datos/migración cuando correspondan.
+8. Para cada paso manual indicar:
+   - acción concreta;
+   - resultado esperado;
+   - qué evidencia o anomalía debe reportarse.
+9. Ordenar las pruebas para detectar primero bloqueos baratos/rápidos y evitar trabajo manual innecesario si falla una comprobación crítica temprana.
+10. Incluir condiciones de parada: si una prueba crítica falla o aparece corrupción, regresión material, error de migración o comportamiento contrario a una regla/criterio, detener la validación y devolver el PR a corrección/revisión.
+11. No recomendar merge mientras quede pendiente una prueba crítica capaz de cambiar la decisión.
+12. Terminar indicando qué resultados mínimos debe devolver el usuario para poder decidir el siguiente paso.
+
+### Anclaje al commit revisado
+
+El protocolo debe mostrar explícitamente el `head SHA` al que aplica.
+
+Si GitHub informa un SHA diferente antes o durante la validación:
+
+- detener el protocolo;
+- no asumir que los pasos siguen siendo suficientes;
+- ejecutar nuevamente `$revisar-pr-proyecto` sobre el nuevo head;
+- generar después un plan nuevo si vuelve a resultar `LISTO PARA VALIDACIÓN LOCAL`.
+
+### Política de entorno y datos
+
+- La validación se realiza en un entorno local/no productivo salvo decisión explícita distinta y segura.
+- No proponer operaciones destructivas sobre producción.
+- Si una migración o prueba puede modificar datos locales relevantes, advertirlo y definir precondiciones de respaldo/fixture cuando sea necesario.
+- No pedir secretos ni incluirlos en comandos o evidencia.
+- Cuando una prueba requiera datos representativos, describir las condiciones mínimas del escenario sin inventar datos personales o financieros reales.
+
+### Puede hacer
+
+- Leer PR, diff, commits y estado de GitHub en modo lectura.
+- Leer memoria, especificación, revisión previa y código relacionado.
+- Inspeccionar scripts, tests, migraciones y configuración.
+- Diseñar comandos y escenarios específicos respaldados por el repositorio.
+- Priorizar pruebas según riesgo e impacto.
+- Indicar resultados esperados, evidencia mínima y condiciones de parada.
+
+### No puede hacer
+
+- Modificar código, memoria, ramas, PR o datos del usuario.
+- Hacer merge, aprobar formalmente el PR o cambiar su estado.
+- Sustituir `$revisar-pr-proyecto` ni convertir `CORREGIR ANTES`/`BLOQUEADO POR CONTEXTO` en un plan de validación.
+- Inventar que una prueba ya pasó.
+- Inventar scripts, rutas, comandos, tablas o flujos no observados.
+- Ejecutar operaciones destructivas sobre producción.
+- Recomendar merge antes de completar las validaciones críticas aplicables.
+- Convertir el plan en una checklist genérica idéntica para cualquier PR.
+
+### Resultado esperado
+
+La salida debe utilizar esta estructura:
+
+```text
+PLAN DE VALIDACIÓN LOCAL
+
+PR
+#XXX — título
+
+HEAD VALIDADO
+<sha>
+
+OBJETIVO A DEMOSTRAR
+...
+
+PREPARACIÓN
+1. ...
+
+VERIFICACIONES AUTOMATIZADAS
+1. Comando: ...
+   Esperado: ...
+
+VALIDACIÓN MANUAL
+1. Acción: ...
+   Esperado: ...
+   Reportar si: ...
+
+DATOS / MIGRACIONES
+No aplica | pasos concretos y seguros
+
+REGRESIONES CLAVE
+1. ...
+
+CONDICIONES DE PARADA
+- ...
+
+RESULTADO A REPORTAR
+- comprobaciones críticas satisfactorias;
+- fallos/anomalías con paso y síntoma;
+- cualquier diferencia de SHA o cambio del PR durante la validación.
+```
+
+Debe omitir secciones operativas que realmente no apliquen, excepto `DATOS / MIGRACIONES`, que puede indicar explícitamente `No aplica` cuando sea útil para dejar constancia.
+
+### Criterios para pasar a Experimental
+
+- Crear la Skill con este contrato como base.
+- Probarla con un PR real que haya obtenido `LISTO PARA VALIDACIÓN LOCAL` y confirmar que genera un protocolo específico, no genérico.
+- Confirmar que el plan queda anclado al `head SHA` revisado.
+- Confirmar que deriva comandos de scripts/configuración reales y distingue pruebas automatizadas de validación humana.
+- Probar un cambio con migración/persistencia y comprobar que incluye validaciones de datos seguras y específicas.
+- Probar un PR o nuevo commit cuyo `head SHA` no coincida con la revisión previa y comprobar que se bloquea y pide repetir `$revisar-pr-proyecto`.
+- Confirmar que incluye resultados esperados, condiciones de parada y evidencia mínima a reportar.
+- Confirmar que no modifica repositorio, GitHub ni datos.
+
+---
+
 ## Skills previstas para el pipeline v2
 
-Las siguientes Skills están identificadas como candidatas, pero su contrato todavía no está definido. No deben asumirse disponibles hasta que tengan una sección propia en este catálogo.
-
-- `$generar-plan-validacion-local`: producir un protocolo específico de pruebas humanas para el PR listo para validar.
+No quedan Skills candidatas con contrato pendiente en el pipeline v2 actualmente definido. Nuevas Skills deberán discutirse y añadirse aquí antes de asumirse disponibles.
 
 ## Regla de mantenimiento del catálogo
 
