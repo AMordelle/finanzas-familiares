@@ -76,8 +76,6 @@ Si A, B y C ya están registrados y la conversación contiene A, B, C, D y E, ú
 
 Si se ejecuta dos veces sin decisiones nuevas, la segunda ejecución debe informar que la memoria ya está sincronizada y no crear cambios.
 
-Si se ejecuta dos veces sin decisiones nuevas, la segunda ejecución debe informar que la memoria ya está sincronizada y no crear cambios.
-
 ### Decisiones sustituidas
 
 Cuando una decisión vigente A sea reemplazada explícitamente por B:
