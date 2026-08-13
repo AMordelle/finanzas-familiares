@@ -25,7 +25,7 @@ Aplicación web responsiva para gestionar las finanzas del hogar compartido, pri
 ## Estado funcional conocido
 
 - Cuentas: funcional.
-- Movimientos: funcional y pieza central para consulta mediante filtros.
+- Movimientos: funcional y pieza central para consulta mediante filtros. Está confirmada su siguiente evolución: filtro dependiente por subcategoría y control para volver al inicio del historial.
 - Extras: funcional para tiempo extra, destajo y comidas; permite crear, editar, marcar pagado y eliminar.
 - Flujos: en desarrollo activo.
 - Registro: funcional con captura conversacional multi-movimiento integrada mediante PR #58; permite interpretar y guardar varios movimientos en una sola entrada conservando trazabilidad individual.
@@ -81,8 +81,8 @@ Antes de validación local, la implementación debe reconstruirse o actualizarse
 
 ## Siguiente paso
 
-Corregir o reconstruir el PR #73 desde el `main` vigente y repetir `$revisar-pr-proyecto` antes de preparar la validación local.
+Preparar una especificación autosuficiente para implementar en un PR pequeño el filtro por subcategoría y el control para volver al inicio del historial de Movimientos, partiendo del `main` vigente.
 
 ## Última actualización
 
-2026-08-10 — PR #73 reclasificado como `CORREGIR ANTES`; `$revisar-pr-proyecto` validada como `Experimental`.
+2026-08-12 — Evolución de Movimientos confirmada: filtro dependiente por subcategoría y control para volver al inicio del historial.
