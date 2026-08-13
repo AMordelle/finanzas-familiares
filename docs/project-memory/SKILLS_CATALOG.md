@@ -460,8 +460,8 @@ Motivado por el uso real posterior a la especificación del filtro de subcategor
 ## $revisar-pr-proyecto
 
 **Estado:** Experimental  
-**Versión de contrato:** 0.2  
-**Última revisión:** 2026-08-10
+**Versión de contrato:** 0.3  
+**Última revisión:** 2026-08-12
 
 ### Propósito
 
@@ -535,7 +535,7 @@ Para PR recientes creados dentro del pipeline actual, una especificación confir
    - `CORREGIR ANTES`: existe respaldo vigente y al menos un hallazgo que debe resolverse antes de pedir validación local;
    - `LISTO PARA VALIDACIÓN LOCAL`: existe respaldo vigente, no se observan bloqueos de revisión y las incertidumbres restantes pertenecen legítimamente a validación humana;
    - `BLOQUEADO POR CONTEXTO`: falta respaldo vigente, una decisión, una especificación o evidencia imprescindible para evaluar legítimamente si el PR debe continuar.
-13. Terminar con una sola siguiente acción concreta.
+13. Terminar con una sola siguiente acción concreta. Cuando el dictamen sea `CORREGIR ANTES`, esa acción debe ser un prompt correctivo autosuficiente listo para copiar a Codex, anclado al PR, rama y `head SHA` revisado. Debe convertir los hallazgos bloqueantes en correcciones concretas, exigir las pruebas necesarias, ordenar publicar sobre la misma rama sin merge y pedir como evidencia el nuevo head, archivos modificados y resultados exactos. Si el head cambió desde la revisión, el prompt debe ordenar detenerse y reportarlo.
 
 ### Regla de precedencia del contexto
 
@@ -622,6 +622,19 @@ CORREGIR ANTES | LISTO PARA VALIDACIÓN LOCAL | BLOQUEADO POR CONTEXTO
 
 SIGUIENTE ACCIÓN
 Una sola acción concreta.
+
+Cuando el dictamen sea CORREGIR ANTES:
+
+PROMPT PARA CODEX
+Corrige el PR #XXX sobre su misma rama, partiendo del head revisado <SHA>. Confirma primero que el head no cambió; si cambió, detente y repórtalo.
+
+Correcciones obligatorias:
+1. [archivo/área, problema, evidencia, comportamiento esperado e impacto que debe evitarse]
+
+Pruebas requeridas:
+- [pruebas y comandos concretos]
+
+Publica en la misma rama, no hagas merge e informa el nuevo head SHA, archivos modificados, resultados exactos y limitaciones pendientes.
 ```
 
 Si no existen hallazgos materiales, debe decirlo explícitamente en `HALLAZGOS`; no inventar observaciones para llenar la sección.
@@ -655,6 +668,12 @@ La Skill permanece `Experimental` hasta acumular uso real suficiente para decidi
 ### Ajuste de contrato 0.2
 
 Motivado por la tercera prueba controlada de la versión 0.1 con el PR #24. La Skill identificó correctamente defectos técnicos y obsolescencia, pero tomó el objetivo declarado por el propio PR como autoridad suficiente para recomendar reconstruirlo. El contrato 0.2 corrige esa debilidad: separa explícitamente objetivo declarado de respaldo vigente y da precedencia a la falta de vigencia funcional sobre el dictamen técnico de continuidad.
+
+---
+
+### Ajuste de contrato 0.3
+
+Motivado por el uso real con el PR #90. La versión 0.2 detectó y clasificó correctamente los bloqueos, pero su siguiente acción todavía requería que el usuario tradujera manualmente los hallazgos a instrucciones para Codex. La versión 0.3 exige que `CORREGIR ANTES` entregue un prompt correctivo autosuficiente, anclado al PR y `head SHA`, listo para copiar y con evidencia de retorno obligatoria.
 
 ---
 
