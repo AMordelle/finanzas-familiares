@@ -46,9 +46,7 @@ La navegación simplificada del producto se concentra actualmente en seis áreas
 
 **Estado:** funcional y considerado una pieza central del producto.
 
-**Características conocidas:** filtros para consultar movimientos y localizar actividad financiera relevante.
-
-**Evolución confirmada:** añadir un filtro de subcategoría dependiente de la categoría seleccionada. El selector de subcategoría permanecerá deshabilitado mientras no se elija una categoría y se reiniciará cuando cambie la categoría. El resumen dinámico debe reflejar el total del conjunto filtrado para conocer cuánto se gasta en la subcategoría durante el periodo seleccionado. También se añadirá un control para volver al inicio cuando el historial sea largo.
+**Características conocidas:** filtros para consultar movimientos y localizar actividad financiera relevante; filtro de subcategoría dependiente de la categoría seleccionada, incluyendo movimientos sin subcategoría y claves históricas inactivas; resumen dinámico calculado sobre el conjunto que cumple todos los filtros activos; control para volver al inicio en historiales largos. El selector de subcategoría permanece deshabilitado mientras no se elija una categoría y se reinicia cuando cambia la categoría.
 
 **Relaciones:** alimenta saldos, cierres, análisis y otras lecturas derivadas. La captura desde Registro debe terminar produciendo movimientos trazables.
 
