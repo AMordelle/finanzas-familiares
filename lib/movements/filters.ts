@@ -3,6 +3,8 @@ import type { AccountOption, MovementHistoryItem } from '@/lib/db/queries';
 export type DateFilter = 'all'|'today'|'this_week'|'this_month'|'previous_month'|'custom';
 export type AmountFilter = 'all'|'lt_100'|'100_500'|'500_1000'|'gt_1000'|'custom';
 export type AccountMode = 'any'|'source'|'destination'|'involved';
+export const ALL_SUBCATEGORIES = 'all';
+export const WITHOUT_SUBCATEGORY = '__WITHOUT_SUBCATEGORY__';
 
 export type MovementFilters = {
   dateFilter: DateFilter;
@@ -12,6 +14,7 @@ export type MovementFilters = {
   accountMode: AccountMode;
   account: string;
   category: string;
+  subcategory: string;
   amountFilter: AmountFilter;
   customAmountMin?: number;
   customAmountMax?: number;
@@ -32,7 +35,7 @@ export function applyQuickFilter(kind: QuickFilter, base: MovementFilters): Move
   if (kind === 'gastos_hormiga') return { ...base, type: 'gasto', amountFilter: 'custom', customAmountMin: 0, customAmountMax: 150, dateFilter: 'this_month' };
   if (kind === 'gastos_fuertes') return { ...base, amountFilter: 'gt_1000' };
   if (kind === 'deuda') return { ...base, type: 'pago_deuda' };
-  if (kind === 'sin_clasificar') return { ...base, category: '__UNCLASSIFIED__' };
+  if (kind === 'sin_clasificar') return { ...base, category: '__UNCLASSIFIED__', subcategory: ALL_SUBCATEGORIES };
   return { ...base, search: 'operativa negocio operación' };
 }
 
@@ -69,6 +72,11 @@ export function filterMovements(movements: MovementHistoryItem[], filters: Movem
       const c = (m.categoria || '').toLowerCase();
       if (c && !['sin_categoria', 'sin categoría', 'otros', 'n/a'].includes(c)) return false;
     } else if (filters.category !== 'all' && m.categoria !== filters.category) return false;
+
+    const subcategory = filters.subcategory ?? ALL_SUBCATEGORIES;
+    if (subcategory === WITHOUT_SUBCATEGORY) {
+      if ((m.subcategoria ?? '').trim() !== '') return false;
+    } else if (subcategory !== ALL_SUBCATEGORIES && m.subcategoria !== subcategory) return false;
 
     if (filters.amountFilter === 'lt_100' && !(m.monto < 100)) return false;
     if (filters.amountFilter === '100_500' && !(m.monto >= 100 && m.monto <= 500)) return false;
