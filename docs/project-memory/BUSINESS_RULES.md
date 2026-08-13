@@ -15,6 +15,8 @@
 2. Las cuentas pueden representar dinero operativo o posiciones financieras/obligaciones según su función.
 3. Una transferencia entre cuentas no debe convertirse artificialmente en ingreso o gasto cuando económicamente solo representa movimiento de fondos.
 4. Un préstamo recibido no es ingreso: aumenta la disponibilidad de efectivo y simultáneamente genera una obligación.
+5. El filtro de subcategoría de Movimientos depende de una categoría seleccionada: debe permanecer deshabilitado mientras la categoría sea `Todas` y reiniciarse cuando cambie la categoría.
+6. El total mostrado al filtrar por subcategoría debe calcularse a partir de los movimientos que también cumplan los demás filtros activos, incluido el periodo.
 
 ## Registro
 
