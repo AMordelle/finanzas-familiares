@@ -284,8 +284,8 @@ La Skill permanece `Experimental` hasta acumular uso real suficiente para decidi
 ## $preparar-especificacion-codex
 
 **Estado:** Experimental  
-**Versión de contrato:** 0.1  
-**Última revisión:** 2026-08-10
+**Versión de contrato:** 0.2  
+**Última revisión:** 2026-08-12
 
 ### Propósito
 
@@ -374,9 +374,13 @@ Puede resolver detalles técnicos menores a partir de patrones observables del r
 
 ### Resultado esperado
 
-Cuando la decisión esté suficientemente cerrada, entregar una especificación directamente reutilizable, por ejemplo:
+Cuando la decisión esté suficientemente cerrada, entregar un único bloque directamente reutilizable, por ejemplo:
 
 ```text
+INSTRUCCIÓN DE IMPLEMENTACIÓN
+
+Implementa la siguiente especificación partiendo del main vigente. Crea una rama nueva y un PR pequeño y enfocado contra main. No hagas merge. Ejecuta las pruebas requeridas e informa el número del PR, el head SHA, los archivos modificados y los resultados exactos de las pruebas.
+
 ESPECIFICACIÓN PARA CODEX
 
 OBJETIVO
@@ -444,6 +448,12 @@ Completada el 2026-08-10:
 - sincronización posterior de esa discrepancia mediante el PR documental #81, ya fusionado.
 
 La Skill permanece `Experimental` hasta acumular uso real suficiente para decidir si su contrato puede considerarse estable y pasar a `Vigente`.
+
+---
+
+### Ajuste de contrato 0.2
+
+Motivado por el uso real posterior a la especificación del filtro de subcategorías de Movimientos. La versión 0.1 entregaba correctamente el contenido técnico, pero dejaba fuera del bloque reutilizable la instrucción operativa para que Codex partiera de `main`, creara rama y PR, evitara el merge y reportara evidencia exacta de la entrega. La versión 0.2 incorpora esa instrucción como parte obligatoria e inseparable de la salida.
 
 ---
 
