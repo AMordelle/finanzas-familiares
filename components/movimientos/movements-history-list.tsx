@@ -1,13 +1,15 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import React from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
+import { ArrowUp } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import type { AccountOption, FinancialCategoryCatalogItem, MovementHistoryItem } from '@/lib/db/queries';
 import { formatCurrencyMXN } from '@/lib/formatters/currency';
 import { deleteMovementAction, updateMovementAction } from '@/app/movimientos/actions';
-import { applyQuickFilter, buildDynamicSummary, filterMovements, inferCategories, type MovementFilters, type QuickFilter } from '@/lib/movements/filters';
+import { ALL_SUBCATEGORIES, applyQuickFilter, buildDynamicSummary, filterMovements, inferCategories, WITHOUT_SUBCATEGORY, type MovementFilters, type QuickFilter } from '@/lib/movements/filters';
 
 type Props = {
   movements: MovementHistoryItem[];
@@ -19,6 +21,14 @@ type MovementVisual = {
   shortType: 'Ingreso' | 'Gasto efectivo' | 'Gasto TDC' | 'Pago deuda' | 'Transferencia' | 'Traslado deuda';
   impact: 'inflow' | 'outflow' | 'neutral';
 };
+
+export function changeMovementCategory(filters: MovementFilters, category: string): MovementFilters {
+  return { ...filters, category, subcategory: ALL_SUBCATEGORIES };
+}
+
+export function getSubcategoriesForCategory(categoryCatalog: FinancialCategoryCatalogItem[], category: string) {
+  return categoryCatalog.find((item) => item.key === category)?.subcategories ?? [];
+}
 
 function formatDate(value: string) {
   const date = new Date(value);
@@ -84,9 +94,17 @@ export function MovementsHistoryList({ movements, accounts, categoryCatalog }: P
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
-  const defaultFilters: MovementFilters = { dateFilter: 'all', type: 'all', accountMode: 'any', account: '', category: 'all', amountFilter: 'all', search: '' };
+  const defaultFilters: MovementFilters = { dateFilter: 'all', type: 'all', accountMode: 'any', account: '', category: 'all', subcategory: ALL_SUBCATEGORIES, amountFilter: 'all', search: '' };
   const [filters, setFilters] = useState<MovementFilters>(defaultFilters);
   const categories = useMemo(() => inferCategories(movements), [movements]);
+  const selectedCatalogCategory = useMemo(
+    () => categoryCatalog.find((item) => item.key === filters.category),
+    [categoryCatalog, filters.category]
+  );
+  const availableSubcategories = useMemo(
+    () => getSubcategoriesForCategory(categoryCatalog, filters.category),
+    [categoryCatalog, filters.category]
+  );
   const filteredMovements = useMemo(() => filterMovements(movements, filters, accounts), [movements, filters, accounts]);
   const summary = useMemo(() => buildDynamicSummary(filteredMovements), [filteredMovements]);
   const hasActiveFilters = useMemo(() => {
@@ -95,6 +113,7 @@ export function MovementsHistoryList({ movements, accounts, categoryCatalog }: P
       filters.type !== 'all' ||
       filters.account !== '' ||
       filters.category !== 'all' ||
+      filters.subcategory !== ALL_SUBCATEGORIES ||
       filters.amountFilter !== 'all' ||
       filters.search.trim() !== ''
     );
@@ -138,7 +157,26 @@ export function MovementsHistoryList({ movements, accounts, categoryCatalog }: P
           </select>
           <select className="rounded border p-2 text-sm" value={filters.accountMode} onChange={(e)=>setFilters((p)=>({...p,accountMode:e.target.value as MovementFilters['accountMode']}))}><option value="any">Cualquier cuenta involucrada</option><option value="source">Cuenta origen</option><option value="destination">Cuenta destino</option><option value="involved">Cualquier involucrada</option></select>
           <select className="rounded border p-2 text-sm" value={filters.account} onChange={(e)=>setFilters((p)=>({...p,account:e.target.value}))}><option value="">Todas las cuentas</option>{accounts.map((a)=><option key={a.id} value={a.name}>{a.name}</option>)}</select>
-          <select className="rounded border p-2 text-sm" value={filters.category} onChange={(e)=>setFilters((p)=>({...p,category:e.target.value}))}><option value="all">Todas las categorías</option><option value="__UNCLASSIFIED__">Sin clasificar</option>{categories.map((c)=><option key={c} value={c}>{c}</option>)}</select>
+          <select aria-label="Categoría" className="rounded border p-2 text-sm" value={filters.category} onChange={(e)=>setFilters((p)=>changeMovementCategory(p, e.target.value))}>
+            <option value="all">Todas las categorías</option><option value="__UNCLASSIFIED__">Sin clasificar</option>
+            {categories.map((categoryKey) => {
+              const catalogItem = categoryCatalog.find((item) => item.key === categoryKey);
+              return <option key={categoryKey} value={categoryKey}>{catalogItem?.name ?? categoryKey}</option>;
+            })}
+          </select>
+          <select
+            aria-label="Subcategoría"
+            className="rounded border p-2 text-sm disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
+            value={filters.subcategory}
+            disabled={!selectedCatalogCategory}
+            onChange={(e)=>setFilters((p)=>({...p,subcategory:e.target.value}))}
+          >
+            <option value={ALL_SUBCATEGORIES}>
+              {filters.category === 'all' ? 'Elige primero una categoría' : selectedCatalogCategory ? 'Todas las subcategorías' : 'Sin subcategorías disponibles'}
+            </option>
+            {selectedCatalogCategory && <option value={WITHOUT_SUBCATEGORY}>Sin subcategoría</option>}
+            {availableSubcategories.map((subcategory)=><option key={subcategory.id} value={subcategory.key}>{subcategory.name}</option>)}
+          </select>
           <select className="rounded border p-2 text-sm" value={filters.amountFilter} onChange={(e)=>setFilters((p)=>({...p,amountFilter:e.target.value as MovementFilters['amountFilter']}))}><option value="all">Todos los montos</option><option value="lt_100">menor a 100</option><option value="100_500">100 a 500</option><option value="500_1000">500 a 1000</option><option value="gt_1000">mayor a 1000</option><option value="custom">rango personalizado</option></select>
         </div>
         {filters.dateFilter === 'custom' && (
@@ -300,8 +338,48 @@ export function MovementsHistoryList({ movements, accounts, categoryCatalog }: P
           );
         })}
       </div>
+      <BackToTopButton />
     </>
   );
+}
+
+export const BACK_TO_TOP_THRESHOLD = 480;
+
+export function shouldShowBackToTop(scrollY: number) {
+  return scrollY > BACK_TO_TOP_THRESHOLD;
+}
+
+export function scrollSmoothlyToTop(target: Pick<Window, 'scrollTo'>) {
+  target.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+export function BackToTopControl({ visible, onActivate }: { visible: boolean; onActivate: () => void }) {
+  if (!visible) return null;
+
+  return (
+    <button
+      type="button"
+      aria-label="Volver al inicio"
+      title="Volver al inicio"
+      className="fixed bottom-20 right-4 z-40 flex h-11 w-11 items-center justify-center rounded-full bg-slate-900 text-white shadow-lg transition hover:bg-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-900 sm:bottom-6 sm:right-6"
+      onClick={onActivate}
+    >
+      <ArrowUp className="h-5 w-5" aria-hidden="true" />
+    </button>
+  );
+}
+
+export function BackToTopButton() {
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const updateVisibility = () => setVisible(shouldShowBackToTop(window.scrollY));
+    updateVisibility();
+    window.addEventListener('scroll', updateVisibility, { passive: true });
+    return () => window.removeEventListener('scroll', updateVisibility);
+  }, []);
+
+  return <BackToTopControl visible={visible} onActivate={() => scrollSmoothlyToTop(window)} />;
 }
 
 function EditMovementForm({
