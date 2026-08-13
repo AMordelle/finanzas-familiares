@@ -52,6 +52,10 @@ function itemAccent(level: PriorityDiagnostic['level']) {
   return 'border-l-emerald-300';
 }
 
+function metricDetailClass() {
+  return 'mt-2 rounded-md border border-slate-200 bg-white p-2 text-xs text-slate-600';
+}
+
 export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPressure, priorityDiagnostics, initialOpenCard = null }: Props) {
   const [openCard, setOpenCard] = useState<OpenCard>(initialOpenCard);
 
@@ -70,19 +74,37 @@ export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPres
                 {radar.status === 'estable' ? 'Estable' : radar.status === 'atencion' ? 'Atención' : 'Presión'}
               </span>
             </div>
-            <p className="mt-2 text-sm text-slate-700">{radar.actionToday}</p>
+            <p className="mt-2 text-sm text-slate-700">{radar.whatToDoToday}</p>
             <p className="mt-3 text-sm text-slate-700"><span className="font-medium text-slate-900">Carga {radar.windowLabel}:</span> {formatCurrencyMXN(radar.upcomingLoad)}</p>
           </button>
           {openCard === 'radar' ? (
             <div className="border-t border-slate-100 px-4 pb-4 pt-3 text-sm text-slate-700">
-              <p><span className="font-medium text-slate-900">Qué hacer hoy:</span> {radar.actionTodayDetail}</p>
-              <p className="mt-2"><span className="font-medium text-slate-900">Qué viene pronto:</span> {radar.upcoming}</p>
-              <p className="mt-2"><span className="font-medium text-slate-900">Riesgo actual:</span> {radar.riskText}</p>
-              <p className="mt-2"><span className="font-medium text-slate-900">Próximo paso ideal:</span> {radar.nextBestStep}</p>
+              <p><span className="font-medium text-slate-900">Qué hacer hoy:</span> {radar.whatToDoToday}</p>
+              <p className="mt-2"><span className="font-medium text-slate-900">Por qué importa:</span> {radar.whyItMatters}</p>
+              <p className="mt-2"><span className="font-medium text-slate-900">Qué viene pronto:</span> {radar.whatIsComing}</p>
+              <p className="mt-2"><span className="font-medium text-slate-900">Próximo paso ideal:</span> {radar.nextBestAction}</p>
               <div className="mt-3 grid gap-2 rounded-md bg-slate-50 p-3 text-xs sm:grid-cols-3">
                 <p><span className="font-medium text-slate-900">Disponible actual:</span> {formatCurrencyMXN(radar.availableNow)}</p>
-                <p><span className="font-medium text-slate-900">Carga {radar.windowLabel}:</span> {formatCurrencyMXN(radar.upcomingLoad)}</p>
+                <div>
+                  <p><span className="font-medium text-slate-900">Carga {radar.windowLabel}:</span> {formatCurrencyMXN(radar.upcomingLoad)}</p>
+                  <details className={metricDetailClass()}>
+                    <summary className="cursor-pointer font-medium text-slate-700">Ver detalle</summary>
+                    <ul className="mt-1 space-y-1">
+                      {radar.breakdowns.upcoming7dLoad.map((item) => (
+                        <li key={`${item.label}-${item.amount}`}>• {item.label}: {formatCurrencyMXN(item.amount)}</li>
+                      ))}
+                    </ul>
+                  </details>
+                </div>
                 <p><span className="font-medium text-slate-900">Margen estimado:</span> {formatCurrencyMXN(radar.estimatedMargin)}</p>
+              </div>
+              <div className="mt-2 rounded-md bg-slate-50 p-3 text-xs text-slate-700">
+                <p><span className="font-medium text-slate-900">Faltante sin fricción:</span> {formatCurrencyMXN(Math.max(radar.breakdowns.frictionGap.gap, 0))}</p>
+                <details className={metricDetailClass()}>
+                  <summary className="cursor-pointer font-medium text-slate-700">Ver detalle</summary>
+                  <p className="mt-1">{radar.breakdowns.frictionGap.formula}</p>
+                  <p className="mt-1">({formatCurrencyMXN(radar.breakdowns.frictionGap.buffer)} + {formatCurrencyMXN(radar.breakdowns.frictionGap.immediateLoad)}) - {formatCurrencyMXN(radar.breakdowns.frictionGap.availableLiquidity)} = {formatCurrencyMXN(radar.breakdowns.frictionGap.gap)}</p>
+                </details>
               </div>
               {radar.nearFutureLoad > 0 ? (
                 <p className="mt-2 text-xs text-slate-600">
@@ -114,9 +136,17 @@ export function AnalyticsAdvisorCards({ radar, financialPressure: _financialPres
                   <li key={diagnostic.key} className={`rounded-md border-l-2 bg-slate-50 p-3 ${itemAccent(diagnostic.level)}`}>
                     <p className="font-medium text-slate-900">{diagnostic.title}</p>
                     <p className="mt-2 text-sm text-slate-700">{diagnostic.explanation}</p>
-                    {diagnostic.action ? (
-                      <p className="mt-2 text-xs text-slate-600"><span className="font-medium text-slate-800">Siguiente paso:</span> {diagnostic.action}</p>
+                    {diagnostic.evidence.length ? (
+                      <details className={metricDetailClass()}>
+                        <summary className="cursor-pointer font-medium text-slate-700">Ver detalle</summary>
+                        <ul className="mt-1 space-y-1">
+                          {diagnostic.evidence.map((evidence) => (
+                            <li key={`${diagnostic.key}-${evidence.label}`}>• {evidence.label}: {evidence.value}</li>
+                          ))}
+                        </ul>
+                      </details>
                     ) : null}
+                    <p className="mt-2 text-xs text-slate-600"><span className="font-medium text-slate-800">Siguiente paso:</span> {diagnostic.recommendedAction}</p>
                   </li>
                 ))}
               </ul>

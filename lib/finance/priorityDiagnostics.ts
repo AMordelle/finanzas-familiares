@@ -7,8 +7,12 @@ import { deriveSharedTacticalMetrics, type SharedTacticalMetrics } from '@/lib/f
 export type PriorityDiagnostic = {
   key: string;
   level: 'high' | 'medium' | 'low';
+  priority: 'alta' | 'media' | 'baja';
   title: string;
   explanation: string;
+  evidence: Array<{ label: string; value: string }>;
+  recommendedAction: string;
+  sourceMetrics: Record<string, number | string | null>;
   action?: string;
 };
 
@@ -42,6 +46,7 @@ type PrioritySignals = {
   debtBalances: number;
   recentSpendingPressure: number;
   shared: SharedTacticalMetrics;
+  recommendationContext?: HouseholdRecommendationContext | null;
 };
 
 function normalizedTokens(value: string) {
@@ -76,6 +81,12 @@ function riskLevelFromScore(score: number): PriorityDiagnostic['level'] {
   return 'low';
 }
 
+function priorityLabel(level: PriorityDiagnostic['level']): PriorityDiagnostic['priority'] {
+  if (level === 'high') return 'alta';
+  if (level === 'medium') return 'media';
+  return 'baja';
+}
+
 function extractUpcomingObligation(radar: FinancialRadar | null) {
   if (!radar?.upcoming) return null;
   const match = /En\s+(\d+)\s+d[ií]as\s+(?:vence|viene)\s+(.+?)(?:\.|$)/i.exec(radar.upcoming);
@@ -88,6 +99,29 @@ function extractUpcomingObligation(radar: FinancialRadar | null) {
     name,
     dueInDays: Number.isFinite(dueInDays) ? dueInDays : null
   };
+}
+
+function selectExpensiveDebt(context?: HouseholdRecommendationContext | null) {
+  if (!context) return null;
+  const debts = context.observed.accountBalances
+    .filter((account) => ['deuda', 'credit_card', 'loan'].includes(account.type.toLowerCase().trim()))
+    .filter((account) => account.balance > 0)
+    .map((account) => {
+      const name = account.name?.trim() || 'Deuda activa';
+      const normalized = name.toLowerCase();
+      const isRevolving = ['tdc', 'tarjeta', 'credit', 'credito', 'crédito', 'mpago'].some((token) => normalized.includes(token));
+      const isLoan = ['prestamo', 'préstamo', 'loan', 'hipoteca'].some((token) => normalized.includes(token));
+      const riskWeight = isRevolving ? 1.35 : isLoan ? 1.1 : 1;
+      return {
+        name,
+        balance: account.balance,
+        heuristic: isRevolving ? 'revolving_debt_balance_weighted' : isLoan ? 'installment_debt_balance_weighted' : 'generic_debt_balance',
+        score: account.balance * riskWeight
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return debts[0] ?? null;
 }
 
 function buildSignals(input: {
@@ -129,10 +163,21 @@ function buildSignals(input: {
     liquidity,
     debtBalances,
     recentSpendingPressure,
-    shared
+    shared,
+    recommendationContext: context
   };
 
   return signals;
+}
+
+function buildCandidate(base: Omit<Candidate, 'level' | 'priority' | 'action'> & { score: number }): Candidate {
+  const level = riskLevelFromScore(base.score);
+  return {
+    ...base,
+    level,
+    priority: priorityLabel(level),
+    action: base.recommendedAction
+  };
 }
 
 export function getPriorityDiagnostics(input: {
@@ -172,14 +217,24 @@ export function getPriorityDiagnostics(input: {
     ].filter(Boolean).length;
 
     if (pressurePoints >= 1) {
-      candidates.push({
+      candidates.push(buildCandidate({
         key: 'obligacion-inminente',
         score: 98,
-        level: 'high',
         title: `En ${upcomingObligation.dueInDays} días vence ${upcomingObligation.name} y esta semana queda justa`,
-        explanation: `Carga inmediata ${formatCurrencyMXN(signals.shared.upcoming7dLoad)} vs liquidez ${formatCurrencyMXN(signals.shared.availableNow)}. El colchón recomendado es ${formatCurrencyMXN(signals.shared.frictionBufferRequired)} y hoy faltan ${formatCurrencyMXN(Math.max(-signals.shared.marginAfterFrictionBuffer, 0))} para operar sin fricción.`,
-        action: 'Congela extras esta semana y deja separado ese pago desde hoy.'
-      });
+        explanation: `Carga inmediata ${formatCurrencyMXN(signals.shared.upcoming7dLoad)} vs liquidez ${formatCurrencyMXN(signals.shared.availableNow)}.`,
+        evidence: [
+          { label: 'Obligación próxima', value: `${upcomingObligation.name} (${upcomingObligation.dueInDays} días)` },
+          { label: 'Carga 7 días', value: formatCurrencyMXN(signals.shared.upcoming7dLoad) },
+          { label: 'Liquidez disponible', value: formatCurrencyMXN(signals.shared.availableNow) }
+        ],
+        recommendedAction: 'Congela gastos discrecionales y deja este pago separado desde hoy.',
+        sourceMetrics: {
+          dueInDays: upcomingObligation.dueInDays,
+          upcoming7dLoad: signals.shared.upcoming7dLoad,
+          availableNow: signals.shared.availableNow,
+          marginAfterFrictionBuffer: signals.shared.marginAfterFrictionBuffer
+        }
+      }));
     }
   }
 
@@ -196,40 +251,75 @@ export function getPriorityDiagnostics(input: {
     const tacticalShortfall = Math.max(signals.shared.upcoming7dLoad - signals.shared.availableNow, 0);
     const frictionShortfall = Math.max(signals.shared.frictionBufferRequired - signals.shared.tacticalMargin, 0);
     const shortfall = Math.max(tacticalShortfall, frictionShortfall, financialPressure?.gap ?? 0, 0);
-    candidates.push({
+    candidates.push(buildCandidate({
       key: 'semana-corta-liquidez',
       score: 92,
-      level: 'high',
       title: shortfall > 0
         ? `Esta semana te falta ${formatCurrencyMXN(shortfall)} para cubrir sin fricción`
         : 'Esta semana va muy al límite y cualquier gasto extra desordena el flujo',
-      explanation: `Carga inmediata: ${formatCurrencyMXN(signals.shared.upcoming7dLoad)} · Liquidez disponible: ${formatCurrencyMXN(signals.shared.availableNow)} · Colchón requerido: ${formatCurrencyMXN(signals.shared.frictionBufferRequired)} · Faltante contra colchón: ${formatCurrencyMXN(Math.max(-signals.shared.marginAfterFrictionBuffer, 0))}.`,
-      action: 'Reordena pagos por fecha y mueve lo postergable fuera de esta ventana.'
-    });
+      explanation: 'El faltante se calcula como (colchón recomendado + carga inmediata) - liquidez disponible.',
+      evidence: [
+        { label: 'Carga inmediata', value: formatCurrencyMXN(signals.shared.upcoming7dLoad) },
+        { label: 'Colchón recomendado', value: formatCurrencyMXN(signals.shared.frictionBufferRequired) },
+        { label: 'Liquidez disponible', value: formatCurrencyMXN(signals.shared.availableNow) },
+        { label: 'Faltante actual', value: formatCurrencyMXN(Math.max(shortfall, 0)) }
+      ],
+      recommendedAction: 'Reordena pagos por fecha y mueve lo postergable fuera de esta ventana.',
+      sourceMetrics: {
+        upcoming7dLoad: signals.shared.upcoming7dLoad,
+        frictionBufferRequired: signals.shared.frictionBufferRequired,
+        availableNow: signals.shared.availableNow,
+        shortfall
+      }
+    }));
   }
 
   if (signals.debtPressureRatio >= 0.35 || signals.debtBalances > 0 && signals.monthlyMargin < 0) {
     const debtPercent = Math.round(signals.debtPressureRatio * 100);
-    candidates.push({
+    const expensiveDebt = selectExpensiveDebt(signals.recommendationContext);
+    candidates.push(buildCandidate({
       key: 'deuda-recorta-margen',
       score: 84,
-      level: 'high',
       title: `Hoy ${debtPercent}% del ingreso base se va en deuda`,
-      explanation: 'Ese peso fijo recorta la maniobra mensual y te obliga a operar con margen corto casi todo el mes.',
-      action: 'Ataca primero deuda cara o renegocia una cuota para recuperar flujo mensual.'
-    });
+      explanation: 'Ese peso fijo reduce la maniobra mensual y eleva la probabilidad de operar en modo reactivo.',
+      evidence: [
+        { label: 'Presión de deuda', value: `${debtPercent}%` },
+        { label: 'Saldo de deuda observado', value: formatCurrencyMXN(signals.debtBalances) },
+        {
+          label: 'Deuda priorizada',
+          value: expensiveDebt ? `${expensiveDebt.name} (${formatCurrencyMXN(expensiveDebt.balance)})` : 'Sin deuda específica identificable'
+        }
+      ],
+      recommendedAction: expensiveDebt
+        ? `Prioriza ${expensiveDebt.name}: alto costo potencial por saldo relevante.`
+        : 'Prioriza la deuda revolving con mayor saldo para recuperar flujo mensual.',
+      sourceMetrics: {
+        debtPressureRatio: signals.debtPressureRatio,
+        debtBalances: signals.debtBalances,
+        prioritizedDebtName: expensiveDebt?.name ?? null,
+        prioritizedDebtBalance: expensiveDebt?.balance ?? null,
+        prioritizationHeuristic: expensiveDebt?.heuristic ?? 'revolving_then_balance_desc'
+      }
+    }));
   }
 
   if ((signals.reserveMonths < 1 || financialStatus?.status === 'vulnerable') && signals.monthlyMargin <= 0) {
     const reserveMonths = Math.max(signals.reserveMonths, 0);
-    candidates.push({
+    candidates.push(buildCandidate({
       key: 'colchon-debil',
       score: 74,
-      level: 'medium',
       title: `Tu colchón actual cubre solo ${reserveMonths.toFixed(1)} meses`,
-      explanation: 'Con ese nivel, cualquier imprevisto mediano vuelve a presionar la semana y obliga a improvisar.',
-      action: 'Define una meta mínima de reserva y fondea una parte fija cada semana.'
-    });
+      explanation: 'Con este nivel, un imprevisto mediano puede desbalancear la liquidez semanal.',
+      evidence: [
+        { label: 'Meses de reserva', value: reserveMonths.toFixed(1) },
+        { label: 'Margen mensual base', value: formatCurrencyMXN(signals.monthlyMargin) }
+      ],
+      recommendedAction: 'Define una meta mínima de colchón y fondea un monto fijo cada semana.',
+      sourceMetrics: {
+        reserveMonths,
+        monthlyMargin: signals.monthlyMargin
+      }
+    }));
   }
 
   if (
@@ -240,36 +330,58 @@ export function getPriorityDiagnostics(input: {
     && signals.reserveMonths < 2
     && signals.monthlyMargin >= 0
   ) {
-    candidates.push({
+    candidates.push(buildCandidate({
       key: 'ventana-ahorro',
       score: 56,
-      level: 'low',
       title: `Esta semana te deja ${formatCurrencyMXN(radar.estimatedMargin)} de margen aprovechable`,
-      explanation: 'Si sostienes el orden de pagos, puedes convertir una parte de ese margen en colchón real.',
-      action: 'Aparta hoy una cantidad concreta al fondo y trátala como pago fijo.'
-    });
+      explanation: 'Si sostienes el orden de pagos, puedes convertir una parte en colchón real.',
+      evidence: [
+        { label: 'Margen semanal estimado', value: formatCurrencyMXN(radar.estimatedMargin) },
+        { label: 'Meses de reserva', value: signals.reserveMonths.toFixed(1) }
+      ],
+      recommendedAction: 'Aparta hoy una cantidad concreta al fondo de liquidez semanal.',
+      sourceMetrics: {
+        estimatedMargin: radar.estimatedMargin,
+        reserveMonths: signals.reserveMonths
+      }
+    }));
   }
 
   if (signals.nearFuture8to14dLoad > 0 && signals.nearFuture8to14dLoad / Math.max(signals.upcoming7dLoad, 1) >= 0.35) {
-    candidates.push({
+    candidates.push(buildCandidate({
       key: 'ola-siguiente-semana',
       score: signals.nextHeavyWeek ? 72 : 70,
-      level: 'medium',
       title: `Después de esta ventana viene otra carga de ${formatCurrencyMXN(signals.nearFuture8to14dLoad)}`,
-      explanation: 'Si no te anticipas hoy, la siguiente semana arranca más ajustada y reduce tu margen de maniobra.',
-      action: 'Reserva desde esta semana una parte para la siguiente ola de pagos.'
-    });
+      explanation: 'Si no anticipas apartados hoy, la siguiente semana arranca con menor margen de maniobra.',
+      evidence: [
+        { label: 'Carga 8-14 días', value: formatCurrencyMXN(signals.nearFuture8to14dLoad) },
+        { label: 'Carga 0-7 días', value: formatCurrencyMXN(signals.upcoming7dLoad) }
+      ],
+      recommendedAction: 'Reserva desde esta semana una parte para la siguiente ola de pagos.',
+      sourceMetrics: {
+        nearFuture8to14dLoad: signals.nearFuture8to14dLoad,
+        upcoming7dLoad: signals.upcoming7dLoad
+      }
+    }));
   }
 
   if (signals.nextExtraordinaryEvent && signals.nextExtraordinaryEvent.inDays <= 14 && signals.nextExtraordinaryEvent.amount > 0) {
-    candidates.push({
+    candidates.push(buildCandidate({
       key: 'evento-extraordinario-proximo',
       score: signals.nextExtraordinaryEvent.inDays <= 7 ? 80 : 67,
-      level: 'medium',
       title: `En ${signals.nextExtraordinaryEvent.inDays} días llega ${signals.nextExtraordinaryEvent.label}`,
-      explanation: `Anticipa ${formatCurrencyMXN(signals.nextExtraordinaryEvent.amount)} para evitar que ese evento rompa tu flujo operativo.`,
-      action: 'Crea una reserva puntual para ese evento desde esta semana.'
-    });
+      explanation: `Anticipa ${formatCurrencyMXN(signals.nextExtraordinaryEvent.amount)} para evitar que el evento rompa tu flujo operativo.`,
+      evidence: [
+        { label: 'Evento', value: signals.nextExtraordinaryEvent.label },
+        { label: 'Monto estimado', value: formatCurrencyMXN(signals.nextExtraordinaryEvent.amount) },
+        { label: 'Días para el evento', value: String(signals.nextExtraordinaryEvent.inDays) }
+      ],
+      recommendedAction: 'Crea una reserva puntual para ese evento desde esta semana.',
+      sourceMetrics: {
+        amount: signals.nextExtraordinaryEvent.amount,
+        inDays: signals.nextExtraordinaryEvent.inDays
+      }
+    }));
   }
 
   const preview = candidates
@@ -277,10 +389,7 @@ export function getPriorityDiagnostics(input: {
     .filter((candidate) => candidate.score >= 90 || !isDuplicateEquivalent(candidate, baselineTexts))
     .sort((a, b) => b.score - a.score)
     .slice(0, 3)
-    .map(({ score, ...candidate }) => ({
-      ...candidate,
-      level: riskLevelFromScore(score)
-    }));
+    .map(({ score, ...candidate }) => candidate);
 
   if (process.env.NODE_ENV !== 'production') {
     console.info('[recommendation-context] shared tactical metrics', {

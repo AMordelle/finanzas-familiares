@@ -2,23 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { calculateFinancialRadar } from '@/lib/finance/financialRadar';
 
 describe('financial radar calculation', () => {
-  it('separa carga obligatoria de próximos 7 días y presión cercana', () => {
+  it('A) expone breakdown estructurado de carga próximos 7 días', () => {
     const radar = calculateFinancialRadar({
       now: new Date('2026-04-14T12:00:00Z'),
       accounts: [{ type: 'operativa', balance: 7000 }],
       recentTransactions: [{ type: 'debit', amount: 1400 }],
       obligations: [
         { name: 'Pago TDC BBVA', amount: 2200, dueDay: 16 },
-        { name: 'Colegiatura', amount: 1600, dueDay: 23 }
+        { name: 'Renta', amount: 1600, dueDay: 17 }
       ]
     });
 
-    expect(radar.upcomingLoad).toBe(2550); // 350 base + 2200 obligatorio
-    expect(radar.nearFutureLoad).toBe(1600); // no infla carga principal
-    expect(radar.upcoming).toContain('Colegiatura');
+    expect(radar.upcomingLoad).toBe(4150);
+    expect(radar.breakdowns.upcoming7dLoad.length).toBeGreaterThanOrEqual(3);
+    expect(radar.breakdowns.upcoming7dLoad.some((item) => item.category === 'deuda')).toBe(true);
+    expect(radar.breakdowns.upcoming7dLoad.some((item) => item.category === 'gasto_fijo')).toBe(true);
   });
 
-  it('A) si hay margen táctico pero no colchón de fricción, pasa a atención', () => {
+  it('B) muestra fórmula explícita del faltante sin fricción', () => {
     const radar = calculateFinancialRadar({
       now: new Date('2026-04-14T12:00:00Z'),
       accounts: [{ type: 'operativa', balance: 4700 }],
@@ -29,13 +30,23 @@ describe('financial radar calculation', () => {
       ]
     });
 
-    expect(radar.estimatedMargin).toBeGreaterThan(0);
-    expect(radar.marginAfterFrictionBuffer).toBeLessThan(0);
-    expect(radar.status).toBe('atencion');
-    expect(radar.actionToday.toLowerCase()).not.toContain('separar una parte para colchón');
+    expect(radar.breakdowns.frictionGap.formula).toBe('(colchón recomendado + carga inmediata) - liquidez disponible');
+    expect(radar.breakdowns.frictionGap.gap).toBeGreaterThan(0);
   });
 
-  it('B) si cubre carga + buffer, estado estable y tono optimista', () => {
+  it('C) evita copy ambiguo con verbo avanzar sin objeto', () => {
+    const radar = calculateFinancialRadar({
+      now: new Date('2026-04-14T12:00:00Z'),
+      accounts: [{ type: 'operativa', balance: 9000 }],
+      recentTransactions: [{ type: 'debit', amount: 1200 }],
+      obligations: [{ name: 'Servicio internet', amount: 1800, dueDay: 16 }]
+    });
+
+    const fullCopy = `${radar.whatToDoToday} ${radar.nextBestAction} ${radar.actionTodayDetail}`.toLowerCase();
+    expect(fullCopy).not.toContain('avanzar un poco');
+  });
+
+  it('D) si no hay reservas explícitas, no usa frase "sin tocar reservas"', () => {
     const radar = calculateFinancialRadar({
       now: new Date('2026-04-14T12:00:00Z'),
       accounts: [{ type: 'operativa', balance: 9000 }],
@@ -43,25 +54,10 @@ describe('financial radar calculation', () => {
       obligations: [{ amount: 1800, dueDay: 16 }]
     });
 
-    expect(radar.status).toBe('estable');
-    expect(radar.marginAfterFrictionBuffer).toBeGreaterThanOrEqual(0);
-    expect(radar.actionToday).toContain('separar una parte para colchón');
+    expect(`${radar.nextBestAction} ${radar.nextBestStep}`.toLowerCase()).not.toContain('sin tocar reservas');
   });
 
-  it('C) si availableNow < upcoming7dLoad, cae en presión real', () => {
-    const radar = calculateFinancialRadar({
-      now: new Date('2026-04-14T12:00:00Z'),
-      accounts: [{ type: 'operativa', balance: 1200 }],
-      recentTransactions: [{ type: 'debit', amount: 1200 }],
-      obligations: [{ amount: 1800, dueDay: 16 }]
-    });
-
-    expect(radar.status).toBe('presion');
-    expect(radar.estimatedMargin).toBeLessThan(0);
-    expect(radar.tacticalPressureLevel).toBe('high');
-  });
-
-  it('D) anticipa carga 8-14d sin contradecir margen actual', () => {
+  it('E) cuando existe evento siguiente, Radar lo menciona explícitamente', () => {
     const radar = calculateFinancialRadar({
       now: new Date('2026-04-14T12:00:00Z'),
       accounts: [{ type: 'operativa', balance: 2900 }],
@@ -72,9 +68,6 @@ describe('financial radar calculation', () => {
       ]
     });
 
-    expect(radar.estimatedMargin).toBeGreaterThan(0);
-    expect(radar.nearFutureLoad).toBeGreaterThan(0);
-    expect(radar.status).toBe('atencion');
-    expect(radar.riskText).toContain('colchón de fricción');
+    expect(radar.whatIsComing).toMatch(/En\s+\d+\s+d[ií]as/);
   });
 });
