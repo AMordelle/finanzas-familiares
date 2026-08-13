@@ -25,7 +25,7 @@ Aplicación web responsiva para gestionar las finanzas del hogar compartido, pri
 ## Estado funcional conocido
 
 - Cuentas: funcional.
-- Movimientos: funcional y pieza central para consulta mediante filtros. Está confirmada su siguiente evolución: filtro dependiente por subcategoría y control para volver al inicio del historial.
+- Movimientos: funcional y pieza central para consulta mediante filtros. El PR #90 integró el filtro dependiente por subcategoría, compatibilidad con subcategorías históricas y el control para volver al inicio del historial.
 - Extras: funcional para tiempo extra, destajo y comidas; permite crear, editar, marcar pagado y eliminar.
 - Flujos: en desarrollo activo.
 - Registro: funcional con captura conversacional multi-movimiento integrada mediante PR #58; permite interpretar y guardar varios movimientos en una sola entrada conservando trazabilidad individual.
@@ -38,7 +38,7 @@ El repositorio contiene además rutas para otros módulos y pantallas; su mera e
 ## Estado técnico
 
 - Rama base: `main`.
-- El último bloque integrado antes del trabajo activo de calendario es el PR #72, relacionado con historial y estado financiero de Flujos.
+- El último bloque funcional integrado es el PR #90, relacionado con el filtro por subcategoría y navegación del historial de Movimientos.
 - No hay CI automático registrado actualmente; las validaciones críticas dependen de pruebas ejecutadas por Codex/desarrollo y de validación local antes del merge.
 
 ## Trabajo activo
@@ -81,8 +81,8 @@ Antes de validación local, la implementación debe reconstruirse o actualizarse
 
 ## Siguiente paso
 
-Preparar una especificación autosuficiente para implementar en un PR pequeño el filtro por subcategoría y el control para volver al inicio del historial de Movimientos, partiendo del `main` vigente.
+Corregir o reconstruir el PR #73 desde el `main` vigente y repetir `$revisar-pr-proyecto` antes de preparar la validación local.
 
 ## Última actualización
 
-2026-08-12 — Evolución de Movimientos confirmada: filtro dependiente por subcategoría y control para volver al inicio del historial.
+2026-08-12 — PR #90 integrado y validado localmente: filtro dependiente por subcategoría, compatibilidad histórica y control para volver al inicio.
