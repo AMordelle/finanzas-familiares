@@ -156,6 +156,22 @@ Mientras `$actualizar-memoria-proyecto` permanezca en estado `Experimental`, su 
 ### Consecuencia
 La memoria deja de depender de recordatorios periódicos o de que el usuario reconstruya manualmente qué debe documentarse. La automatización futura puede detectar hitos y proponer o iniciar la sincronización, pero no debe convertir la actualización de memoria en una tarea periódica sin novedades ni eliminar la revisión humana mientras el contrato de la Skill siga en fase experimental.
 
+---
+
+## DEC-011 — Preservar Supabase como baseline técnico sin aprobar el PR #73
+
+**Estado:** Vigente  
+**Formalizada:** 2026-09-15
+
+### Decisión
+El esquema y los datos existentes del proyecto Supabase `finanzas-familiares` se preservarán como baseline técnico durante la adopción de FARO y la preparación para despliegue. Esta preservación no implica aprobar funcionalmente el PR #73 ni considerar integrado en `main` su comportamiento.
+
+### Motivo
+La base activa contiene datos y estructura no reproducibles actualmente desde `main`, incluidas columnas, restricciones e índices relacionados con el PR #73 y otros elementos sin migración versionada. Eliminar esa estructura para forzar coincidencia con `main` arriesgaría información real y ocultaría la deriva existente.
+
+### Consecuencia
+Antes de nuevas migraciones o del despliegue público se debe reconciliar de forma versionada y no destructiva el esquema remoto con Drizzle y las migraciones del repositorio. La reconciliación debe conservar los datos existentes, documentar los objetos aplicados fuera de GitHub y mantener la aprobación funcional del PR #73 como una decisión independiente.
+
 ## Regla de mantenimiento
 
 Cuando una decisión cambie:
