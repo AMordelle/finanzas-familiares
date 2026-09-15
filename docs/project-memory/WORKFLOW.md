@@ -141,9 +141,12 @@ Se pueden utilizar Programación/Work para vigilar eventos que reduzcan trabajo 
 
 La automatización futura de memoria debe basarse en detección de hitos, no en una ejecución periódica indiscriminada. Las automatizaciones deben avisar según reglas explícitas y no realizar merges por defecto.
 
-## Política para PR antiguos
+## Política para PR abiertos y antiguos
 
-- Un PR abierto no implica que siga vigente.
+- El merge a `main` delimita qué código forma parte del estado funcional integrado; un PR abierto no es funcionalidad vigente por su mera existencia.
+- Los PR abiertos sólo pueden documentarse como trabajo pendiente, pausado, bloqueado, obsoleto, antecedente o deriva técnica, según la evidencia disponible.
+- Sus propuestas no deben incorporarse a reglas de negocio ni al mapa funcional como comportamiento vigente sin una decisión confirmada independiente.
+- Si un PR abierto dejó estructura o datos en Supabase, ese efecto se preserva y documenta como estado técnico observable, pero no aprueba la funcionalidad propuesta.
 - PR con arquitectura antigua, conflictos o alternativas ya superadas no deben mezclarse automáticamente con `main`.
 - Si una idea antigua sigue siendo útil, se reevalúa contra el estado actual y preferentemente se reconstruye desde `main`.
 
