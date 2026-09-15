@@ -54,7 +54,8 @@ Evitar inflar artificialmente los ingresos y preservar una lectura real del fluj
 
 **Estado:** En implementación  
 **Formalizada:** 2026-08-09  
-**Implementación relacionada:** PR #73
+**Implementación relacionada:** PR #73  
+**Situación operativa:** pausada; el módulo Flujos no se utiliza actualmente y se retomará en una etapa posterior aprovechando el trabajo ya realizado.
 
 ### Decisión
 Los compromisos financieros utilizarán las subcategorías como fuente de verdad y cada subcategoría podrá tener su propio calendario según su periodicidad. No se añadirá una tabla independiente de compromisos para este propósito.
