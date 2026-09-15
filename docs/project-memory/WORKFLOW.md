@@ -150,6 +150,17 @@ La automatización futura de memoria debe basarse en detección de hitos, no en 
 - PR con arquitectura antigua, conflictos o alternativas ya superadas no deben mezclarse automáticamente con `main`.
 - Si una idea antigua sigue siendo útil, se reevalúa contra el estado actual y preferentemente se reconstruye desde `main`.
 
+## Política para baseline y migraciones de Supabase
+
+- La base activa y sus datos no se reinician ni se reconstruyen para forzar coincidencia con el repositorio.
+- Antes de adoptar un baseline se requiere respaldo verificable de datos y esquema.
+- El baseline versionado contiene estructura, no datos personales ni secretos.
+- Debe validarse primero en una base temporal vacía y compararse estructuralmente con la base activa.
+- El baseline sólo puede marcarse como aplicado en la base existente después de demostrar equivalencia; su DDL no se vuelve a ejecutar sobre ella.
+- Las migraciones anteriores se conservan como historia archivada y la nueva cadena incremental comienza después del baseline.
+- Cada cambio de esquema posterior debe tener una migración versionada, revisión asistida y validación antes de aplicarse al entorno activo.
+- Seguridad/Auth/RLS, dependencias y despliegue se realizan en cambios separados de la reconciliación inicial.
+
 ## Definición de terminado para un cambio relevante
 
 Un cambio se considera listo para merge cuando, según aplique:
