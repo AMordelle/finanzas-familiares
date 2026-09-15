@@ -41,6 +41,22 @@ El repositorio contiene además rutas para otros módulos y pantallas; su mera e
 - El último bloque funcional integrado es el PR #90, relacionado con el filtro por subcategoría y navegación del historial de Movimientos.
 - No hay CI automático registrado actualmente; las validaciones críticas dependen de pruebas ejecutadas por Codex/desarrollo y de validación local antes del merge.
 
+## Baseline técnico de Supabase
+
+Decisión confirmada el 2026-09-15:
+
+- El esquema actual del proyecto Supabase `finanzas-familiares` se preserva como baseline técnico por contener la estructura y los datos reales vigentes.
+- Preservar ese baseline no aprueba funcionalmente el PR #73 ni convierte automáticamente en canónico el código que todavía no está integrado en `main`.
+- Antes de nuevas migraciones o del despliegue público, debe reconciliarse el esquema remoto con `lib/db/schema.ts` y con las migraciones versionadas.
+
+Deriva verificada:
+
+- Supabase no registra historial de migraciones, mientras `main` contiene 15 archivos incrementales entre `0001` y `0014` y no contiene una migración base completa.
+- Existen dos migraciones con prefijo `0006`.
+- La base remota ya contiene `calendar_day`, `calendar_month` y `financial_subcategory_id`, además de restricciones e índices relacionados con el PR #73; esos campos contienen datos, aunque el PR sigue abierto y no aprobado.
+- La base remota contiene también `transactions.projection_type`, que no está representado en el esquema ni en las migraciones de `main`.
+- La reconciliación debe conservar datos, producir una fuente reproducible y mantener separada la aprobación funcional del PR #73.
+
 ## Trabajo activo
 
 ### PR #73 — Calendario individual de compromisos
@@ -75,14 +91,16 @@ Antes de validación local, la implementación debe reconstruirse o actualizarse
 
 ## Riesgos actuales
 
+- El proyecto Supabase expone 17 tablas públicas con RLS deshabilitado; otras siete tienen RLS habilitado sin políticas, y `extra_work_entries` usa una política autenticada sin aislamiento por hogar. El acceso mayoritario mediante `supabaseAdmin` evita RLS. Esto bloquea un despliegue público seguro hasta definir Auth y aislamiento por hogar.
+- La base remota contiene cambios y datos que no pueden reproducirse desde `main`; no debe reiniciarse ni alterarse destructivamente durante la reconciliación.
 - Existen PR antiguos abiertos, varios con conflictos o propuestas solapadas; no deben asumirse vigentes por el mero hecho de estar abiertos.
 - No hay CI que confirme automáticamente pruebas, tipado y build.
 - La memoria viva se está incorporando ahora; cualquier dato histórico no confirmado debe contrastarse con código, GitHub y decisiones vigentes antes de elevarlo a regla.
 
 ## Siguiente paso
 
-Corregir o reconstruir el PR #73 desde el `main` vigente y repetir `$revisar-pr-proyecto` antes de preparar la validación local.
+Preparar la reconciliación versionada y no destructiva del baseline de Supabase con `main` antes de corregir el PR #73, crear nuevas migraciones o iniciar el despliegue público.
 
 ## Última actualización
 
-2026-08-12 — PR #90 integrado y validado localmente: filtro dependiente por subcategoría, compatibilidad histórica y control para volver al inicio.
+2026-09-15 — Baseline técnico de Supabase confirmado; detectada deriva entre esquema remoto, Drizzle, migraciones y PR #73.
