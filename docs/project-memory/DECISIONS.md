@@ -173,6 +173,19 @@ La base activa contiene datos y estructura no reproducibles actualmente desde `m
 ### Consecuencia
 Antes de nuevas migraciones o del despliegue público se debe reconciliar de forma versionada y no destructiva el esquema remoto con Drizzle y las migraciones del repositorio. La reconciliación debe conservar los datos existentes, documentar los objetos aplicados fuera de GitHub y mantener la aprobación funcional del PR #73 como una decisión independiente.
 
+---
+
+## DEC-012 — El merge a main delimita el estado funcional integrado
+
+**Estado:** Vigente  
+**Formalizada:** 2026-09-15
+
+### Decisión
+El estado funcional canónico se construye únicamente con cambios integrados en `main` y decisiones confirmadas explícitamente. Un PR abierto puede documentarse como trabajo pendiente, pausado, bloqueado, obsoleto, antecedente o deriva técnica, pero no como funcionalidad vigente.
+
+### Consecuencia
+Las propuestas de un PR abierto no deben incorporarse como comportamiento vigente en `PRODUCT_MAP.md` ni como reglas aprobadas por su mera existencia. Si un PR abierto dejó estructura o datos en Supabase, ese efecto se preserva y documenta como estado técnico observable, sin considerar aprobada su funcionalidad. Al retomarlo, debe evaluarse contra el `main` vigente y preferentemente reconstruirse desde esa base cuando exista deriva o antigüedad relevante.
+
 ## Regla de mantenimiento
 
 Cuando una decisión cambie:
