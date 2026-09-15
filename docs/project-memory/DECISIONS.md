@@ -186,6 +186,30 @@ El estado funcional canónico se construye únicamente con cambios integrados en
 ### Consecuencia
 Las propuestas de un PR abierto no deben incorporarse como comportamiento vigente en `PRODUCT_MAP.md` ni como reglas aprobadas por su mera existencia. Si un PR abierto dejó estructura o datos en Supabase, ese efecto se preserva y documenta como estado técnico observable, sin considerar aprobada su funcionalidad. Al retomarlo, debe evaluarse contra el `main` vigente y preferentemente reconstruirse desde esa base cuando exista deriva o antigüedad relevante.
 
+---
+
+## DEC-013 — Baseline no destructivo del Supabase activo
+
+**Estado:** Objetivo operativo  
+**Formalizada:** 2026-09-15
+
+### Decisión
+El proyecto Supabase `finanzas-familiares` activo no se reiniciará ni se reconstruirá para reconciliarlo con el repositorio. Su esquema y sus datos se preservarán íntegramente, y la nueva cadena reproducible de migraciones partirá de un baseline completo del esquema remoto actual.
+
+Antes de adoptar el baseline se debe:
+
+1. obtener un respaldo verificable de datos y esquema;
+2. extraer y versionar el esquema completo sin incluir datos personales ni secretos;
+3. sincronizar `lib/db/schema.ts` con ese baseline;
+4. validar el baseline en una base temporal vacía;
+5. demostrar equivalencia estructural entre la base temporal y la base activa;
+6. sólo entonces registrar el baseline como ya aplicado en la base existente, sin ejecutar nuevamente su DDL.
+
+Las migraciones incrementales actuales `0001–0014` se conservarán como historia archivada y dejarán de funcionar como cadena activa una vez establecido el baseline. Toda modificación posterior deberá contar con una migración incremental versionada y verificable.
+
+### Consecuencia
+La reconciliación no puede eliminar, recrear ni transformar destructivamente objetos o datos de la base activa. Auth/RLS, actualización de dependencias y Cloudflare Workers se tratarán después en cambios separados para que la integridad del baseline pueda demostrarse de forma aislada.
+
 ## Regla de mantenimiento
 
 Cuando una decisión cambie:
