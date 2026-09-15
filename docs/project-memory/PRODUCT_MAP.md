@@ -67,15 +67,15 @@ La navegación simplificada del producto se concentra actualmente en seis áreas
 
 **Propósito:** representar compromisos/periodos financieros y su estado a través del tiempo.
 
-**Estado:** en desarrollo activo.
+**Estado:** implementado parcialmente, sin uso actual y con su evolución pausada mientras se priorizan otros módulos.
 
 **Base actual:** historial y estado financiero integrados mediante PR #72.
 
-**Trabajo activo:** PR #73, calendario individual de compromisos por subcategoría.
+**Trabajo pausado:** PR #73, calendario individual de compromisos por subcategoría. Su código no está integrado, pero el trabajo alcanzado y la estructura/datos existentes en Supabase deben conservarse como antecedente para retomarlo.
 
 **Relaciones:** depende de la configuración financiera de categorías/subcategorías y de su calendario; debe mantener identidad por subcategoría para evitar colisiones entre obligaciones del mismo flujo.
 
-**Pendiente inmediato:** corregir o reconstruir el PR #73 desde `main` y repetir la revisión asistida antes de preparar la validación local.
+**Pendiente futuro:** cuando se decida retomar el módulo, reconstruir la evolución desde el `main` vigente aprovechando el trabajo existente del PR #73, sin perder la estructura ni los datos ya presentes en Supabase, y repetir la revisión asistida antes de preparar la validación local.
 
 ## Cierre
 
