@@ -99,7 +99,7 @@ Cuando se retome Flujos, el trabajo existente del PR #73 y la estructura/datos p
 
 ## Siguiente paso
 
-Preparar la reconciliación versionada y no destructiva del baseline de Supabase con `main` antes de corregir el PR #73, crear nuevas migraciones o iniciar el despliegue público.
+Preparar una especificación y protocolo verificable para capturar el baseline completo del Supabase activo, respaldarlo y validarlo en una base temporal vacía sin modificar todavía la base existente.
 
 ## Última actualización
 
