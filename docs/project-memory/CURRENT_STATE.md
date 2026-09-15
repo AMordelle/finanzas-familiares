@@ -57,11 +57,11 @@ Deriva verificada:
 - La base remota contiene también `transactions.projection_type`, que no está representado en el esquema ni en las migraciones de `main`.
 - La reconciliación debe conservar datos, producir una fuente reproducible y mantener separada la aprobación funcional del PR #73.
 
-## Trabajo activo
+## Trabajo pausado
 
 ### PR #73 — Calendario individual de compromisos
 
-Estado: abierto y requiere correcciones antes de validación local.
+Estado: abierto, no integrado y pausado mientras se priorizan funcionalidades de otros módulos. El módulo Flujos no se utiliza actualmente.
 
 Objetivo:
 - Usar las subcategorías como fuente de verdad para los compromisos financieros, sin crear una tabla adicional de compromisos.
@@ -87,7 +87,7 @@ Resultado de revisión asistida:
 - Faltan pruebas de integración para identidad/idempotencia persistida y estados mixtos.
 - La rama está desactualizada y GitHub la marca como no mergeable.
 
-Antes de validación local, la implementación debe reconstruirse o actualizarse desde `main` y corregir conjuntamente esos bloqueos.
+Cuando se retome Flujos, el trabajo existente del PR #73 y la estructura/datos preservados en Supabase deben utilizarse como antecedente. La nueva implementación debe partir del `main` vigente, conservar los datos y corregir conjuntamente los bloqueos ya identificados antes de validación local.
 
 ## Riesgos actuales
 
