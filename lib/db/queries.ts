@@ -3452,6 +3452,8 @@ export type FinancialSubcategory = {
   plannedAmount?: number | null;
   plannedPeriodType?: FlowPeriodType | null;
   flowFundId?: string | null;
+  calendarDay?: number | null;
+  calendarMonth?: number | null;
   canDelete: boolean;
   deleteBlockedReason: string | null;
   createdAt: string;
@@ -3670,6 +3672,8 @@ export const financialSubcategoryCreateSchema = z.object({
   plannedAmount: z.coerce.number().finite().min(0).nullable().optional(),
   plannedPeriodType: z.enum(FLOW_PERIOD_TYPES).nullable().optional(),
   flowFundId: z.string().uuid().nullable().optional(),
+  calendarDay: z.coerce.number().int().min(1).max(31).nullable().optional(),
+  calendarMonth: z.coerce.number().int().min(1).max(12).nullable().optional(),
   householdId: z.string().min(1).optional()
 });
 
@@ -3732,6 +3736,8 @@ type FinancialSubcategoryRow = {
   planned_amount?: string | number | null;
   planned_period_type?: FlowPeriodType | null;
   flow_fund_id?: string | null;
+  calendar_day?: number | null;
+  calendar_month?: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -3775,6 +3781,8 @@ function mapFinancialSubcategory(row: FinancialSubcategoryRow): FinancialSubcate
     plannedAmount: row.planned_amount == null ? null : Number(row.planned_amount),
     plannedPeriodType: row.planned_period_type ?? null,
     flowFundId: row.flow_fund_id ?? null,
+    calendarDay: row.calendar_day ?? null,
+    calendarMonth: row.calendar_month ?? null,
     canDelete: true,
     deleteBlockedReason: null,
     createdAt: row.created_at,
@@ -3832,7 +3840,7 @@ export async function getFinancialCategoryCatalog(householdId?: string | null, c
       .order('name', { ascending: true }),
     client
       .from('financial_subcategories')
-      .select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,flow_fund_id,created_at,updated_at')
+      .select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,calendar_day,calendar_month,flow_fund_id,created_at,updated_at')
       .eq('household_id', resolvedHouseholdId)
       .eq('is_active', true)
       .order('name', { ascending: true })
@@ -4151,7 +4159,7 @@ export async function getConfigurationData(client: SupabaseClientLike = supabase
 
   const [categoriesResult, subcategoriesResult, columnsResult, assignmentsResult, flowsResult] = await Promise.all([
     client.from('financial_categories').select('id,household_id,name,key,type,no_projectable,is_active,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
-    client.from('financial_subcategories').select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,flow_fund_id,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
+    client.from('financial_subcategories').select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,calendar_day,calendar_month,flow_fund_id,created_at,updated_at').eq('household_id', householdId).order('name', { ascending: true }),
     client.from('projection_columns').select('id,household_id,name,key,type,description,display_order,is_active,created_at,updated_at').eq('household_id', householdId).order('display_order', { ascending: true }),
     client.from('projection_column_categories').select('projection_column_id,financial_category_id').eq('household_id', householdId),
     client.from('flow_funds').select('id,household_id,name,code,period_type,target_type,manual_target_amount,is_active,priority,tracking_start_date').eq('household_id', householdId).order('priority')
@@ -4241,7 +4249,7 @@ async function getOwnedCategoryRow(householdId: string, categoryId: string, clie
 async function getOwnedSubcategoryWithCategory(householdId: string, subcategoryId: string, client: SupabaseClientLike) {
   const { data: subcategory, error } = await client
     .from('financial_subcategories')
-    .select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,flow_fund_id,created_at,updated_at')
+    .select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,calendar_day,calendar_month,flow_fund_id,created_at,updated_at')
     .eq('id', subcategoryId)
     .eq('household_id', householdId)
     .maybeSingle();
@@ -4328,7 +4336,7 @@ export async function createFinancialSubcategory(rawInput: unknown, client: Supa
   const householdId = await resolveInputHouseholdId(input.householdId, client);
   const key = normalizeAndValidateRequiredKey(input.name, 'La subcategoría');
   await assertUniqueKey('financial_subcategories', householdId, key, client, undefined, { field: 'financial_category_id', value: input.financialCategoryId });
-  const { data, error } = await client.from('financial_subcategories').insert({ household_id: householdId, financial_category_id: input.financialCategoryId, name: input.name.trim(), key, is_active: true, planned_amount: input.plannedAmount ?? null, planned_period_type: input.plannedPeriodType ?? null, flow_fund_id: input.flowFundId ?? null, updated_at: new Date().toISOString() }).select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,flow_fund_id,created_at,updated_at').single();
+  const { data, error } = await client.from('financial_subcategories').insert({ household_id: householdId, financial_category_id: input.financialCategoryId, name: input.name.trim(), key, is_active: true, planned_amount: input.plannedAmount ?? null, planned_period_type: input.plannedPeriodType ?? null, calendar_day: input.calendarDay ?? null, calendar_month: input.calendarMonth ?? null, flow_fund_id: input.flowFundId ?? null, updated_at: new Date().toISOString() }).select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,calendar_day,calendar_month,flow_fund_id,created_at,updated_at').single();
   if (error || !data) throw new Error(error?.message ?? 'No fue posible crear la subcategoría.');
   return mapFinancialSubcategory(data);
 }
@@ -4338,7 +4346,7 @@ export async function updateFinancialSubcategory(rawInput: unknown, client: Supa
   const householdId = await resolveInputHouseholdId(input.householdId, client);
   const key = normalizeAndValidateRequiredKey(input.name, 'La subcategoría');
   await assertUniqueKey('financial_subcategories', householdId, key, client, input.subcategoryId, { field: 'financial_category_id', value: input.financialCategoryId });
-  const { data, error } = await client.from('financial_subcategories').update({ financial_category_id: input.financialCategoryId, name: input.name.trim(), key, is_active: input.isActive, planned_amount: input.plannedAmount ?? null, planned_period_type: input.plannedPeriodType ?? null, flow_fund_id: input.flowFundId ?? null, updated_at: new Date().toISOString() }).eq('id', input.subcategoryId).eq('household_id', householdId).select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,flow_fund_id,created_at,updated_at').maybeSingle();
+  const { data, error } = await client.from('financial_subcategories').update({ financial_category_id: input.financialCategoryId, name: input.name.trim(), key, is_active: input.isActive, planned_amount: input.plannedAmount ?? null, planned_period_type: input.plannedPeriodType ?? null, calendar_day: input.calendarDay ?? null, calendar_month: input.calendarMonth ?? null, flow_fund_id: input.flowFundId ?? null, updated_at: new Date().toISOString() }).eq('id', input.subcategoryId).eq('household_id', householdId).select('id,household_id,financial_category_id,name,key,is_active,planned_amount,planned_period_type,calendar_day,calendar_month,flow_fund_id,created_at,updated_at').maybeSingle();
   if (error) throw new Error(`No fue posible editar la subcategoría: ${error.message}`);
   if (!data) throw new Error('No se encontró la subcategoría en este hogar.');
   return mapFinancialSubcategory(data);

@@ -8,6 +8,7 @@ export type FlowPeriod = {
   periodEnd: string;
   periodLabel: string;
   targetAmount: number;
+  financialSubcategoryId?: string | null;
 };
 
 const isoDate = (date: Date) => date.toISOString().slice(0, 10);
