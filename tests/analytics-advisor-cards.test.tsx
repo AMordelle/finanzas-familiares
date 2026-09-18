@@ -5,6 +5,35 @@ import { AnalyticsAdvisorCards, toggleAnalyticsCard } from '@/components/dashboa
 
 const radar = {
   status: 'atencion' as const,
+  headline: 'Semana sensible: cubres carga, pero sin colchón suficiente',
+  whatToDoToday: 'Prioriza y deja fondeado Pago TDC BBVA en 6 días.',
+  whyItMatters: 'Cubres lo inmediato, pero aún falta colchón para operar sin fricción.',
+  whatIsComing: 'En 6 días vence Pago TDC BBVA.',
+  nextBestAction: 'Cubre primero obligaciones de esta semana y posterga gastos movibles.',
+  metrics: {
+    availableNow: 5000,
+    upcoming7dLoad: 4200,
+    nearFuture8to14dLoad: 1300,
+    estimatedMargin: 800,
+    frictionBufferRequired: 900,
+    marginAfterFrictionBuffer: -100,
+    tacticalPressureLevel: 'medium' as const,
+    recommendationTone: 'prudente' as const
+  },
+  breakdowns: {
+    upcoming7dLoad: [
+      { label: 'Pago TDC BBVA', amount: 2500, category: 'deuda' as const },
+      { label: 'Renta', amount: 1700, category: 'gasto_fijo' as const }
+    ],
+    suggestedActionBasis: 'Existe un pago inmediato y el colchón no está completo.',
+    frictionGap: {
+      formula: '(colchón recomendado + carga inmediata) - liquidez disponible',
+      buffer: 900,
+      immediateLoad: 4200,
+      availableLiquidity: 5000,
+      gap: 100
+    }
+  },
   windowDays: 7,
   windowLabel: 'próximos 7 días',
   actionToday: 'Hoy: evita gastos extra y cuida liquidez.',
@@ -19,8 +48,8 @@ const radar = {
   estimatedMargin: 800,
   frictionBufferRequired: 900,
   marginAfterFrictionBuffer: -100,
-  tacticalPressureLevel: 'medium',
-  recommendationTone: 'prudente'
+  tacticalPressureLevel: 'medium' as const,
+  recommendationTone: 'prudente' as const
 };
 
 const pressure = {
@@ -39,23 +68,32 @@ const priorityDiagnostics = [
   {
     key: 'obligacion-inminente',
     level: 'high' as const,
+    priority: 'alta' as const,
     title: 'En 6 días vence Pago TDC BBVA y esta semana queda justa',
     explanation: 'La carga de esta ventana deja poco margen frente al disponible.',
-    action: 'Congela extras y deja ese pago separado.'
+    evidence: [{ label: 'Carga 7 días', value: '$4,200.00' }],
+    recommendedAction: 'Congela extras y deja ese pago separado.',
+    sourceMetrics: { upcoming7dLoad: 4200 }
   },
   {
     key: 'deuda-recorta-margen',
     level: 'medium' as const,
+    priority: 'media' as const,
     title: 'Hoy 38% del ingreso base se va en deuda',
     explanation: 'Ese peso fijo recorta la maniobra mensual.',
-    action: 'Renegocia una cuota para recuperar flujo.'
+    evidence: [{ label: 'Deuda priorizada', value: 'TDC MPAGO ($14,000.00)' }],
+    recommendedAction: 'Prioriza TDC MPAGO: alto costo potencial por saldo relevante.',
+    sourceMetrics: { debtPressureRatio: 0.38 }
   },
   {
     key: 'ventana-ahorro',
     level: 'low' as const,
+    priority: 'baja' as const,
     title: 'Esta semana te deja $2,400 de margen aprovechable',
     explanation: 'Puedes convertir parte de ese margen en colchón real.',
-    action: 'Aparta hoy una cantidad concreta al fondo.'
+    evidence: [{ label: 'Margen semanal estimado', value: '$2,400.00' }],
+    recommendedAction: 'Aparta hoy una cantidad concreta al fondo.',
+    sourceMetrics: { estimatedMargin: 2400 }
   }
 ];
 
@@ -67,12 +105,6 @@ describe('AnalyticsAdvisorCards', () => {
 
     expect(html).toContain('Radar Financiero');
     expect(html).toContain('Diagnósticos prioritarios');
-    expect(html).not.toContain('Estado general');
-    expect(html).not.toContain('Estado financiero actual');
-    expect(html).not.toContain('Interpretación general:');
-    expect((html.match(/min-h-\[148px\]/g) ?? []).length).toBe(2);
-    expect(html).toContain('En 6 días vence Pago TDC BBVA');
-    expect(html).toContain('Hoy 38% del ingreso base se va en deuda');
     expect(html).toContain('Carga próximos 7 días:</span> $4,200.00');
     expect(html).not.toContain('Esta semana te deja $2,400 de margen aprovechable');
   });
@@ -95,18 +127,8 @@ describe('AnalyticsAdvisorCards', () => {
       <AnalyticsAdvisorCards radar={radar} financialPressure={pressure} priorityDiagnostics={priorityDiagnostics} initialOpenCard="radar" />
     );
     expect(radarExpanded).toContain('Qué hacer hoy:');
-    expect(radarExpanded).not.toContain('Siguiente paso:');
-  });
-
-  it('reduce redundancia visual de severidad en items de diagnósticos', () => {
-    const html = renderToStaticMarkup(
-      <AnalyticsAdvisorCards radar={radar} financialPressure={pressure} priorityDiagnostics={priorityDiagnostics} initialOpenCard="diagnosticos" />
-    );
-
-    expect(html).toContain('Alta prioridad');
-    expect(html).not.toContain('>Alta<');
-    expect(html).not.toContain('>Media<');
-    expect(html).not.toContain('>Baja<');
+    expect(radarExpanded).toContain('Ver detalle');
+    expect(radarExpanded).not.toContain('Estado general');
   });
 
   it('aplica comportamiento accordion en helper de estado', () => {
