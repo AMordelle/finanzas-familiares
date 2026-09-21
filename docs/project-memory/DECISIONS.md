@@ -210,6 +210,23 @@ Las migraciones incrementales actuales `0001–0014` se conservarán como histor
 ### Consecuencia
 La reconciliación no puede eliminar, recrear ni transformar destructivamente objetos o datos de la base activa. Auth/RLS, actualización de dependencias y Cloudflare Workers se tratarán después en cambios separados para que la integridad del baseline pueda demostrarse de forma aislada.
 
+---
+
+## DEC-014 — Supabase CLI gobierna el historial canónico de migraciones
+
+**Estado:** Objetivo operativo
+**Formalizada:** 2026-09-21
+
+### Decisión
+Supabase CLI será la autoridad del historial canónico de migraciones del proyecto. El baseline y las migraciones incrementales futuras vivirán en `supabase/migrations/` y se crearán, validarán y aplicarán mediante el flujo reproducible de Supabase CLI.
+
+Drizzle ORM se conservará como modelo tipado utilizado por la aplicación. `lib/db/schema.ts` deberá mantenerse estructuralmente sincronizado con el esquema canónico de Supabase, pero Drizzle Kit no gobernará un historial de migraciones paralelo.
+
+Los archivos de migración actuales `0001–0014` se conservarán íntegramente como archivo histórico y dejarán de ser la cadena activa después de adoptar el baseline conforme a DEC-013.
+
+### Consecuencia
+La reconciliación debe evitar dos fuentes competidoras de migraciones. La primera implementación sólo capturará y validará el baseline fuera de la base activa; registrar el baseline como aplicado en el proyecto existente será un paso posterior y separado, autorizado únicamente después del respaldo y la demostración de equivalencia estructural exigidos por DEC-013.
+
 ## Regla de mantenimiento
 
 Cuando una decisión cambie:
