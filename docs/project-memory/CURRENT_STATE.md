@@ -49,7 +49,15 @@ Decisión confirmada el 2026-09-15:
 - Preservar ese baseline no aprueba funcionalmente el PR #73 ni convierte automáticamente en canónico el código que todavía no está integrado en `main`.
 - Antes de nuevas migraciones o de un despliegue público sin protección adicional, debe reconciliarse el esquema remoto con `lib/db/schema.ts` y con las migraciones versionadas.
 - Supabase CLI gobernará el historial canónico futuro en `supabase/migrations/`; Drizzle ORM se conservará como modelo tipado sincronizado, sin mantener una segunda cadena activa de migraciones.
-- La reconstrucción y validación del baseline en una instancia local queda pausada por ahora; Docker y Supabase local no serán requisitos del siguiente bloque de trabajo. Primero se obtendrá un respaldo verificable de la base activa sin modificarla.
+- La reconstrucción y validación del baseline en una instancia local queda pausada por ahora; Docker y Supabase local no serán requisitos del siguiente bloque de trabajo.
+
+Respaldo verificado el 2026-09-20:
+
+- Exportación lógica externa en formato personalizado realizada con `pg_dump 18.6` mediante el session pooler, sin modificar la base activa.
+- Archivo de 513,323 bytes, validado correctamente mediante el catálogo de `pg_restore`.
+- Catálogo con 603 entradas y 29 entradas `TABLE DATA` del esquema `public`.
+- SHA-256: `04102ECB53BDED4B3FD3FC47ED20D8E0210E0762480F861CBFD6870E3B600788`.
+- El respaldo contiene datos reales y permanece fuera de Git; la memoria conserva únicamente evidencia no sensible.
 
 Deriva verificada:
 
@@ -101,8 +109,8 @@ Cuando se retome Flujos, el trabajo existente del PR #73 y la estructura/datos p
 
 ## Siguiente paso
 
-Obtener un respaldo verificable de la base activa sin modificarla ni montar Supabase local. Después, preparar la seguridad y el despliegue en Cloudflare Workers; la validación local del baseline permanece pausada como trabajo técnico futuro.
+Preparar la estrategia de seguridad y acceso privado previa al despliegue en Cloudflare Workers, sin modificar todavía el esquema ni los datos de Supabase. La validación local del baseline permanece pausada como trabajo técnico futuro.
 
 ## Última actualización
 
-2026-09-21 — Se prioriza el respaldo de la base activa y la preparación del despliegue; la reconstrucción local del baseline queda pausada.
+2026-09-21 — Respaldo externo de Supabase completado y verificado; el siguiente paso pasa a seguridad y acceso privado antes del despliegue.
