@@ -227,6 +227,21 @@ Los archivos de migración actuales `0001–0014` se conservarán íntegramente 
 ### Consecuencia
 La reconciliación debe evitar dos fuentes competidoras de migraciones. La primera implementación sólo capturará y validará el baseline fuera de la base activa; registrar el baseline como aplicado en el proyecto existente será un paso posterior y separado, autorizado únicamente después del respaldo y la demostración de equivalencia estructural exigidos por DEC-013.
 
+## DEC-015 — Respaldar primero y pausar la reconstrucción local del baseline
+
+**Estado:** Vigente  
+**Formalizada:** 2026-09-21
+
+### Decisión
+Antes de preparar el despliegue se obtendrá un respaldo verificable de la base Supabase activa, sin modificar su esquema ni sus datos. La reconstrucción y validación del baseline en una instancia local queda pausada por ahora; no se instalará Docker ni se levantará Supabase local como requisito del siguiente bloque de trabajo.
+
+DEC-013 y DEC-014 se conservan como dirección técnica futura: cuando se retome la formalización del historial de migraciones, el baseline deberá seguir el procedimiento no destructivo ya acordado y Supabase CLI continuará como autoridad canónica.
+
+### Consecuencia
+El siguiente trabajo se enfocará en respaldar la base activa y después preparar la seguridad y el despliegue en Cloudflare Workers. Posponer la instancia local no autoriza cambios manuales sin respaldo, no elimina la deriva documentada y no permite exponer públicamente la aplicación mientras persista el riesgo crítico de RLS y acceso administrativo.
+
+---
+
 ## Regla de mantenimiento
 
 Cuando una decisión cambie:
