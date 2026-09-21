@@ -47,8 +47,9 @@ Decisión confirmada el 2026-09-15:
 
 - El esquema actual del proyecto Supabase `finanzas-familiares` se preserva como baseline técnico por contener la estructura y los datos reales vigentes.
 - Preservar ese baseline no aprueba funcionalmente el PR #73 ni convierte automáticamente en canónico el código que todavía no está integrado en `main`.
-- Antes de nuevas migraciones o del despliegue público, debe reconciliarse el esquema remoto con `lib/db/schema.ts` y con las migraciones versionadas.
+- Antes de nuevas migraciones o de un despliegue público sin protección adicional, debe reconciliarse el esquema remoto con `lib/db/schema.ts` y con las migraciones versionadas.
 - Supabase CLI gobernará el historial canónico futuro en `supabase/migrations/`; Drizzle ORM se conservará como modelo tipado sincronizado, sin mantener una segunda cadena activa de migraciones.
+- La reconstrucción y validación del baseline en una instancia local queda pausada por ahora; Docker y Supabase local no serán requisitos del siguiente bloque de trabajo. Primero se obtendrá un respaldo verificable de la base activa sin modificarla.
 
 Deriva verificada:
 
@@ -100,8 +101,8 @@ Cuando se retome Flujos, el trabajo existente del PR #73 y la estructura/datos p
 
 ## Siguiente paso
 
-Preparar una especificación y protocolo verificable para capturar el baseline completo del Supabase activo bajo Supabase CLI, respaldarlo y validarlo en una base temporal vacía sin modificar ni registrar todavía nada en la base existente.
+Obtener un respaldo verificable de la base activa sin modificarla ni montar Supabase local. Después, preparar la seguridad y el despliegue en Cloudflare Workers; la validación local del baseline permanece pausada como trabajo técnico futuro.
 
 ## Última actualización
 
-2026-09-21 — Supabase CLI confirmado como autoridad del historial canónico futuro; Drizzle permanece como modelo tipado sincronizado.
+2026-09-21 — Se prioriza el respaldo de la base activa y la preparación del despliegue; la reconstrucción local del baseline queda pausada.
