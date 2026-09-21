@@ -153,11 +153,14 @@ La automatización futura de memoria debe basarse en detección de hitos, no en 
 ## Política para baseline y migraciones de Supabase
 
 - La base activa y sus datos no se reinician ni se reconstruyen para forzar coincidencia con el repositorio.
+- Supabase CLI es la autoridad del historial canónico: el baseline y las migraciones futuras viven en `supabase/migrations/`.
+- Drizzle ORM conserva el modelo tipado de la aplicación y `lib/db/schema.ts` debe permanecer estructuralmente sincronizado, pero Drizzle Kit no mantiene una cadena activa paralela.
 - Antes de adoptar un baseline se requiere respaldo verificable de datos y esquema.
 - El baseline versionado contiene estructura, no datos personales ni secretos.
 - Debe validarse primero en una base temporal vacía y compararse estructuralmente con la base activa.
 - El baseline sólo puede marcarse como aplicado en la base existente después de demostrar equivalencia; su DDL no se vuelve a ejecutar sobre ella.
 - Las migraciones anteriores se conservan como historia archivada y la nueva cadena incremental comienza después del baseline.
+- La captura y validación inicial del baseline no registra migraciones en la base activa; esa adopción se realiza después, como paso separado, al demostrar equivalencia estructural.
 - Cada cambio de esquema posterior debe tener una migración versionada, revisión asistida y validación antes de aplicarse al entorno activo.
 - Seguridad/Auth/RLS, dependencias y despliegue se realizan en cambios separados de la reconciliación inicial.
 
