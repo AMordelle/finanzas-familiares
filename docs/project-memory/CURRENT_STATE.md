@@ -40,6 +40,7 @@ El repositorio contiene además rutas para otros módulos y pantallas; su mera e
 - Rama base: `main`.
 - El último bloque funcional integrado es el PR #90, relacionado con el filtro por subcategoría y navegación del historial de Movimientos.
 - No hay CI automático registrado actualmente; las validaciones críticas dependen de pruebas ejecutadas por Codex/desarrollo y de validación local antes del merge.
+- La evaluación de compatibilidad para Cloudflare Workers detectó que el stack actual Next.js 14 + React 18 queda fuera de las versiones admitidas por las integraciones vigentes evaluadas. Antes de incorporar Workers se modernizará Next.js/React en un PR técnico aislado.
 
 ## Baseline técnico de Supabase
 
@@ -118,8 +119,8 @@ Decisión confirmada el 2026-09-22:
 
 ## Siguiente paso
 
-Preparar un PR técnico pequeño para compatibilidad con Cloudflare Workers y acceso privado, sin publicar todavía la aplicación ni modificar Supabase. La validación local del baseline permanece pausada como trabajo técnico futuro.
+Preparar un PR técnico aislado para modernizar Next.js/React a versiones compatibles y conservar el comportamiento actual de la aplicación. Después de validar y fusionar esa actualización se retomará un PR separado para Cloudflare Workers y acceso privado. Ninguno de estos pasos publicará todavía la aplicación ni modificará Supabase. La validación local del baseline permanece pausada como trabajo técnico futuro.
 
 ## Última actualización
 
-2026-09-22 — Estrategia progresiva de seguridad confirmada; el siguiente paso es preparar Workers y acceso privado sin publicar ni modificar Supabase.
+2026-09-22 — La modernización de Next.js/React se establece como prerrequisito aislado antes de preparar Workers; no se publicará ni se modificará Supabase en ese cambio.
