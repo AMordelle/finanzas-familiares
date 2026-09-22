@@ -4,6 +4,7 @@ import { APPROVED_CATEGORY_CATALOG } from '@/lib/ai/semanticCategory';
 
 const DEFAULT_OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-4.1-mini';
 const DEFAULT_TIMEOUT_MS = 4500;
+type ResponsesCreate = (body: unknown, options?: { signal?: AbortSignal }) => Promise<{ output_text?: string }>;
 
 const approvedIntentSchema = z.enum([
   'income',
@@ -106,7 +107,8 @@ export async function semanticInstructionUnderstanding(input: { text: string }, 
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await (client.responses.create as any)(
+    const createResponse = client.responses.create.bind(client.responses) as unknown as ResponsesCreate;
+    const response = await createResponse(
       {
         model: DEFAULT_OPENAI_MODEL,
         temperature: 0,

@@ -154,6 +154,8 @@ describe('módulo Configuración financiera', () => {
 
 
   it('construye Proyección con columnas activas, semanas válidas, semana actual, 12 semanas y detalles auditables', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-18T12:00:00.000Z'));
     const q = await import('@/lib/db/queries');
     fake.db.accounts.push({ id: 'acc-operativa', household_id: 'house-1', name: 'BBVA', type: 'operational_cash', balance: '2000', is_active: true });
 
@@ -214,6 +216,7 @@ describe('módulo Configuración financiera', () => {
     expect(projection.unclassified.some((item) => item.category === noProjectable.key)).toBe(false);
     expect(JSON.stringify(fake.db.transactions)).toBe(txBefore);
     expect(JSON.stringify(fake.db.accounts)).toBe(accountsBefore);
+    vi.useRealTimers();
 
     const page = await import('@/app/proyeccion/page');
     const html = renderToStaticMarkup(await page.default());

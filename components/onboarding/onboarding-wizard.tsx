@@ -9,6 +9,14 @@ import { submitOnboardingAction } from '@/app/onboarding/actions';
 import { onboardingPayloadSchema, type OnboardingPayload } from '@/lib/onboarding/flow';
 
 type Item = Record<string, string | number>;
+type RowKey = Exclude<keyof OnboardingPayload, 'householdName' | 'householdType'>;
+type StepRowsProps = {
+  step: number;
+  form: OnboardingPayload;
+  appendRow: (key: RowKey, item: Item) => void;
+  updateRow: (key: RowKey, index: number, field: string, value: string) => void;
+  removeRow: (key: RowKey, index: number) => void;
+};
 
 type OnboardingSummary = {
   monthlyOFH: number;
@@ -60,19 +68,19 @@ export function OnboardingWizard() {
     return map[step];
   }, [step]);
 
-  const appendRow = (key: keyof OnboardingPayload, item: Item) => {
-    setForm((prev) => ({ ...prev, [key]: [...(prev[key] as any[]), item] }));
+  const appendRow = (key: RowKey, item: Item) => {
+    setForm((prev) => ({ ...prev, [key]: [...(prev[key] as Item[]), item] } as OnboardingPayload));
   };
 
-  const updateRow = (key: keyof OnboardingPayload, index: number, field: string, value: string) => {
+  const updateRow = (key: RowKey, index: number, field: string, value: string) => {
     setForm((prev) => ({
       ...prev,
-      [key]: (prev[key] as any[]).map((row, rowIndex) => (rowIndex === index ? { ...row, [field]: field.includes('monto') || field.includes('saldo') || field.includes('pago') || field === 'mesEsperado' || field === 'diaPago' ? Number(value || 0) : value } : row))
-    }));
+      [key]: (prev[key] as Item[]).map((row, rowIndex) => (rowIndex === index ? { ...row, [field]: field.includes('monto') || field.includes('saldo') || field.includes('pago') || field === 'mesEsperado' || field === 'diaPago' ? Number(value || 0) : value } : row))
+    } as OnboardingPayload));
   };
 
-  const removeRow = (key: keyof OnboardingPayload, index: number) => {
-    setForm((prev) => ({ ...prev, [key]: (prev[key] as any[]).filter((_, rowIndex) => rowIndex !== index) }));
+  const removeRow = (key: RowKey, index: number) => {
+    setForm((prev) => ({ ...prev, [key]: (prev[key] as Item[]).filter((_, rowIndex) => rowIndex !== index) } as OnboardingPayload));
   };
 
   const next = () => {
@@ -134,7 +142,7 @@ export function OnboardingWizard() {
               { value: 'pareja', label: 'Para mí y mi pareja' },
               { value: 'familia', label: 'Para mi familia' }
             ].map((option) => (
-              <button key={option.value} type="button" className={`rounded-lg border p-3 text-left ${form.householdType === option.value ? 'border-teal-600 bg-teal-50' : 'border-slate-200'}`} onClick={() => setForm((prev) => ({ ...prev, householdType: option.value as any }))}>
+              <button key={option.value} type="button" className={`rounded-lg border p-3 text-left ${form.householdType === option.value ? 'border-teal-600 bg-teal-50' : 'border-slate-200'}`} onClick={() => setForm((prev) => ({ ...prev, householdType: option.value as OnboardingPayload['householdType'] }))}>
                 {option.label}
               </button>
             ))}
@@ -159,8 +167,8 @@ export function OnboardingWizard() {
   );
 }
 
-function StepRows({ step, form, appendRow, updateRow, removeRow }: any) {
-  const config: Record<number, { key: keyof OnboardingPayload; fields: string[]; labels: Record<string, string>; addLabel: string; optional?: boolean }> = {
+function StepRows({ step, form, appendRow, updateRow, removeRow }: StepRowsProps) {
+  const config: Record<number, { key: RowKey; fields: string[]; labels: Record<string, string>; addLabel: string; optional?: boolean }> = {
     2: { key: 'regularIncomes', fields: ['nombre', 'monto', 'periodicidad'], labels: { nombre: 'Nombre', monto: 'Monto aproximado', periodicidad: 'Periodicidad' }, addLabel: 'Agregar ingreso regular' },
     3: { key: 'extraordinaryIncomes', fields: ['nombre', 'monto', 'mesEsperado'], labels: { nombre: 'Nombre', monto: 'Monto aproximado', mesEsperado: 'Mes esperado (1-12)' }, addLabel: 'Agregar ingreso extraordinario', optional: true },
     4: { key: 'operationalAccounts', fields: ['nombre', 'saldoInicial'], labels: { nombre: 'Nombre de cuenta', saldoInicial: 'Saldo inicial (opcional)' }, addLabel: 'Agregar cuenta operativa' },
@@ -172,7 +180,7 @@ function StepRows({ step, form, appendRow, updateRow, removeRow }: any) {
   };
 
   const current = config[step];
-  const rows = form[current.key] as any[];
+  const rows = form[current.key] as Item[];
 
   return (
     <div className="mt-4 space-y-3">

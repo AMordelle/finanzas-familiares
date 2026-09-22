@@ -374,7 +374,7 @@ export function recommendExtraordinaryIncomeDistribution(input: {
     recommendedMode = 'conservador';
   } else if (debtPressure >= 0.38 && reserveMonths >= 1 && tacticalPressure === 'low') {
     recommendedMode = 'agresivo';
-  } else if (signals.householdStage === 'fortalecimiento' && reserveMonths >= 2 && tacticalPressure !== 'high') {
+  } else if ((signals.householdStage as string) === 'fortalecimiento' && reserveMonths >= 2) {
     recommendedMode = 'agresivo';
   }
 

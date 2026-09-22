@@ -724,7 +724,7 @@ function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
     rawFinancialPressure && typeof rawFinancialPressure.breakdown === 'object' && rawFinancialPressure.breakdown !== null
       ? (rawFinancialPressure.breakdown as Record<string, unknown>)
       : null;
-  const financialPressure =
+  const financialPressure: DashboardData['financialPressure'] =
     rawFinancialPressure && (normalizedStatus === 'healthy' || normalizedStatus === 'warning' || normalizedStatus === 'critical')
       ? {
           requiredMoney: toFiniteNumber(rawFinancialPressure.requiredMoney, 0),
@@ -766,7 +766,7 @@ function normalizeSnapshotPayload(rawPayload: unknown): DashboardData {
     regularIncomeMonthly: toFiniteNumber(rawFinancialInput?.regularIncomeMonthly, payload?.regularIncomeMonthly as number ?? 0),
     annualExtraIncome: toFiniteNumber(rawFinancialInput?.annualExtraIncome, 0),
     recurringObligationsMonthly,
-    debtPaymentsMonthly: toFiniteNumber(rawFinancialInput?.debtPayments, rawBreakdown?.debts),
+    debtPaymentsMonthly: toFiniteNumber(rawFinancialInput?.debtPayments, toFiniteNumber(rawBreakdown?.debts, 0)),
     debtBalance: toFiniteNumber(rawFinancialInput?.debtBalance, 0),
     protectedSavings: toFiniteNumber(rawFinancialInput?.liquidFunds, 0) + toFiniteNumber(rawFinancialInput?.liquidInvestments, 0),
     operativeMoney: toFiniteNumber(rawFinancialInput?.operativeMoney, payload?.availableMoney as number ?? 0)
