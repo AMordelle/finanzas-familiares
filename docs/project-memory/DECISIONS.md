@@ -242,6 +242,25 @@ El siguiente trabajo se enfocará en respaldar la base activa y después prepara
 
 ---
 
+## DEC-016 — Seguridad progresiva para el acceso privado
+
+**Estado:** En implementación  
+**Formalizada:** 2026-09-22
+
+### Decisión
+La publicación de Finanzas Familiares se preparará mediante tres capas progresivas y separadas:
+
+1. Cloudflare Access protegerá el perímetro de la aplicación mediante una lista de correos autorizados y acceso con código temporal.
+2. El acceso anónimo directo a la Data API de Supabase se cerrará mediante un cambio versionado y verificable.
+3. Supabase Auth y RLS por hogar sustituirán progresivamente el uso rutinario de `supabaseAdmin` para que cada operación quede asociada a una identidad y a su hogar.
+
+El primer PR técnico se limitará a preparar compatibilidad con Cloudflare Workers y el acceso privado. No publicará la aplicación ni modificará el esquema o los datos de Supabase.
+
+### Consecuencia
+Cloudflare Access será una barrera perimetral, no un sustituto de la autorización en Supabase. `SUPABASE_SERVICE_ROLE_KEY` debe permanecer exclusivamente del lado servidor y configurarse como secreto. La publicación con datos reales no se considerará segura hasta bloquear el acceso anónimo directo a Supabase; Auth/RLS y la retirada progresiva de privilegios administrativos se implementarán en cambios posteriores y separados.
+
+---
+
 ## Regla de mantenimiento
 
 Cuando una decisión cambie:
