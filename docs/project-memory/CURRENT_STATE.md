@@ -99,6 +99,15 @@ Resultado de revisión asistida:
 
 Cuando se retome Flujos, el trabajo existente del PR #73 y la estructura/datos preservados en Supabase deben utilizarse como antecedente. La nueva implementación debe partir del `main` vigente, conservar los datos y corregir conjuntamente los bloqueos ya identificados antes de validación local.
 
+## Estrategia de seguridad y acceso privado
+
+Decisión confirmada el 2026-09-22:
+
+- La preparación del despliegue seguirá una estrategia progresiva: Cloudflare Access como perímetro privado, cierre del acceso anónimo directo a Supabase y adopción posterior de Supabase Auth con RLS por hogar.
+- El primer PR técnico preparará Cloudflare Workers y el acceso privado, sin publicar la aplicación ni modificar el esquema o los datos de Supabase.
+- El cierre de la Data API anónima y la migración hacia sesiones de usuario se tratarán en cambios posteriores, pequeños y separados.
+- `SUPABASE_SERVICE_ROLE_KEY` sólo puede permanecer del lado servidor y deberá configurarse como secreto; su uso rutinario se retirará progresivamente al adoptar Auth/RLS.
+
 ## Riesgos actuales
 
 - El proyecto Supabase expone 17 tablas públicas con RLS deshabilitado; otras siete tienen RLS habilitado sin políticas, y `extra_work_entries` usa una política autenticada sin aislamiento por hogar. El acceso mayoritario mediante `supabaseAdmin` evita RLS. Esto bloquea un despliegue público seguro hasta definir Auth y aislamiento por hogar.
@@ -109,8 +118,8 @@ Cuando se retome Flujos, el trabajo existente del PR #73 y la estructura/datos p
 
 ## Siguiente paso
 
-Preparar la estrategia de seguridad y acceso privado previa al despliegue en Cloudflare Workers, sin modificar todavía el esquema ni los datos de Supabase. La validación local del baseline permanece pausada como trabajo técnico futuro.
+Preparar un PR técnico pequeño para compatibilidad con Cloudflare Workers y acceso privado, sin publicar todavía la aplicación ni modificar Supabase. La validación local del baseline permanece pausada como trabajo técnico futuro.
 
 ## Última actualización
 
-2026-09-21 — Respaldo externo de Supabase completado y verificado; el siguiente paso pasa a seguridad y acceso privado antes del despliegue.
+2026-09-22 — Estrategia progresiva de seguridad confirmada; el siguiente paso es preparar Workers y acceso privado sin publicar ni modificar Supabase.
