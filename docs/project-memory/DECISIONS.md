@@ -261,6 +261,24 @@ Cloudflare Access será una barrera perimetral, no un sustituto de la autorizaci
 
 ---
 
+## DEC-017 — Modernizar el framework antes de integrar Workers
+
+**Estado:** En implementación
+**Formalizada:** 2026-09-22
+
+### Decisión
+Antes de preparar la compatibilidad con Cloudflare Workers se modernizará Next.js/React en un PR técnico independiente. La actualización deberá partir de `main`, adoptar versiones compatibles con una integración vigente para Workers y preservar el comportamiento funcional y visual actual de la aplicación.
+
+Este cambio no incorporará todavía la configuración de Workers o Cloudflare Access, no publicará la aplicación y no modificará el esquema, los datos, Auth ni las políticas RLS de Supabase.
+
+### Motivo
+La evaluación técnica realizada desde el `main` posterior al PR #100 confirmó que el stack actual Next.js 14 + React 18 queda fuera de las versiones admitidas por las integraciones vigentes evaluadas para ejecutar Next.js sobre Cloudflare Workers. Forzar la instalación introduciría dependencias incompatibles y mezclaría la modernización del framework con el cambio de plataforma.
+
+### Consecuencia
+El orden de implementación de DEC-016 se ajusta sin sustituir su estrategia de seguridad: primero se actualizará y validará el framework; después, en otro PR, se prepararán Workers y el acceso privado. La modernización deberá incluir las adaptaciones y pruebas necesarias para demostrar que las funciones existentes continúan operando antes de avanzar al despliegue.
+
+---
+
 ## Regla de mantenimiento
 
 Cuando una decisión cambie:
