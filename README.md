@@ -37,6 +37,8 @@ MVP web responsivo para gestión financiera del hogar compartido, enfocado en in
 
 ## Setup local
 
+Requiere Node.js `>=22.12.0`. Node.js `22.21.0`, utilizado para la validación local del proyecto, es compatible. El mismo mínimo debe respetarse en los builds de Cloudflare.
+
 1. Instala dependencias:
 
 ```bash
