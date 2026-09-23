@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { responsesCreateMock, openAIConstructorMock } = vi.hoisted(() => {
   const responsesCreate = vi.fn();
-  const openAIConstructor = vi.fn(() => ({
-    responses: {
-      create: responsesCreate
-    }
-  }));
+  const openAIConstructor = vi.fn(function OpenAIConstructorMock() {
+    return {
+      responses: {
+        create: responsesCreate
+      }
+    };
+  });
   return { responsesCreateMock: responsesCreate, openAIConstructorMock: openAIConstructor };
 });
 
