@@ -8,7 +8,7 @@ Aplicación web responsiva para gestionar las finanzas del hogar compartido, pri
 
 ## Stack vigente
 
-- Next.js 14 (App Router) + TypeScript
+- Next.js 15.5.25 (App Router) + React 19.2.8 + TypeScript
 - Tailwind CSS
 - Supabase (Auth + Postgres)
 - Drizzle ORM
@@ -39,8 +39,9 @@ El repositorio contiene además rutas para otros módulos y pantallas; su mera e
 
 - Rama base: `main`.
 - El último bloque funcional integrado es el PR #90, relacionado con el filtro por subcategoría y navegación del historial de Movimientos.
+- El PR #102 modernizó el framework a Next.js 15.5.25 y React 19.2.8, incorporó un lockfile reproducible y quedó integrado después de pasar tipado, lint, 370 pruebas, build y validación local de los módulos y rutas dinámicas principales.
 - No hay CI automático registrado actualmente; las validaciones críticas dependen de pruebas ejecutadas por Codex/desarrollo y de validación local antes del merge.
-- La evaluación de compatibilidad para Cloudflare Workers detectó que el stack actual Next.js 14 + React 18 queda fuera de las versiones admitidas por las integraciones vigentes evaluadas. Antes de incorporar Workers se modernizará Next.js/React en un PR técnico aislado.
+- La comprobación de compatibilidad con `vinext` alcanzó 92%; el ajuste pendiente `"type": "module"` se reserva para el PR separado de preparación de Cloudflare Workers.
 
 ## Baseline técnico de Supabase
 
@@ -119,8 +120,8 @@ Decisión confirmada el 2026-09-22:
 
 ## Siguiente paso
 
-Preparar un PR técnico aislado para modernizar Next.js/React a versiones compatibles y conservar el comportamiento actual de la aplicación. Después de validar y fusionar esa actualización se retomará un PR separado para Cloudflare Workers y acceso privado. Ninguno de estos pasos publicará todavía la aplicación ni modificará Supabase. La validación local del baseline permanece pausada como trabajo técnico futuro.
+Preparar un PR técnico aislado para Cloudflare Workers y acceso privado sobre el framework ya modernizado. Este cambio preparará la plataforma, pero todavía no publicará la aplicación ni modificará el esquema, los datos, Auth o las políticas RLS de Supabase. La validación local del baseline permanece pausada como trabajo técnico futuro.
 
 ## Última actualización
 
-2026-09-22 — La modernización de Next.js/React se establece como prerrequisito aislado antes de preparar Workers; no se publicará ni se modificará Supabase en ese cambio.
+2026-09-23 — El PR #102 modernizó Next.js/React y fue validado e integrado; el siguiente bloque es preparar Cloudflare Workers y el acceso privado en un PR separado, sin publicar ni modificar Supabase todavía.
