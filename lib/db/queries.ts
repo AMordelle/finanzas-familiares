@@ -2709,11 +2709,12 @@ function buildJournalEntries(intent: TransactionIntent, accounts: AccountOption[
 }
 
 export async function saveConversationalTransaction(
-  intent: TransactionIntent,
+  intentInput: z.input<typeof transactionIntentSchema>,
   options?: {
     happenedAt?: string;
   }
 ) {
+  const intent = transactionIntentSchema.parse(intentInput);
   const householdId = await getDefaultHouseholdId();
   if (!householdId) {
     throw new Error('No existe un hogar configurado para registrar movimientos.');

@@ -54,7 +54,7 @@ class FakeQueryBuilder {
   }
 }
 
-function createFakeSupabase(overrides?: Partial<Record<string, any[]>>) {
+function createFakeSupabase(overrides?: Record<string, any[]>) {
   const db: Record<string, any[]> = {
     households: [{ id: 'house-1', name: 'Hogar Test' }],
     income_sources: [{ id: 'inc-1', household_id: 'house-1', name: 'Nómina', amount: '22000', recurring: true }],
