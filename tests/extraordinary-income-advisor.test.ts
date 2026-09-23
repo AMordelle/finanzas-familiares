@@ -317,7 +317,7 @@ describe('extraordinary income advisor', () => {
       context: buildContext({
         recommendationContext: buildRecommendationContext({
           projected: { ...buildRecommendationContext().projected, tacticalPressure: 'low', reserveMonths: 2.8 },
-          derived: { ...buildRecommendationContext().derived, householdStage: 'fortalecimiento' }
+          derived: { ...buildRecommendationContext().derived, householdStage: 'optimizacion' }
         })
       })
     });
@@ -356,7 +356,7 @@ describe('extraordinary income advisor', () => {
             reserveMonths: 2.5,
             debtPressureRatio: 0.45
           },
-          derived: { ...buildRecommendationContext().derived, householdStage: 'fortalecimiento' }
+          derived: { ...buildRecommendationContext().derived, householdStage: 'optimizacion' }
         })
       })
     });

@@ -57,7 +57,7 @@ let fake: ReturnType<typeof createFakeSupabase>;
 
 beforeEach(() => {
   vi.resetModules();
-  process.env.NODE_ENV = 'test';
+  vi.stubEnv('NODE_ENV', 'test');
   fake = createFakeSupabase();
   vi.doMock('@/lib/db/supabase', () => ({ supabaseAdmin: fake }));
 });
@@ -154,6 +154,8 @@ describe('módulo Configuración financiera', () => {
 
 
   it('construye Proyección con columnas activas, semanas válidas, semana actual, 12 semanas y detalles auditables', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-18T12:00:00.000Z'));
     const q = await import('@/lib/db/queries');
     fake.db.accounts.push({ id: 'acc-operativa', household_id: 'house-1', name: 'BBVA', type: 'operational_cash', balance: '2000', is_active: true });
 
@@ -214,6 +216,7 @@ describe('módulo Configuración financiera', () => {
     expect(projection.unclassified.some((item) => item.category === noProjectable.key)).toBe(false);
     expect(JSON.stringify(fake.db.transactions)).toBe(txBefore);
     expect(JSON.stringify(fake.db.accounts)).toBe(accountsBefore);
+    vi.useRealTimers();
 
     const page = await import('@/app/proyeccion/page');
     const html = renderToStaticMarkup(await page.default());
@@ -358,6 +361,7 @@ describe('módulo Configuración financiera', () => {
       householdId: 'house-1',
       categories: [{ id: 'cat-1', householdId: 'house-1', name: 'Gastos variables', key: 'gastos_variables', type: 'expense', isActive: true, noProjectable: false, canDelete: true, deleteBlockedReason: null, createdAt: 'x', updatedAt: 'x', subcategories: [{ id: 'sub-1', householdId: 'house-1', financialCategoryId: 'cat-1', name: 'Oxxo', key: 'oxxo', isActive: true, canDelete: true, deleteBlockedReason: null, createdAt: 'x', updatedAt: 'x' }] }],
       projectionColumns: [],
+      flows: [],
       categoryAudit: {
         groups: [{ category: 'legacy_oxxo', categoryName: null, status: 'missing_category', total: 120, movementCount: 1, movements: [{ id: 'group-1', date: '2026-05-01T12:00:00.000Z', description: 'Oxxo viejo', accountName: 'BBVA', type: 'Gasto', amount: 120, category: 'legacy_oxxo', subcategory: null, status: 'missing_category' }] }],
         noProjectableGroups: [],

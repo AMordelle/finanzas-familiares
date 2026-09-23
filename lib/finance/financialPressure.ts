@@ -3,6 +3,7 @@ import { formatCurrencyMXN } from '@/lib/formatters/currency';
 
 const DEFAULT_OPENAI_MODEL = process.env.OPENAI_MODEL ?? 'gpt-4.1-mini';
 const DEFAULT_WARNING_RATIO = 0.2;
+type ResponsesCreate = (body: unknown) => Promise<{ output_text?: string }>;
 
 export type FinancialPressureAccount = {
   type: string;
@@ -199,7 +200,8 @@ export async function generateFinancialInsight(
   } as const;
 
   try {
-    const response = await (client.responses.create as any)({
+    const createResponse = client.responses.create.bind(client.responses) as unknown as ResponsesCreate;
+    const response = await createResponse({
       model: DEFAULT_OPENAI_MODEL,
       temperature: 0.2,
       input: [

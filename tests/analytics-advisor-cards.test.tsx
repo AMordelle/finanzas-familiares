@@ -2,8 +2,9 @@ import React from 'react';
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AnalyticsAdvisorCards, toggleAnalyticsCard } from '@/components/dashboard/analytics-advisor-cards';
+import type { FinancialRadar } from '@/lib/finance/financialRadar';
 
-const radar = {
+const radar: FinancialRadar = {
   status: 'atencion' as const,
   windowDays: 7,
   windowLabel: 'próximos 7 días',
