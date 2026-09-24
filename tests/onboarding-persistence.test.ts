@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 class FakeQueryBuilder {
   private action: 'select' | 'insert' | 'upsert' | 'update' | 'delete' = 'select';
@@ -192,6 +192,11 @@ const payload = {
 describe('onboarding persistence', () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.stubEnv('OPENAI_API_KEY', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('usa DEV_PROFILE_ID de forma consistente en desarrollo', async () => {
