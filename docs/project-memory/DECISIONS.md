@@ -248,7 +248,8 @@ El siguiente trabajo se enfocará en respaldar la base activa y después prepara
 **Formalizada:** 2026-09-22  
 **Implementación parcial:** 2026-09-24 mediante PR #104  
 **Preparación operativa:** 2026-09-24 mediante PR #106  
-**Perímetro y caché preparados:** 2026-09-24 mediante configuración remota validada y PR #108
+**Perímetro y caché preparados:** 2026-09-24 mediante configuración remota validada y PR #108  
+**Despliegue privado validado:** 2026-09-24 en Cloudflare Workers
 
 ### Decisión
 La publicación de Finanzas Familiares se preparará mediante tres capas progresivas y separadas:
@@ -262,7 +263,7 @@ El primer PR técnico se limitará a preparar compatibilidad con Cloudflare Work
 ### Consecuencia
 Cloudflare Access será una barrera perimetral, no un sustituto de la autorización en Supabase. `SUPABASE_SERVICE_ROLE_KEY` debe permanecer exclusivamente del lado servidor y configurarse como secreto. La publicación con datos reales no se considerará segura hasta bloquear el acceso anónimo directo a Supabase; Auth/RLS y la retirada progresiva de privilegios administrativos se implementarán en cambios posteriores y separados.
 
-El PR #104 completó la preparación técnica local para Workers mediante Vinext y conservó el flujo convencional de Next.js. El PR #106 integró el procedimiento operativo para desplegar en `https://finanzas-familiares.amordelle.workers.dev/`, exigir Cloudflare Access antes de cargar datos reales y autorizar inicialmente sólo `wilcas0207@gmail.com`. La configuración remota ya protege el Worker marcador y fue validada tanto para acceso autorizado como para bloqueo anónimo. El PR #108 integró `kvDataAdapter()` y el binding `VINEXT_KV_CACHE`, dejando resuelto el requisito de caché persistente de Vinext. La aplicación real, el cierre del acceso anónimo directo a Supabase y Supabase Auth/RLS continúan como pasos posteriores y separados.
+El PR #104 completó la preparación técnica local para Workers mediante Vinext y conservó el flujo convencional de Next.js. El PR #106 integró el procedimiento operativo para desplegar en `https://finanzas-familiares.amordelle.workers.dev/`, exigir Cloudflare Access antes de cargar datos reales y autorizar inicialmente sólo `wilcas0207@gmail.com`. La configuración remota protege el acceso y fue validada tanto para el usuario autorizado como para el bloqueo anónimo. El PR #108 integró `kvDataAdapter()` y el binding `VINEXT_KV_CACHE`, dejando resuelto el requisito de caché persistente de Vinext. La aplicación real quedó desplegada y validada en producción, incluidos `/api/health` y los módulos principales. El cierre del acceso anónimo directo a Supabase y Supabase Auth/RLS continúan como pasos posteriores y separados; Cloudflare Access se conserva mientras esas capas se implementan.
 
 ---
 
