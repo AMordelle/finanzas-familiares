@@ -118,6 +118,14 @@ Antes de exponer una URL con datos reales se debe habilitar Cloudflare Access so
 
 La configuración actual prepara el build y la ejecución local; no crea una aplicación de Access, una URL `workers.dev`, un dominio ni un despliegue remoto.
 
+### Despliegue controlado
+
+El destino acordado para la primera publicación es:
+
+`https://finanzas-familiares.amordelle.workers.dev/`
+
+La política inicial de Cloudflare Access permitirá únicamente `wilcas0207@gmail.com` mediante código de un solo uso. El procedimiento completo de preparación, protección, despliegue, validación y reversión está en [Despliegue privado en Cloudflare Workers](docs/deployment/CLOUDFLARE_WORKERS.md).
+
 ## Notas de arquitectura
 
 - La lógica financiera vive en TypeScript puro y no depende de IA.
