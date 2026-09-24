@@ -72,7 +72,17 @@ Para evitar una ventana pública con acceso a datos reales:
 
 Si Cloudflare no permite proteger el Worker de marcador o la ruta esperada no es exactamente la acordada, detener el proceso. No desplegar la aplicación real.
 
-## 3. Configurar secretos
+## 3. Configurar caché persistente de Vinext
+
+La aplicación utiliza ISR/caché y el despliegue de producción requiere un backend persistente. Crear una única vez el namespace KV y registrar su binding en `wrangler.jsonc`:
+
+```powershell
+npx wrangler kv namespace create VINEXT_KV_CACHE --binding VINEXT_KV_CACHE --config wrangler.jsonc
+```
+
+La configuración debe incluir el binding `VINEXT_KV_CACHE` con el identificador del namespace creado. `vite.config.ts` debe declarar `kvDataAdapter()` como adaptador de datos. El identificador del namespace no es un secreto, pero debe permanecer sincronizado con la cuenta de Cloudflare utilizada para el despliegue.
+
+## 4. Configurar secretos
 
 Con Access ya activo, cargar los valores exclusivos del servidor mediante Wrangler o el panel de Cloudflare:
 
@@ -88,7 +98,7 @@ Las variables `NEXT_PUBLIC_SUPABASE_URL` y `NEXT_PUBLIC_SUPABASE_ANON_KEY` son p
 
 Después de cada comando, revisar que la terminal no haya impreso el valor introducido.
 
-## 4. Desplegar la aplicación
+## 5. Desplegar la aplicación
 
 Con la rama aprobada integrada en `main` y Access ya verificado:
 
@@ -102,7 +112,7 @@ npm run deploy:vinext
 
 El nombre configurado debe continuar siendo `finanzas-familiares`. No cambiar el punto de entrada `vinext/server/fetch-handler` ni introducir un Worker personalizado.
 
-## 5. Validación posterior
+## 6. Validación posterior
 
 ### Usuario autorizado
 
@@ -134,7 +144,7 @@ El nombre configurado debe continuar siendo `finanzas-familiares`. No cambiar el
 
 Después del despliegue, comprobar que `npm run dev` continúa funcionando sin requerir una sesión de Cloudflare Access.
 
-## 6. Reversión
+## 7. Reversión
 
 Revertir o retirar el despliegue si ocurre cualquiera de estos casos:
 
