@@ -14,7 +14,7 @@ Aplicación web responsiva para gestionar las finanzas del hogar compartido, pri
 - Drizzle ORM
 - Zod
 - Vitest 5.0.1
-- Vinext 1.0.0-beta.11 + Cloudflare Workers (compatibilidad y caché KV integradas; despliegue de la aplicación real todavía pendiente)
+- Vinext 1.0.0-beta.11 + Cloudflare Workers (aplicación real desplegada de forma privada con caché KV)
 - OpenAI Responses API en módulos de IA
 
 ## Arquitectura relevante
@@ -31,7 +31,7 @@ Aplicación web responsiva para gestionar las finanzas del hogar compartido, pri
 - Flujos: en desarrollo activo.
 - Registro: funcional con captura conversacional multi-movimiento integrada mediante PR #58; permite interpretar y guardar varios movimientos en una sola entrada conservando trazabilidad individual.
 - Cierre semanal/mensual: pendiente de evolución.
-- Publicación para acceso desde distintos dispositivos: en preparación final; el Worker marcador está protegido por Cloudflare Access y la compatibilidad, los secretos y la caché KV necesarios para desplegar la aplicación real ya están configurados.
+- Publicación para acceso desde distintos dispositivos: operativa en `https://finanzas-familiares.amordelle.workers.dev/`, protegida por Cloudflare Access para `wilcas0207@gmail.com`.
 - Dashboard/IA: alcance futuro por definir.
 
 El repositorio contiene además rutas para otros módulos y pantallas; su mera existencia no implica que estén terminados o visibles en la navegación actual.
@@ -44,7 +44,8 @@ El repositorio contiene además rutas para otros módulos y pantallas; su mera e
 - No hay CI automático registrado actualmente; las validaciones críticas dependen de pruebas ejecutadas por Codex/desarrollo y de validación local antes del merge.
 - El PR #104 integró Vinext y la configuración de Cloudflare Workers, declaró Node.js `>=22.12.0` y conservó en paralelo el flujo convencional de Next.js. La validación confirmó 100% de compatibilidad, 370 pruebas, ambos builds, dry run de Wrangler y funcionamiento local en Next.js, Vinext y Workers.
 - El PR #106 integró el runbook del despliegue privado: destino `https://finanzas-familiares.amordelle.workers.dev/`, Cloudflare Access con OTP y autorización inicial exclusiva para `wilcas0207@gmail.com`. El Worker marcador ya está protegido y el acceso autorizado/no autorizado fue validado.
-- El PR #108 integró `kvDataAdapter()` y el binding `VINEXT_KV_CACHE`, eliminó el bloqueo de caché persistente de Vinext y pasó build, compatibilidad, dry run y validación local de todos los módulos. La aplicación real todavía no se ha desplegado.
+- El PR #108 integró `kvDataAdapter()` y el binding `VINEXT_KV_CACHE`, eliminó el bloqueo de caché persistente de Vinext y pasó build, compatibilidad, dry run y validación local de todos los módulos.
+- La aplicación real se desplegó en Cloudflare Workers como versión `3ff93a3b-22c6-4efa-9fe1-b945916a2509`. La validación posterior confirmó autenticación mediante Cloudflare Access, bloqueo anónimo, `/api/health` correcto y funcionamiento de los módulos principales.
 
 ## Baseline técnico de Supabase
 
@@ -109,7 +110,7 @@ Cuando se retome Flujos, el trabajo existente del PR #73 y la estructura/datos p
 Decisión confirmada el 2026-09-22:
 
 - La preparación del despliegue seguirá una estrategia progresiva: Cloudflare Access como perímetro privado, cierre del acceso anónimo directo a Supabase y adopción posterior de Supabase Auth con RLS por hogar.
-- El PR #104 preparó la compatibilidad con Cloudflare Workers, el PR #106 integró el procedimiento controlado y el PR #108 añadió la caché KV persistente requerida por Vinext. Cloudflare Access ya protege el Worker marcador y autoriza únicamente `wilcas0207@gmail.com`; los secretos del Worker y el namespace KV también están configurados. La aplicación real y las capas posteriores de seguridad todavía no se han desplegado ni implementado.
+- El PR #104 preparó la compatibilidad con Cloudflare Workers, el PR #106 integró el procedimiento controlado y el PR #108 añadió la caché KV persistente requerida por Vinext. La aplicación real ya está desplegada y validada detrás de Cloudflare Access, con autorización exclusiva para `wilcas0207@gmail.com`. El cierre del acceso anónimo directo a Supabase y Supabase Auth/RLS todavía no se han implementado.
 - El cierre de la Data API anónima y la migración hacia sesiones de usuario se tratarán en cambios posteriores, pequeños y separados.
 - `SUPABASE_SERVICE_ROLE_KEY` sólo puede permanecer del lado servidor y deberá configurarse como secreto; su uso rutinario se retirará progresivamente al adoptar Auth/RLS.
 
@@ -123,8 +124,8 @@ Decisión confirmada el 2026-09-22:
 
 ## Siguiente paso
 
-Actualizar `main` después del PR #108, realizar el despliegue controlado de la aplicación real en el Worker ya protegido y validar acceso autorizado, bloqueo anónimo, `/api/health` y módulos principales. Después del despliegue estable, preparar Supabase Auth y RLS por hogar como un bloque separado.
+Preparar el bloque separado de Supabase Auth y RLS por hogar: definir el flujo de login propio, cerrar el acceso anónimo directo a la Data API y sustituir progresivamente el uso rutinario de `supabaseAdmin`, sin retirar todavía Cloudflare Access.
 
 ## Última actualización
 
-2026-09-24 — Cloudflare Access quedó configurado y validado sobre el Worker marcador; los secretos y el namespace KV están disponibles, y el PR #108 integró la caché persistente requerida por Vinext. El siguiente paso es desplegar y validar la aplicación real protegida.
+2026-09-24 — Finanzas Familiares quedó desplegada y validada en Cloudflare Workers detrás de Cloudflare Access. La versión publicada respondió correctamente en `/api/health`, cargó los módulos principales y bloqueó el acceso anónimo. El siguiente bloque es Supabase Auth/RLS.
