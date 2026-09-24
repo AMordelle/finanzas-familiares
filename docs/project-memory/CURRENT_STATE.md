@@ -31,7 +31,7 @@ Aplicación web responsiva para gestionar las finanzas del hogar compartido, pri
 - Flujos: en desarrollo activo.
 - Registro: funcional con captura conversacional multi-movimiento integrada mediante PR #58; permite interpretar y guardar varios movimientos en una sola entrada conservando trazabilidad individual.
 - Cierre semanal/mensual: pendiente de evolución.
-- Publicación para acceso desde distintos dispositivos: pendiente; la compatibilidad local con Cloudflare Workers ya está preparada.
+- Publicación para acceso desde distintos dispositivos: pendiente; la compatibilidad local con Cloudflare Workers y el procedimiento de despliegue privado ya están preparados.
 - Dashboard/IA: alcance futuro por definir.
 
 El repositorio contiene además rutas para otros módulos y pantallas; su mera existencia no implica que estén terminados o visibles en la navegación actual.
@@ -43,6 +43,7 @@ El repositorio contiene además rutas para otros módulos y pantallas; su mera e
 - El PR #102 modernizó el framework a Next.js 15.5.25 y React 19.2.8, incorporó un lockfile reproducible y quedó integrado después de pasar tipado, lint, 370 pruebas, build y validación local de los módulos y rutas dinámicas principales.
 - No hay CI automático registrado actualmente; las validaciones críticas dependen de pruebas ejecutadas por Codex/desarrollo y de validación local antes del merge.
 - El PR #104 integró Vinext y la configuración de Cloudflare Workers, declaró Node.js `>=22.12.0` y conservó en paralelo el flujo convencional de Next.js. La validación confirmó 100% de compatibilidad, 370 pruebas, ambos builds, dry run de Wrangler y funcionamiento local en Next.js, Vinext y Workers.
+- El PR #106 integró el runbook del despliegue privado: destino `https://finanzas-familiares.amordelle.workers.dev/`, Cloudflare Access con OTP y autorización inicial exclusiva para `wilcas0207@gmail.com`. Todavía no se realizó el despliegue ni la configuración remota.
 
 ## Baseline técnico de Supabase
 
@@ -107,7 +108,7 @@ Cuando se retome Flujos, el trabajo existente del PR #73 y la estructura/datos p
 Decisión confirmada el 2026-09-22:
 
 - La preparación del despliegue seguirá una estrategia progresiva: Cloudflare Access como perímetro privado, cierre del acceso anónimo directo a Supabase y adopción posterior de Supabase Auth con RLS por hogar.
-- El PR #104 preparó la compatibilidad con Cloudflare Workers sin publicar la aplicación ni modificar el esquema o los datos de Supabase. La configuración remota de Cloudflare Access y las capas posteriores de seguridad siguen pendientes.
+- El PR #104 preparó la compatibilidad con Cloudflare Workers y el PR #106 dejó integrado el procedimiento controlado de publicación. Ninguno publicó la aplicación ni modificó el esquema o los datos de Supabase. La configuración remota de Cloudflare Access y las capas posteriores de seguridad siguen pendientes.
 - El cierre de la Data API anónima y la migración hacia sesiones de usuario se tratarán en cambios posteriores, pequeños y separados.
 - `SUPABASE_SERVICE_ROLE_KEY` sólo puede permanecer del lado servidor y deberá configurarse como secreto; su uso rutinario se retirará progresivamente al adoptar Auth/RLS.
 
@@ -121,8 +122,8 @@ Decisión confirmada el 2026-09-22:
 
 ## Siguiente paso
 
-Definir y preparar el siguiente cambio pequeño de la estrategia de publicación segura: configuración remota de Cloudflare Access y despliegue controlado, manteniendo separados el cierre del acceso anónimo a Supabase y la adopción posterior de Auth/RLS. La aplicación todavía no debe exponerse públicamente con datos reales mientras persista el riesgo crítico documentado de autorización en Supabase.
+Ejecutar el procedimiento integrado por el PR #106: crear el Worker marcador, protegerlo mediante Cloudflare Access con OTP para `wilcas0207@gmail.com`, comprobar el bloqueo anónimo y sólo entonces cargar secretos y realizar el despliegue controlado. El cierre del acceso anónimo a Supabase y la adopción posterior de Auth/RLS permanecen como cambios separados.
 
 ## Última actualización
 
-2026-09-24 — El PR #104 preparó e integró la compatibilidad con Cloudflare Workers mediante Vinext, validada localmente en Next.js, Vinext y el runtime de Workers; no hubo despliegue remoto ni cambios en Supabase.
+2026-09-24 — El PR #106 integró el procedimiento para desplegar de forma privada en `workers.dev` con Cloudflare Access limitado inicialmente a un solo correo; el despliegue remoto y la configuración de Access aún no se han ejecutado.

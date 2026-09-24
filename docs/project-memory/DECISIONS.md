@@ -246,7 +246,8 @@ El siguiente trabajo se enfocará en respaldar la base activa y después prepara
 
 **Estado:** En implementación  
 **Formalizada:** 2026-09-22  
-**Implementación parcial:** 2026-09-24 mediante PR #104
+**Implementación parcial:** 2026-09-24 mediante PR #104  
+**Preparación operativa:** 2026-09-24 mediante PR #106
 
 ### Decisión
 La publicación de Finanzas Familiares se preparará mediante tres capas progresivas y separadas:
@@ -260,7 +261,7 @@ El primer PR técnico se limitará a preparar compatibilidad con Cloudflare Work
 ### Consecuencia
 Cloudflare Access será una barrera perimetral, no un sustituto de la autorización en Supabase. `SUPABASE_SERVICE_ROLE_KEY` debe permanecer exclusivamente del lado servidor y configurarse como secreto. La publicación con datos reales no se considerará segura hasta bloquear el acceso anónimo directo a Supabase; Auth/RLS y la retirada progresiva de privilegios administrativos se implementarán en cambios posteriores y separados.
 
-El PR #104 completó la preparación técnica local para Workers mediante Vinext y conservó el flujo convencional de Next.js. No realizó despliegues, no configuró todavía Cloudflare Access y no modificó Supabase; las capas restantes de esta decisión continúan pendientes y separadas.
+El PR #104 completó la preparación técnica local para Workers mediante Vinext y conservó el flujo convencional de Next.js. El PR #106 integró el procedimiento operativo para desplegar en `https://finanzas-familiares.amordelle.workers.dev/`, exigir Cloudflare Access antes de cargar datos reales y autorizar inicialmente sólo `wilcas0207@gmail.com` mediante OTP. Ninguno de estos PR realizó el despliegue remoto, configuró todavía Cloudflare Access o modificó Supabase; esas acciones y las capas posteriores continúan pendientes y separadas.
 
 ---
 
