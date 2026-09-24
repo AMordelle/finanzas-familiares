@@ -13,7 +13,8 @@ Aplicación web responsiva para gestionar las finanzas del hogar compartido, pri
 - Supabase (Auth + Postgres)
 - Drizzle ORM
 - Zod
-- Vitest
+- Vitest 5.0.1
+- Vinext 1.0.0-beta.11 + Cloudflare Workers (compatibilidad integrada; todavía sin despliegue remoto)
 - OpenAI Responses API en módulos de IA
 
 ## Arquitectura relevante
@@ -30,7 +31,7 @@ Aplicación web responsiva para gestionar las finanzas del hogar compartido, pri
 - Flujos: en desarrollo activo.
 - Registro: funcional con captura conversacional multi-movimiento integrada mediante PR #58; permite interpretar y guardar varios movimientos en una sola entrada conservando trazabilidad individual.
 - Cierre semanal/mensual: pendiente de evolución.
-- Publicación para acceso desde distintos dispositivos: pendiente.
+- Publicación para acceso desde distintos dispositivos: pendiente; la compatibilidad local con Cloudflare Workers ya está preparada.
 - Dashboard/IA: alcance futuro por definir.
 
 El repositorio contiene además rutas para otros módulos y pantallas; su mera existencia no implica que estén terminados o visibles en la navegación actual.
@@ -41,7 +42,7 @@ El repositorio contiene además rutas para otros módulos y pantallas; su mera e
 - El último bloque funcional integrado es el PR #90, relacionado con el filtro por subcategoría y navegación del historial de Movimientos.
 - El PR #102 modernizó el framework a Next.js 15.5.25 y React 19.2.8, incorporó un lockfile reproducible y quedó integrado después de pasar tipado, lint, 370 pruebas, build y validación local de los módulos y rutas dinámicas principales.
 - No hay CI automático registrado actualmente; las validaciones críticas dependen de pruebas ejecutadas por Codex/desarrollo y de validación local antes del merge.
-- La comprobación de compatibilidad con `vinext` alcanzó 92%; el ajuste pendiente `"type": "module"` se reserva para el PR separado de preparación de Cloudflare Workers.
+- El PR #104 integró Vinext y la configuración de Cloudflare Workers, declaró Node.js `>=22.12.0` y conservó en paralelo el flujo convencional de Next.js. La validación confirmó 100% de compatibilidad, 370 pruebas, ambos builds, dry run de Wrangler y funcionamiento local en Next.js, Vinext y Workers.
 
 ## Baseline técnico de Supabase
 
@@ -106,7 +107,7 @@ Cuando se retome Flujos, el trabajo existente del PR #73 y la estructura/datos p
 Decisión confirmada el 2026-09-22:
 
 - La preparación del despliegue seguirá una estrategia progresiva: Cloudflare Access como perímetro privado, cierre del acceso anónimo directo a Supabase y adopción posterior de Supabase Auth con RLS por hogar.
-- El primer PR técnico preparará Cloudflare Workers y el acceso privado, sin publicar la aplicación ni modificar el esquema o los datos de Supabase.
+- El PR #104 preparó la compatibilidad con Cloudflare Workers sin publicar la aplicación ni modificar el esquema o los datos de Supabase. La configuración remota de Cloudflare Access y las capas posteriores de seguridad siguen pendientes.
 - El cierre de la Data API anónima y la migración hacia sesiones de usuario se tratarán en cambios posteriores, pequeños y separados.
 - `SUPABASE_SERVICE_ROLE_KEY` sólo puede permanecer del lado servidor y deberá configurarse como secreto; su uso rutinario se retirará progresivamente al adoptar Auth/RLS.
 
@@ -120,8 +121,8 @@ Decisión confirmada el 2026-09-22:
 
 ## Siguiente paso
 
-Preparar un PR técnico aislado para Cloudflare Workers y acceso privado sobre el framework ya modernizado. Este cambio preparará la plataforma, pero todavía no publicará la aplicación ni modificará el esquema, los datos, Auth o las políticas RLS de Supabase. La validación local del baseline permanece pausada como trabajo técnico futuro.
+Definir y preparar el siguiente cambio pequeño de la estrategia de publicación segura: configuración remota de Cloudflare Access y despliegue controlado, manteniendo separados el cierre del acceso anónimo a Supabase y la adopción posterior de Auth/RLS. La aplicación todavía no debe exponerse públicamente con datos reales mientras persista el riesgo crítico documentado de autorización en Supabase.
 
 ## Última actualización
 
-2026-09-23 — El PR #102 modernizó Next.js/React y fue validado e integrado; el siguiente bloque es preparar Cloudflare Workers y el acceso privado en un PR separado, sin publicar ni modificar Supabase todavía.
+2026-09-24 — El PR #104 preparó e integró la compatibilidad con Cloudflare Workers mediante Vinext, validada localmente en Next.js, Vinext y el runtime de Workers; no hubo despliegue remoto ni cambios en Supabase.
