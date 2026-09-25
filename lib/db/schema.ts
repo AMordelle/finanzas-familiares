@@ -92,6 +92,7 @@ export const flowPeriods = pgTable('flow_periods', {
   periodEnd: date('period_end').notNull(),
   periodLabel: text('period_label').notNull(),
   targetAmount: numeric('target_amount', { precision: 14, scale: 2 }).notNull(),
+  financialSubcategoryId: uuid('financial_subcategory_id'),
   createdAt: timestamp('created_at').defaultNow().notNull()
 }, (table) => ({
   fundPeriodUnique: uniqueIndex('flow_periods_fund_period_unique').on(table.householdId, table.fundId, table.periodStart, table.periodEnd),
@@ -179,6 +180,8 @@ export const financialSubcategories = pgTable('financial_subcategories', {
   key: text('key').notNull(),
   plannedAmount: numeric('planned_amount', { precision: 14, scale: 2 }),
   plannedPeriodType: text('planned_period_type'),
+  calendarDay: integer('calendar_day'),
+  calendarMonth: integer('calendar_month'),
   flowFundId: uuid('flow_fund_id').references(() => flowFunds.id, { onDelete: 'restrict' }),
   isActive: boolean('is_active').notNull().default(true),
   createdAt: timestamp('created_at').defaultNow().notNull(),
