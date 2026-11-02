@@ -168,10 +168,62 @@ function createFakeSupabase() {
     transactions: []
   };
 
+  const rpcCalls: Array<{ name: string; args: Record<string, any> }> = [];
+  const rpcErrors: Record<string, string | undefined> = {};
+
   return {
     db,
+    rpcCalls,
+    rpcErrors,
     from(table: string) {
       return new FakeQueryBuilder(table, db);
+    },
+    async rpc(name: string, args: Record<string, any>) {
+      rpcCalls.push({ name, args });
+      if (rpcErrors[name]) return { data: null, error: { message: rpcErrors[name] } };
+      const group = db.transaction_groups.find((row) => row.id === args.p_group_id && row.household_id === args.p_household_id);
+      if (!group) return { data: null, error: { message: 'movement_not_found' } };
+
+      const storedLines = db.transactions.filter((row) => row.group_id === args.p_group_id);
+      const expectedLines = args.p_expected_lines ?? [];
+      const matchesExpected = storedLines.length === expectedLines.length && storedLines.every((stored) => {
+        const expected = expectedLines.find((line: any) => line.id === stored.id);
+        return expected
+          && expected.account_id === (stored.account_id ?? null)
+          && expected.type === stored.type
+          && expected.category === stored.category
+          && (expected.subcategory ?? null) === (stored.subcategory ?? null)
+          && Number(expected.amount) === Number(stored.amount);
+      });
+      if (!matchesExpected) return { data: null, error: { message: 'movement_changed' } };
+
+      const accountDeltas = args.p_account_deltas ?? [];
+      if (accountDeltas.some((delta: any) => !db.accounts.some((account) => account.id === delta.account_id && account.household_id === args.p_household_id))) {
+        return { data: null, error: { message: 'invalid_movement_account' } };
+      }
+
+      for (const delta of accountDeltas) {
+        const account = db.accounts.find((row) => row.id === delta.account_id);
+        account.balance = (Number(account.balance) + Number(delta.delta)).toFixed(2);
+      }
+
+      if (name === 'update_movement_atomic') {
+        for (const nextLine of args.p_next_lines ?? []) {
+          const index = db.transactions.findIndex((row) => row.id === nextLine.id && row.group_id === args.p_group_id);
+          if (index < 0) return { data: null, error: { message: 'movement_changed' } };
+          db.transactions[index] = { ...db.transactions[index], ...nextLine };
+        }
+        group.note = args.p_description;
+        return { data: null, error: null };
+      }
+
+      if (name === 'delete_movement_atomic') {
+        db.transactions = db.transactions.filter((row) => row.group_id !== args.p_group_id);
+        db.transaction_groups = db.transaction_groups.filter((row) => row.id !== args.p_group_id);
+        return { data: null, error: null };
+      }
+
+      return { data: null, error: { message: `unknown_rpc:${name}` } };
     }
   };
 }
@@ -1009,6 +1061,8 @@ describe('onboarding persistence', () => {
     const movementId = fakeClient.db.transaction_groups.at(-1).id;
     await deleteMovement({ movementId });
 
+    expect(fakeClient.rpcCalls.at(-1)?.name).toBe('delete_movement_atomic');
+
     const efectivo = fakeClient.db.accounts.find((acc) => acc.name === 'efectivo');
     expect(Number(efectivo.balance)).toBe(1000);
 
@@ -1060,12 +1114,64 @@ describe('onboarding persistence', () => {
       destinationAccountId: null
     });
 
+    expect(fakeClient.rpcCalls.at(-1)?.name).toBe('update_movement_atomic');
+
     const efectivo = fakeClient.db.accounts.find((acc) => acc.name === 'efectivo');
     expect(Number(efectivo.balance)).toBe(700);
 
     const snapshot = JSON.parse(fakeClient.db.financial_snapshots.at(-1).payload);
     expect(snapshot.availableMoney).toBe(4700);
     expect(snapshot.monthlyOFH).toBeGreaterThan(0);
+
+    delete process.env.DEV_PROFILE_ID;
+  });
+
+  it('editar movimiento no modifica saldos ni líneas cuando la operación atómica falla', async () => {
+    const fakeClient = createFakeSupabase();
+    vi.doMock('@/lib/db/supabase', () => ({ supabase: fakeClient, supabaseAdmin: fakeClient }));
+    const { createHouseholdOnboarding, saveConversationalTransaction, updateMovement } = await import('@/lib/db/queries');
+
+    process.env.DEV_PROFILE_ID = 'profile-edit-atomic-failure';
+    await createHouseholdOnboarding({
+      householdName: 'Caso atómico',
+      householdType: 'familia',
+      regularIncomes: [{ nombre: 'Sueldo', monto: 10000, periodicidad: 'mensual' }],
+      extraordinaryIncomes: [],
+      operationalAccounts: [{ nombre: 'efectivo', saldoInicial: 1000 }],
+      fundAccounts: [],
+      debtAccounts: [],
+      receivables: [],
+      fixedExpenses: [],
+      variableSpending: []
+    });
+    await saveConversationalTransaction({
+      action: 'gasto',
+      amount: 200,
+      category: 'alimentos',
+      description: 'Gasto original',
+      sourceAccount: 'efectivo',
+      destinationAccount: undefined,
+      missingFields: [],
+      humanConfirmation: 'ok'
+    });
+
+    const movementId = fakeClient.db.transaction_groups.at(-1).id;
+    const efectivo = fakeClient.db.accounts.find((account) => account.name === 'efectivo');
+    const balanceBefore = efectivo.balance;
+    const linesBefore = structuredClone(fakeClient.db.transactions);
+    fakeClient.rpcErrors.update_movement_atomic = 'forced_atomic_failure';
+
+    await expect(updateMovement({
+      movementId,
+      description: 'No debe guardarse',
+      amount: 500,
+      sourceAccountId: efectivo.id,
+      destinationAccountId: null
+    })).rejects.toThrow('No fue posible actualizar el movimiento de forma atómica');
+
+    expect(efectivo.balance).toBe(balanceBefore);
+    expect(fakeClient.db.transactions).toEqual(linesBefore);
+    expect(fakeClient.db.transaction_groups.at(-1).note).toBe('Gasto original');
 
     delete process.env.DEV_PROFILE_ID;
   });

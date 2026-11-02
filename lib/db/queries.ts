@@ -1446,7 +1446,7 @@ export async function updateAccount(rawInput: unknown, client: SupabaseClientLik
     throw new Error(`No fue posible actualizar la cuenta: ${error.message}`);
   }
 
-  await recalculateIndicators(householdId);
+  await refreshIndicatorsAfterCommittedMutation(householdId, 'update_account');
 }
 
 export async function deactivateAccount(rawInput: unknown, client: SupabaseClientLike = supabaseAdmin) {
@@ -1954,6 +1954,31 @@ function buildBalanceDeltasFromStoredMovement(
   }
 
   return deltas;
+}
+
+function serializeAccountDeltas(deltas: Map<string, number>) {
+  return Array.from(deltas.entries())
+    .filter(([, delta]) => delta !== 0)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([account_id, delta]) => ({ account_id, delta: roundMoney(delta) }));
+}
+
+function serializeExpectedMovementLines(lines: Array<{
+  id: string;
+  account_id: string | null;
+  type: string;
+  category: string;
+  subcategory?: string | null;
+  amount: string;
+}>) {
+  return lines.map((line) => ({
+    id: line.id,
+    account_id: line.account_id,
+    type: line.type,
+    category: line.category,
+    subcategory: line.subcategory ?? null,
+    amount: line.amount
+  }));
 }
 
 
@@ -2973,9 +2998,10 @@ export async function updateMovement(rawInput: unknown) {
 
   const accounts = await getHouseholdAccounts(householdId);
   const reverseDeltas = buildBalanceDeltasFromStoredMovement(previousMovement, accounts, -1);
-  await persistAccountDeltas(householdId, reverseDeltas);
+  const applyDeltas = buildBalanceDeltasFromStoredMovement(nextMovement, accounts, 1);
+  mergeDeltas(reverseDeltas, applyDeltas);
 
-  const updates = lines.map((line) => {
+  const nextLines = lines.map((line) => {
     const nextAccountId =
       line.type === 'credit' && line.account_id
         ? sourceAccountId
@@ -2983,38 +3009,32 @@ export async function updateMovement(rawInput: unknown) {
           ? destinationAccountId
           : line.account_id;
 
-    return supabaseAdmin
-      .from('transactions')
-      .update({
-        account_id: nextAccountId ?? null,
-        category: nextCategory && line.category !== 'entrada_cuenta' && line.category !== 'salida_cuenta' ? nextCategory : line.category,
-        subcategory: nextCategory && line.category !== 'entrada_cuenta' && line.category !== 'salida_cuenta' ? subcategory : null,
-        amount: input.amount.toFixed(2)
-      })
-      .eq('id', line.id)
-      .eq('group_id', group.id);
+    return {
+      id: line.id,
+      account_id: nextAccountId ?? null,
+      category: nextCategory && line.category !== 'entrada_cuenta' && line.category !== 'salida_cuenta' ? nextCategory : line.category,
+      subcategory: nextCategory && line.category !== 'entrada_cuenta' && line.category !== 'salida_cuenta' ? subcategory : null,
+      amount: input.amount.toFixed(2)
+    };
   });
 
-  await Promise.all(
-    updates.map(async (query) => {
-      const { error } = await query;
-      if (error) throw new Error(`No fue posible actualizar transacciones del movimiento: ${error.message}`);
-    })
-  );
+  const { error: atomicUpdateError } = await supabaseAdmin.rpc('update_movement_atomic', {
+    p_household_id: householdId,
+    p_group_id: group.id,
+    p_description: input.description,
+    p_expected_lines: serializeExpectedMovementLines(lines),
+    p_next_lines: nextLines,
+    p_account_deltas: serializeAccountDeltas(reverseDeltas)
+  });
 
-  const { error: groupUpdateError } = await supabaseAdmin
-    .from('transaction_groups')
-    .update({ note: input.description })
-    .eq('id', group.id)
-    .eq('household_id', householdId);
-
-  if (groupUpdateError) {
-    throw new Error(`No fue posible actualizar la descripción del movimiento: ${groupUpdateError.message}`);
+  if (atomicUpdateError) {
+    const changedWhileEditing = atomicUpdateError.message.includes('movement_changed');
+    throw new Error(changedWhileEditing
+      ? 'El movimiento cambió mientras lo editabas. Actualiza la página e inténtalo nuevamente.'
+      : `No fue posible actualizar el movimiento de forma atómica: ${atomicUpdateError.message}`);
   }
 
-  const applyDeltas = buildBalanceDeltasFromStoredMovement(nextMovement, accounts, 1);
-  await persistAccountDeltas(householdId, applyDeltas);
-  await recalculateIndicators(householdId);
+  await refreshIndicatorsAfterCommittedMutation(householdId, 'update_movement');
 }
 
 export async function deleteMovement(rawInput: unknown) {
@@ -3024,28 +3044,37 @@ export async function deleteMovement(rawInput: unknown) {
   }
 
   const input = movementDeleteSchema.parse(rawInput);
-  const { group, descriptor } = await getStoredMovementForEdition(householdId, input.movementId);
+  const { group, lines, descriptor } = await getStoredMovementForEdition(householdId, input.movementId);
   const accounts = await getHouseholdAccounts(householdId);
 
   const reverseDeltas = buildBalanceDeltasFromStoredMovement(descriptor, accounts, -1);
-  await persistAccountDeltas(householdId, reverseDeltas);
+  const { error: atomicDeleteError } = await supabaseAdmin.rpc('delete_movement_atomic', {
+    p_household_id: householdId,
+    p_group_id: group.id,
+    p_expected_lines: serializeExpectedMovementLines(lines),
+    p_account_deltas: serializeAccountDeltas(reverseDeltas)
+  });
 
-  const { error: txDeleteError } = await supabaseAdmin.from('transactions').delete().eq('group_id', group.id);
-  if (txDeleteError) {
-    throw new Error(`No fue posible eliminar transacciones del movimiento: ${txDeleteError.message}`);
+  if (atomicDeleteError) {
+    const changedBeforeDelete = atomicDeleteError.message.includes('movement_changed');
+    throw new Error(changedBeforeDelete
+      ? 'El movimiento cambió antes de eliminarlo. Actualiza la página e inténtalo nuevamente.'
+      : `No fue posible eliminar el movimiento de forma atómica: ${atomicDeleteError.message}`);
   }
 
-  const { error: groupDeleteError } = await supabaseAdmin
-    .from('transaction_groups')
-    .delete()
-    .eq('id', group.id)
-    .eq('household_id', householdId);
+  await refreshIndicatorsAfterCommittedMutation(householdId, 'delete_movement');
+}
 
-  if (groupDeleteError) {
-    throw new Error(`No fue posible eliminar el movimiento: ${groupDeleteError.message}`);
+async function refreshIndicatorsAfterCommittedMutation(householdId: string, operation: string) {
+  try {
+    await recalculateIndicators(householdId);
+  } catch (error) {
+    console.error('[financial-snapshot-refresh-failed]', {
+      householdId,
+      operation,
+      message: error instanceof Error ? error.message : 'unknown_error'
+    });
   }
-
-  await recalculateIndicators(householdId);
 }
 
 export async function recalculateIndicators(householdId: string) {

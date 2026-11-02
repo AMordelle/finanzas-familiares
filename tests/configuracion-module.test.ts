@@ -50,7 +50,28 @@ function createFakeSupabase() {
     transaction_groups: [], transactions: [], accounts: []
   };
   const queryLog: Array<{ table: string; selected: string; inFilters: Array<{ field: string; values: unknown[] }> }> = [];
-  return { db, queryLog, from: (table: string) => new FakeQueryBuilder(table, db, queryLog) };
+  return {
+    db,
+    queryLog,
+    from: (table: string) => new FakeQueryBuilder(table, db, queryLog),
+    async rpc(name: string, args: Record<string, any>) {
+      if (name !== 'update_movement_atomic') return { data: null, error: { message: `unknown_rpc:${name}` } };
+      const group = db.transaction_groups.find((row) => row.id === args.p_group_id && row.household_id === args.p_household_id);
+      if (!group) return { data: null, error: { message: 'movement_not_found' } };
+      for (const delta of args.p_account_deltas ?? []) {
+        const account = db.accounts.find((row) => row.id === delta.account_id && row.household_id === args.p_household_id);
+        if (!account) return { data: null, error: { message: 'invalid_movement_account' } };
+        account.balance = (Number(account.balance) + Number(delta.delta)).toFixed(2);
+      }
+      for (const nextLine of args.p_next_lines ?? []) {
+        const index = db.transactions.findIndex((row) => row.id === nextLine.id && row.group_id === args.p_group_id);
+        if (index < 0) return { data: null, error: { message: 'movement_changed' } };
+        db.transactions[index] = { ...db.transactions[index], ...nextLine };
+      }
+      group.note = args.p_description;
+      return { data: null, error: null };
+    }
+  };
 }
 
 let fake: ReturnType<typeof createFakeSupabase>;
